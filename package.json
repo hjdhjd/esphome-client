@@ -1,0 +1,67 @@
+{
+  "name": "esphome-client",
+  "type": "module",
+  "version": "1.0.0",
+  "displayName": "ESPHome Client",
+  "description": "A nearly complete implementation of the ESPHome client protocol with encryption support.",
+  "author": {
+    "name": "HJD",
+    "url": "https://github.com/hjdhjd"
+  },
+  "homepage": "https://github.com/hjdhjd/esphome-client#readme",
+  "license": "ISC",
+  "repository": {
+    "type": "git",
+    "url": "git://github.com/hjdhjd/esphome-client.git"
+  },
+  "bugs": {
+    "url": "https://github.com/hjdhjd/esphome-client/issues"
+  },
+  "keywords": [
+    "chacha20-poly1305",
+    "client",
+    "esp",
+    "esp32",
+    "esp8266",
+    "esphome-api",
+    "esphome-client",
+    "esphome",
+    "home-assistant",
+    "home-automation",
+    "homebridge",
+    "iot",
+    "native-api",
+    "noise-encryption",
+    "noise-protocol",
+    "noise",
+    "protobuf",
+    "protocol-buffers",
+    "ratgdo",
+    "smart-home",
+    "x25519"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "shx rm -rf ./dist && tsc",
+    "build-docs": "shx rm -f ./docs/[^CO]*.md && npx typedoc",
+    "clean": "shx rm -rf ./dist",
+    "lint": "eslint --max-warnings=${ESLINT_MAX_WARNINGS:-\"-1\"} eslint.config.mjs src/**.ts",
+    "postpublish": "npm run clean",
+    "prepublishOnly": "npm run lint && npm run build",
+    "test": "eslint src/**.ts"
+  },
+  "devDependencies": {
+    "@stylistic/eslint-plugin": "5.2.3",
+    "@types/node": "24.2.1",
+    "eslint": "9.33.0",
+    "homebridge-plugin-utils": "1.27.2",
+    "shx": "0.4.0",
+    "typedoc": "0.28.10",
+    "typedoc-plugin-markdown": "4.8.0",
+    "typescript": "5.9.2",
+    "typescript-eslint": "8.39.1"
+  }
+}

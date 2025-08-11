@@ -1,0 +1,35 @@
+name: Support Request
+description: Report a bug or request help. Please read the esphome-client documentation before creating a support request.
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ### Before opening a support request, please ensure you have read the [documentation](https://github.com/hjdhjd/esphome-client#documentation). Questions and topics already addressed in the documentation, or in prior issue reports, will be closed without a response.
+
+  - type: input
+    id: esphomeversion
+    attributes:
+      label: esphome-client
+      description: Which version of esphome-client are you running on?
+      placeholder: e.g. v1.1.0
+    validations:
+      required: true
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: Describe the problem
+      description: Please describe the issue you're encountering, and ensure you include steps to reproduce.
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant log output
+      description: Please copy and paste any relevant log output. This will be automatically formatted into code, so no need for backticks.
+      placeholder: Please paste the relevant log entries here.
+      render: shell
+    validations:
+      required: true
+
