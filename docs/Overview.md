@@ -5,8 +5,8 @@
 
 # ESPHome Client API
 
-[![Downloads](https://img.shields.io/npm/dt/esphome-client?color=%230559C9&logo=icloud&logoColor=%2318BCF2&style=for-the-badge)](https://www.npmjs.com/package/esphome-client)
-[![Version](https://img.shields.io/npm/v/esphome-client?color=%230559C9&label=ESPHome%20Client%20API&logo=esphome&logoColor=%2318BCF2&style=for-the-badge)](https://www.npmjs.com/package/esphome-client)
+[![Downloads](https://img.shields.io/npm/dt/esphome-client?color=%2318BCF2&logo=icloud&logoColor=%2318BCF2&style=for-the-badge)](https://www.npmjs.com/package/esphome-client)
+[![Version](https://img.shields.io/npm/v/esphome-client?color=%2318BCF2&label=ESPHome%20Client%20API&logo=esphome&logoColor=%2318BCF2&style=for-the-badge)](https://www.npmjs.com/package/esphome-client)
 
 ## A complete Node-native ESPHome API client implementation.
 </DIV>

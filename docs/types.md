@@ -6,6 +6,8 @@
 
 # types
 
+Shared types and utilities.
+
 ## Interfaces
 
 ### EspHomeLogging

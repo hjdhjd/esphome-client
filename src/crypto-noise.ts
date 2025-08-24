@@ -4,6 +4,8 @@
  */
 
 /**
+ * Node-native Noise_NNpsk0_25519_ChaChaPoly_SHA256 handshake implementation with no external dependencies.
+ *
  * @module crypto-noise
  *
  * This module implements the Noise_NNpsk0_25519_ChaChaPoly_SHA256 handshake pattern with optional prologue support. The implementation only uses Node native
@@ -285,7 +287,7 @@ function hkdf(chainingKey: Buffer, ikm: Buffer, numOutputs: 2 | 3): [Buffer, Buf
  * CipherState manages the encryption state for a single direction of communication.
  * Implements the CipherState object as specified in Noise Protocol Framework §5.1 using ChaCha20-Poly1305.
  */
-class CipherState {
+export class CipherState {
 
   // Our encryption key.
   private k: Nullable<Buffer>;
@@ -311,7 +313,7 @@ class CipherState {
 
     this.k = key;
     this.n = BigInt(0);
-    this.log?.debug?.("CipherState: Key initialized, hasKey=" + (key !== null) + ".");
+    this.log?.debug("CipherState: Key initialized, hasKey=" + (key !== null) + ".");
   }
 
   /**
@@ -360,7 +362,7 @@ class CipherState {
 
     const tag = cipher.getAuthTag();
 
-    this.log?.debug?.("CipherState: Encrypted with nonce=" + this.n + ", plaintext=" + plaintext.length + " bytes, ciphertext=" + ct.length + " bytes.");
+    this.log?.debug("CipherState: Encrypted with nonce=" + this.n + ", plaintext=" + plaintext.length + " bytes, ciphertext=" + ct.length + " bytes.");
     this.n++;
 
     return Buffer.concat([ ct, tag ]);
@@ -397,7 +399,7 @@ class CipherState {
       // For empty ciphertext, just verify the tag without calling update.
       const pt = ciphertext.length === 0 ? decipher.final() : Buffer.concat([ decipher.update(ciphertext), decipher.final() ]);
 
-      this.log?.debug?.("CipherState: Decrypted with nonce=" + this.n + ", ciphertext=" + ciphertext.length + " bytes, plaintext=" + pt.length + " bytes.");
+      this.log?.debug("CipherState: Decrypted with nonce=" + this.n + ", ciphertext=" + ciphertext.length + " bytes, plaintext=" + pt.length + " bytes.");
       this.n++;
 
       return pt;
@@ -405,7 +407,7 @@ class CipherState {
 
       if(e instanceof Error) {
 
-        this.log?.error?.("CipherState: Decryption failed: " + e.message + ".");
+        this.log?.error("CipherState: Decryption failed: " + e.message + ".");
       }
       throw new NoiseHandshakeError("Authentication failed", "AUTH_FAILED");
     }
@@ -436,7 +438,7 @@ class CipherState {
 
     // The first 32 bytes of the ciphertext become our new key.
     this.InitializeKey(ct.subarray(0, 32));
-    this.log?.debug?.("CipherState: Rekey operation completed successfully.");
+    this.log?.debug("CipherState: Rekey operation completed successfully.");
   }
 }
 
@@ -472,7 +474,7 @@ class SymmetricState {
     // We initialize the cipher state with no key.
     this.cs.InitializeKey(null);
 
-    this.log?.debug?.("SymmetricState: Initialized with protocol \"" + PROTOCOL_NAME + "\".");
+    this.log?.debug("SymmetricState: Initialized with protocol \"" + PROTOCOL_NAME + "\".");
   }
 
   /**
@@ -481,7 +483,7 @@ class SymmetricState {
   public MixHash(data: Buffer): void {
 
     this.h = createHash(HASH_ALGO).update(Buffer.concat([ this.h, data ])).digest() as Buffer;
-    this.log?.debug?.("SymmetricState: Mixed data into hash, new h=" + this.h.toString("hex") + ".");
+    this.log?.debug("SymmetricState: Mixed data into hash, new h=" + this.h.toString("hex") + ".");
   }
 
   /**
@@ -493,7 +495,7 @@ class SymmetricState {
 
     this.ck = ck;
     this.cs.InitializeKey(tempK);
-    this.log?.debug?.("SymmetricState: Mixed key material, new ck=" + ck.toString("hex") + ".");
+    this.log?.debug("SymmetricState: Mixed key material, new ck=" + ck.toString("hex") + ".");
   }
 
   /**
@@ -506,7 +508,7 @@ class SymmetricState {
     this.ck = ck;
     this.MixHash(tempH);
     this.cs.InitializeKey(tempK);
-    this.log?.debug?.("SymmetricState: Mixed key and hash with PSK material.");
+    this.log?.debug("SymmetricState: Mixed key and hash with PSK material.");
   }
 
   /**
@@ -549,7 +551,7 @@ class SymmetricState {
     c1.InitializeKey(derivedKey.subarray(0, 32) as Buffer);
     c2.InitializeKey(derivedKey.subarray(32, 64) as Buffer);
 
-    this.log?.debug?.("SymmetricState: Split into two cipher states for transport encryption.");
+    this.log?.debug("SymmetricState: Split into two cipher states for transport encryption.");
 
     return [ c1, c2 ];
   }
@@ -638,9 +640,9 @@ export class HandshakeState {
 
     // Mix the prologue into the handshake hash before any messages to bind the handshake to pre-agreed context data.
     this.ss.MixHash(prologue);
-    this.log?.debug?.("HandshakeState: Mixed prologue into initial hash: " + prologue.toString("hex") + ".");
+    this.log?.debug("HandshakeState: Mixed prologue into initial hash: " + prologue.toString("hex") + ".");
 
-    this.log?.debug?.("HandshakeState: Initialized as " + (initiator ? "initiator" : "responder") + ".");
+    this.log?.debug("HandshakeState: Initialized as " + (initiator ? "initiator" : "responder") + ".");
   }
 
   /**
@@ -656,7 +658,7 @@ export class HandshakeState {
    */
   public get canSend(): boolean {
 
-    return this.sendCipher !== undefined && this.sendCipher.HasKey();
+    return (this.sendCipher !== undefined) && this.sendCipher.HasKey();
   }
 
   /**
@@ -664,7 +666,7 @@ export class HandshakeState {
    */
   public get canReceive(): boolean {
 
-    return this.receiveCipher !== undefined && this.receiveCipher.HasKey();
+    return (this.receiveCipher !== undefined) && this.receiveCipher.HasKey();
   }
 
   /**
@@ -698,7 +700,7 @@ export class HandshakeState {
 
       case "psk":
 
-        this.log?.debug?.("HandshakeState: Mixing PSK into handshake state.");
+        this.log?.debug("HandshakeState: Mixing PSK into handshake state.");
         this.ss.MixKeyAndHash(this.psk);
 
         return EMPTY_BUFFER;
@@ -714,7 +716,7 @@ export class HandshakeState {
         this.ss.MixHash(publicKeyRaw);
         this.ss.MixKey(publicKeyRaw);
 
-        this.log?.debug?.("HandshakeState: Sending ephemeral public key: " + publicKeyRaw.toString("hex") + ".");
+        this.log?.debug("HandshakeState: Sending ephemeral public key: " + publicKeyRaw.toString("hex") + ".");
 
         return publicKeyRaw;
       }
@@ -731,7 +733,7 @@ export class HandshakeState {
         const dh = diffieHellman({ privateKey: this.ephemeral.privateKey, publicKey: this.remotePubKey });
 
         this.ss.MixKey(dh);
-        this.log?.debug?.("HandshakeState: Processed ephemeral-ephemeral DH exchange.");
+        this.log?.debug("HandshakeState: Processed ephemeral-ephemeral DH exchange.");
 
         return EMPTY_BUFFER;
       }
@@ -751,7 +753,7 @@ export class HandshakeState {
 
       case "psk":
 
-        this.log?.debug?.("HandshakeState: Mixing PSK into handshake state.");
+        this.log?.debug("HandshakeState: Mixing PSK into handshake state.");
         this.ss.MixKeyAndHash(this.psk);
 
         return 0;
@@ -774,7 +776,7 @@ export class HandshakeState {
         // Import the raw key as a KeyObject for DH operations.
         this.remotePubKey = importX25519PublicKey(remoteKeyRaw);
 
-        this.log?.debug?.("HandshakeState: Received ephemeral public key: " + remoteKeyRaw.toString("hex") + ".");
+        this.log?.debug("HandshakeState: Received ephemeral public key: " + remoteKeyRaw.toString("hex") + ".");
 
         return DH_LEN;
       }
@@ -792,7 +794,7 @@ export class HandshakeState {
         const dh = diffieHellman({ privateKey: this.ephemeral.privateKey, publicKey: this.remotePubKey });
 
         this.ss.MixKey(dh);
-        this.log?.debug?.("HandshakeState: Processed ephemeral-ephemeral DH exchange.");
+        this.log?.debug("HandshakeState: Processed ephemeral-ephemeral DH exchange.");
 
         return 0;
       }
@@ -827,6 +829,7 @@ export class HandshakeState {
 
     const pattern = NNPSK0_PATTERN[this.patternIndex++];
 
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
     if(!pattern) {
 
       throw new NoiseHandshakeError("No pattern available to process", "NO_PATTERN");
@@ -863,7 +866,7 @@ export class HandshakeState {
     // Optimize for common cases to avoid unnecessary concatenation.
     const out = (parts.length === 0) ? EMPTY_BUFFER : ((parts.length === 1) ? parts[0] : Buffer.concat(parts));
 
-    this.log?.debug?.("HandshakeState: Wrote message with " + payload.length + " byte payload.");
+    this.log?.debug("HandshakeState: Wrote message with " + payload.length + " byte payload.");
 
     // If this was the last message and we're the responder, split the state (responder splits after writing final message).
     if((this.patternIndex >= NNPSK0_PATTERN.length) && !this.initiator) {
@@ -874,7 +877,7 @@ export class HandshakeState {
       this.sendCipher = c2;
       this.isComplete = true;
 
-      this.log?.debug?.("HandshakeState: Handshake complete (responder split on write).");
+      this.log?.debug("HandshakeState: Handshake complete (responder split on write).");
     }
 
     return out;
@@ -898,6 +901,7 @@ export class HandshakeState {
 
     const pattern = NNPSK0_PATTERN[this.patternIndex++];
 
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
     if(!pattern) {
 
       throw new NoiseHandshakeError("No pattern available to process", "NO_PATTERN");
@@ -917,7 +921,7 @@ export class HandshakeState {
     const cipherPayload = message.subarray(index);
     const payload = this.ss.DecryptAndHash(cipherPayload);
 
-    this.log?.debug?.("HandshakeState: Read message with " + payload.length + " byte payload.");
+    this.log?.debug("HandshakeState: Read message with " + payload.length + " byte payload.");
 
     // If this was the last message and we're the initiator, split the state (initiator splits after reading final message).
     if((this.patternIndex >= NNPSK0_PATTERN.length) && this.initiator) {
@@ -928,7 +932,7 @@ export class HandshakeState {
       this.receiveCipher = c2;
       this.isComplete = true;
 
-      this.log?.debug?.("HandshakeState: Handshake complete (initiator split on read).");
+      this.log?.debug("HandshakeState: Handshake complete (initiator split on read).");
     }
 
     return payload;

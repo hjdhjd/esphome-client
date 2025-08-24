@@ -9,8 +9,8 @@
 
 # ESPHome Client API
 
-[![Downloads](https://img.shields.io/npm/dt/esphome-client?color=%230559C9&logo=icloud&logoColor=%2318BCF2&style=for-the-badge)](https://www.npmjs.com/package/esphome-client)
-[![Version](https://img.shields.io/npm/v/esphome-client?color=%230559C9&label=ESPHome%20Client%20API&logo=esphome&logoColor=%2318BCF2&style=for-the-badge)](https://www.npmjs.com/package/esphome-client)
+[![Downloads](https://img.shields.io/npm/dt/esphome-client?color=%2318BCF2&logo=icloud&logoColor=%2318BCF2&style=for-the-badge)](https://www.npmjs.com/package/esphome-client)
+[![Version](https://img.shields.io/npm/v/esphome-client?color=%2318BCF2&label=ESPHome%20Client%20API&logo=esphome&logoColor=%2318BCF2&style=for-the-badge)](https://www.npmjs.com/package/esphome-client)
 
 ## A complete Node-native ESPHome API client implementation.
 </DIV>
@@ -36,6 +36,6 @@ The ESPHome native API is a binary protocol based on Protocol Buffers, and imple
 
 | Module | Description |
 | ------ | ------ |
-| [crypto-noise](crypto-noise.md) | - |
-| [esphome-client](esphome-client.md) | - |
-| [types](types.md) | - |
+| [crypto-noise](crypto-noise.md) | Node-native Noise_NNpsk0_25519_ChaChaPoly_SHA256 handshake implementation with no external dependencies. |
+| [esphome-client](esphome-client.md) | ESPHome native API client with complete protocol and encryption support. |
+| [types](types.md) | Shared types and utilities. |

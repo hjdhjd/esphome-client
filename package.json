@@ -1,7 +1,7 @@
 {
   "name": "esphome-client",
   "type": "module",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "displayName": "ESPHome Client",
   "description": "A nearly complete implementation of the ESPHome client protocol with encryption support.",
   "author": {
@@ -44,8 +44,11 @@
     "node": ">=20"
   },
   "main": "dist/index.js",
+  "bin": {
+    "espc": "./dist/util/espc.js"
+  },
   "scripts": {
-    "build": "shx rm -rf ./dist && tsc",
+    "build": "shx rm -rf ./dist && tsc && shx chmod a+x ./dist/util/espc.js",
     "build-docs": "shx rm -f ./docs/[^CO]*.md && npx typedoc",
     "clean": "shx rm -rf ./dist",
     "lint": "eslint --max-warnings=${ESLINT_MAX_WARNINGS:-\"-1\"} eslint.config.mjs src/**.ts",
@@ -55,13 +58,13 @@
   },
   "devDependencies": {
     "@stylistic/eslint-plugin": "5.2.3",
-    "@types/node": "24.2.1",
-    "eslint": "9.33.0",
-    "homebridge-plugin-utils": "1.27.2",
+    "@types/node": "24.3.0",
+    "eslint": "9.34.0",
+    "homebridge-plugin-utils": "1.28.0",
     "shx": "0.4.0",
     "typedoc": "0.28.10",
-    "typedoc-plugin-markdown": "4.8.0",
+    "typedoc-plugin-markdown": "4.8.1",
     "typescript": "5.9.2",
-    "typescript-eslint": "8.39.1"
+    "typescript-eslint": "8.40.0"
   }
 }

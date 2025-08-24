@@ -6,6 +6,8 @@
 
 # crypto-noise
 
+Node-native Noise_NNpsk0_25519_ChaChaPoly_SHA256 handshake implementation with no external dependencies.
+
 ## Examples
 
 ```typescript
@@ -92,6 +94,113 @@ const decrypted = handshake.receiveCipher.DecryptWithAd(sequenceNumber, encrypte
 
 ## Classes
 
+### CipherState
+
+CipherState manages the encryption state for a single direction of communication.
+Implements the CipherState object as specified in Noise Protocol Framework §5.1 using ChaCha20-Poly1305.
+
+#### Constructors
+
+##### Constructor
+
+```ts
+new CipherState(log?): CipherState;
+```
+
+###### Parameters
+
+| Parameter | Type |
+| ------ | ------ |
+| `log?` | [`EspHomeLogging`](types.md#esphomelogging) |
+
+###### Returns
+
+[`CipherState`](#cipherstate)
+
+#### Methods
+
+##### DecryptWithAd()
+
+```ts
+DecryptWithAd(ad, data): Buffer;
+```
+
+Decrypts ciphertext with associated data using ChaCha20-Poly1305. Returns input unchanged if no key is set.
+
+###### Parameters
+
+| Parameter | Type |
+| ------ | ------ |
+| `ad` | `Buffer` |
+| `data` | `Buffer` |
+
+###### Returns
+
+`Buffer`
+
+##### EncryptWithAd()
+
+```ts
+EncryptWithAd(ad, plaintext): Buffer;
+```
+
+Encrypts plaintext with associated data using ChaCha20-Poly1305. Returns plaintext unchanged if no key is set.
+
+###### Parameters
+
+| Parameter | Type |
+| ------ | ------ |
+| `ad` | `Buffer` |
+| `plaintext` | `Buffer` |
+
+###### Returns
+
+`Buffer`
+
+##### HasKey()
+
+```ts
+HasKey(): boolean;
+```
+
+Checks whether this cipher state has an encryption key set.
+
+###### Returns
+
+`boolean`
+
+##### InitializeKey()
+
+```ts
+InitializeKey(key): void;
+```
+
+Initializes the cipher state with a new key, resetting the nonce counter to zero.
+
+###### Parameters
+
+| Parameter | Type |
+| ------ | ------ |
+| `key` | [`Nullable`](types.md#nullable)\<`Buffer`\<`ArrayBufferLike`\>\> |
+
+###### Returns
+
+`void`
+
+##### Rekey()
+
+```ts
+Rekey(): void;
+```
+
+Rekeys the cipher state by encrypting zeros with the maximum nonce value, providing forward secrecy.
+
+###### Returns
+
+`void`
+
+***
+
 ### HandshakeState
 
 HandshakeState manages the complete Noise protocol handshake, implementing the NNpsk0 pattern with optional prologue support.
@@ -166,8 +275,8 @@ If the PSK is not exactly 32 bytes.
 | Property | Modifier | Type | Default value |
 | ------ | ------ | ------ | ------ |
 | <a id="iscomplete"></a> `isComplete` | `public` | `boolean` | `false` |
-| <a id="receivecipher"></a> `receiveCipher?` | `public` | `CipherState` | `undefined` |
-| <a id="sendcipher"></a> `sendCipher?` | `public` | `CipherState` | `undefined` |
+| <a id="receivecipher"></a> `receiveCipher?` | `public` | [`CipherState`](#cipherstate) | `undefined` |
+| <a id="sendcipher"></a> `sendCipher?` | `public` | [`CipherState`](#cipherstate) | `undefined` |
 
 #### Accessors
 

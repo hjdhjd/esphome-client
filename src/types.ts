@@ -4,6 +4,12 @@
  */
 
 /**
+ * Shared types and utilities.
+ *
+ * @module types
+ */
+
+/**
  * Logging interface, leveraging what we do for Homebridge and elsewhere as a good template.
  *
  * @remarks By default, logging is done to the console. If you use your own logging functions, you must specify all the alert levels that the library uses: `debug`,
