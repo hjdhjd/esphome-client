@@ -6082,17 +6082,15 @@ export class EspHomeClient extends EventEmitter {
     // Log debugging information.
     this.log.debug("sendCameraImageRequest - single: " + single + " | stream: " + !single);
 
-    // Build the protobuf fields according to CameraImageRequest specification.
-    // Camera image requests don't have an entity key - they apply to all cameras on the device.
+    // Build the protobuf fields according to CameraImageRequest specification. Camera image requests don't have an entity key - they apply to all cameras on the device.
     const fields: ProtoField[] = [
 
       { fieldNumber: 1, value: single ? 1 : 0, wireType: WireType.VARINT },
       { fieldNumber: 2, value: single ? 0 : 1, wireType: WireType.VARINT }
     ];
 
-    // Encode and send the camera image request.
-    // This will trigger all cameras on the device to capture or stream images.
-    // Responses will be received as CAMERA_IMAGE_RESPONSE messages.
+    // Encode and send the camera image request. This will trigger all cameras on the device to capture or stream images. Responses will be received as
+    // CAMERA_IMAGE_RESPONSE messages.
     const payload = this.encodeProtoFields(fields);
 
     this.frameAndSend(MessageType.CAMERA_IMAGE_REQUEST, payload);
@@ -6850,7 +6848,7 @@ export class EspHomeClient extends EventEmitter {
     const fields: Record<number, FieldValue[]> = {};
 
     // Iterate through the buffer by manually advancing the offset.
-    for(let offset = 0; offset < buffer.length; /* offset updated in cases */) {
+    for(let offset = 0; offset < buffer.length;) {
 
       let len: number;
       let lenLen: number;
@@ -6931,8 +6929,7 @@ export class EspHomeClient extends EventEmitter {
       }
 
       // Ensure there is an array to hold this field's values.
-      // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
-      fields[fieldNum] ||= [];
+      fields[fieldNum] ??= [];
 
       // Append the decoded value for this field.
       fields[fieldNum].push(value);

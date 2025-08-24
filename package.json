@@ -1,7 +1,7 @@
 {
   "name": "esphome-client",
   "type": "module",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "displayName": "ESPHome Client",
   "description": "A nearly complete implementation of the ESPHome client protocol with encryption support.",
   "author": {
