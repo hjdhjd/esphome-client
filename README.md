@@ -137,7 +137,7 @@ This library provides complete support for the ESPHome native API protocol:
 - `NOISE_ENCRYPTION_SET_KEY_REQUEST` / `NOISE_ENCRYPTION_SET_KEY_RESPONSE` - Dynamic key updates
 
 ### Protocol Compliance
-This implementation has been carefully verified against the official ESPHome protocol specification (`api.proto`). All field numbers, data types, and message structures exactly match the protocol definition. The library correctly:
+This implementation has been carefully verified against the official ESPHome protocol specification (`api.proto`). All field numbers, data types, and message structures exactly match the protocol definition as of v1.12 of the native ESPHome protocol. The library correctly:
 
 - Handles all required and optional fields
 - Properly encodes/decodes varint, fixed32, and length-delimited fields

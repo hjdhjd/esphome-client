@@ -177,7 +177,7 @@ enum ProtocolVersion {
   MAJOR = 1,
 
   // Minor version for breaking changes in individual messages - mismatch causes warning.
-  MINOR = 10
+  MINOR = 12
 }
 
 // Define the Noise handshake states.
@@ -953,11 +953,11 @@ export interface TimeEvent extends TelemetryBaseEvent {
  * These families are already decoded into richer shapes elsewhere in the module. We intersect the decoded shapes with the base event and add the `type` discriminant and
  * the canonical `key`. We omit any `type` field from the decoded shapes to avoid conflicts with our discriminant.
  */
-export interface ClimateEvent extends TelemetryBaseEvent, Omit<ClimateTelemetryData, "type"> { type: "climate"; }
-export interface CoverEvent extends TelemetryBaseEvent, Omit<CoverTelemetryData, "type"> { type: "cover"; }
-export interface EventEntityEvent extends TelemetryBaseEvent, Omit<EventTelemetryData, "type"> { type: "event"; }
-export interface LightEvent extends TelemetryBaseEvent, Omit<LightTelemetryData, "type"> { type: "light"; }
-export interface ValveEvent extends TelemetryBaseEvent, Omit<ValveTelemetryData, "type"> { type: "valve"; }
+export interface ClimateEvent extends TelemetryBaseEvent, Omit<ClimateTelemetryData, "type"> { type: "climate" }
+export interface CoverEvent extends TelemetryBaseEvent, Omit<CoverTelemetryData, "type"> { type: "cover" }
+export interface EventEntityEvent extends TelemetryBaseEvent, Omit<EventTelemetryData, "type"> { type: "event" }
+export interface LightEvent extends TelemetryBaseEvent, Omit<LightTelemetryData, "type"> { type: "light" }
+export interface ValveEvent extends TelemetryBaseEvent, Omit<ValveTelemetryData, "type"> { type: "valve" }
 
 /**
  * These multi-field families are represented with a compact shape at this layer. We can extend them as needed while preserving the discriminant. When the protocol
@@ -1848,7 +1848,7 @@ export class EspHomeClient extends EventEmitter {
         // Server has newer minor version - some features may not be available.
         if(minorVersion > ProtocolVersion.MINOR) {
 
-          this.log.warn("Device uses newer API minor version (" + minorVersion + " vs " + ProtocolVersion.MINOR + "). Some features may not be available.");
+          this.log.debug("Device uses newer API minor version (" + minorVersion + " vs " + ProtocolVersion.MINOR + "). Some features may not be available.");
 
         } else {
 

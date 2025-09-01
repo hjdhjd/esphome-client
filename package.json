@@ -1,7 +1,7 @@
 {
   "name": "esphome-client",
   "type": "module",
-  "version": "1.1.1",
+  "version": "1.1.2",
   "displayName": "ESPHome Client",
   "description": "A nearly complete implementation of the ESPHome client protocol with encryption support.",
   "author": {
@@ -57,14 +57,14 @@
     "test": "eslint src/**.ts"
   },
   "devDependencies": {
-    "@stylistic/eslint-plugin": "5.2.3",
+    "@stylistic/eslint-plugin": "5.3.1",
     "@types/node": "24.3.0",
     "eslint": "9.34.0",
-    "homebridge-plugin-utils": "1.28.0",
+    "homebridge-plugin-utils": "1.29.1",
     "shx": "0.4.0",
-    "typedoc": "0.28.10",
+    "typedoc": "0.28.12",
     "typedoc-plugin-markdown": "4.8.1",
     "typescript": "5.9.2",
-    "typescript-eslint": "8.40.0"
+    "typescript-eslint": "8.41.0"
   }
 }
