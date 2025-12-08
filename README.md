@@ -293,7 +293,7 @@ await client.executeServiceByName('play_rtttl', [
 // Listen to specific entity types
 client.on('sensor', (data) => {
   if (!data.missingState) {
-    console.log(`${data.entity}: ${data.state} ${data.unitOfMeasurement || ''}`);
+    console.log(`${data.entity}: ${data.state}`);
   }
 });
 

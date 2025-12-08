@@ -222,6 +222,27 @@ export enum LogLevel {
 }
 
 /**
+ * State classes for sensor entities.
+ */
+export enum StateClass {
+
+  NONE             = 0,
+  MEASUREMENT      = 1,
+  TOTAL            = 2,
+  TOTAL_INCREASING = 3
+}
+
+/**
+ * Entity categories for entities.
+ */
+export enum EntityCategory {
+
+  NONE       = 0,
+  CONFIG     = 1,
+  DIAGNOSTIC = 2
+}
+
+/**
  * Climate modes supported by ESPHome climate entities. These define the primary operating state of HVAC systems.
  */
 export enum ClimateMode {
@@ -569,6 +590,13 @@ enum WireType {
  * @property name - The human-readable display name of the entity.
  * @property objectId - The unique object ID of the entity (used for entity IDs).
  * @property type - The type of entity (e.g., "switch", "light", "cover").
+ * @property icon - Material Design icon (e.g. mdi:water-percent).
+ * @property unitOfMeasurement - The text unit (e.g. °C, V, lx).
+ * @property accuracyDecimals - How many decimals to format the value with.
+ * @property forceUpdate - Whether to force updates.
+ * @property deviceClass - The device class of the entity.
+ * @property stateClass - The state class of the entity.
+ * @property entityCategory - The entity category.
  */
 export interface Entity {
 
@@ -576,6 +604,13 @@ export interface Entity {
   name: string;
   objectId: string;
   type: string;
+  icon?: string;
+  unitOfMeasurement?: string;
+  accuracyDecimals?: number;
+  forceUpdate?: boolean;
+  deviceClass?: string;
+  stateClass?: StateClass;
+  entityCategory?: EntityCategory;
 }
 
 /**
@@ -1052,7 +1087,7 @@ export interface ClientEventsMap {
   datetime: DateTimeEvent;
   deviceInfo: DeviceInfo;
   disconnect: string | undefined;
-  entities: Record<string, unknown>;
+  entities: Entity[];
   event: EventEntityEvent;
   fan: FanEvent;
   heartbeat: { uptime?: number };
@@ -3364,8 +3399,27 @@ export class EspHomeClient extends EventEmitter {
       this.entityDeviceIds.set(key, deviceId);
     }
 
+    const icon = this.extractStringField(fields, 5);
+    const unitOfMeasurement = this.extractStringField(fields, 6);
+    const accuracyDecimals = this.extractNumberField(fields, 7);
+    const deviceClass = this.extractStringField(fields, 9);
+    const stateClass = this.extractNumberField(fields, 10);
+    const entityCategory = this.extractNumberField(fields, 12);
+
     // Create an entity object and add it to our discovered entities list.
-    const ent: Entity = { key, name, objectId, type: label };
+    const ent: Entity = {
+
+      accuracyDecimals,
+      deviceClass,
+      entityCategory,
+      icon,
+      key,
+      name,
+      objectId,
+      stateClass,
+      type: label,
+      unitOfMeasurement
+    };
 
     this.discoveredEntities.push(ent);
 
