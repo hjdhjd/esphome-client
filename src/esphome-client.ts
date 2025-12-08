@@ -243,6 +243,23 @@ export enum EntityCategory {
 }
 
 /**
+ * Number input modes supported by ESPHome number entities. These define how users can input numeric values.
+ */
+export enum NumberMode {
+  AUTO = 0,
+  BOX = 1,
+  SLIDER = 2
+}
+
+/**
+ * Text input modes supported by ESPHome text entities. These define how users can input text values.
+ */
+export enum TextMode {
+  TEXT = 0,
+  PASSWORD = 1
+}
+
+/**
  * Climate modes supported by ESPHome climate entities. These define the primary operating state of HVAC systems.
  */
 export enum ClimateMode {
@@ -583,6 +600,31 @@ enum WireType {
   FIXED32 = 5
 }
 
+export type EntityType = "binary_sensor" |
+  "binary_sensor" |
+  "sensor" |
+  "switch" |
+  "text_sensor" |
+  "cover" |
+  "fan" |
+  "light" |
+  "climate" |
+  "number" |
+  "select" |
+  "siren" |
+  "lock" |
+  "button" |
+  "media_player" |
+  "camera" |
+  "alarm_control_panel" |
+  "text" |
+  "date" |
+  "time" |
+  "datetime" |
+  "event" |
+  "valve" |
+  "update";
+
 /**
  * Represents one entity from the ESPHome device. An entity is any controllable or observable component on the device.
  *
@@ -591,27 +633,230 @@ enum WireType {
  * @property objectId - The unique object ID of the entity (used for entity IDs).
  * @property type - The type of entity (e.g., "switch", "light", "cover").
  * @property icon - Material Design icon (e.g. mdi:water-percent).
- * @property unitOfMeasurement - The text unit (e.g. °C, V, lx).
- * @property accuracyDecimals - How many decimals to format the value with.
- * @property forceUpdate - Whether to force updates.
- * @property deviceClass - The device class of the entity.
- * @property stateClass - The state class of the entity.
+ * @property disabledByDefault - Whether the entity is disabled by default.
  * @property entityCategory - The entity category.
  */
-export interface Entity {
+export interface BaseEntity {
 
   key: number;
   name: string;
   objectId: string;
-  type: string;
+  type: EntityType;
   icon?: string;
+  disabledByDefault?: boolean;
+  entityCategory?: EntityCategory;
+  deviceId?: number;
+}
+
+export interface BinarySensorEntity extends BaseEntity {
+
+  type: "binary_sensor";
+  deviceClass?: string;
+  isStatusBinarySensor?: boolean;
+}
+
+export interface SensorEntity extends BaseEntity {
+
+  type: "sensor";
   unitOfMeasurement?: string;
   accuracyDecimals?: number;
   forceUpdate?: boolean;
   deviceClass?: string;
   stateClass?: StateClass;
-  entityCategory?: EntityCategory;
 }
+
+export interface SwitchEntity extends BaseEntity {
+
+  type: "switch";
+  assumedState?: boolean;
+  deviceClass?: string;
+}
+
+export interface TextSensorEntity extends BaseEntity {
+
+  type: "text_sensor";
+  deviceClass?: string;
+}
+
+export interface CoverEntity extends BaseEntity {
+
+  type: "cover";
+  assumedState?: boolean;
+  supportsPosition?: boolean;
+  supportsTilt?: boolean;
+  supportsStop?: boolean;
+  deviceClass?: string;
+}
+
+export interface FanEntity extends BaseEntity {
+
+  type: "fan";
+  supportsOscillation?: boolean;
+  supportsSpeed?: boolean;
+  supportsDirection?: boolean;
+  supportedSpeedCount?: number;
+  supportedPresetModes?: string[];
+}
+
+export interface LightEntity extends BaseEntity {
+
+  type: "light";
+  supportedColorModes?: ColorMode[];
+  minMireds?: number;
+  maxMireds?: number;
+  effects?: string[];
+}
+
+export interface ClimateEntity extends BaseEntity {
+
+  type: "climate";
+  supportedModes?: ClimateMode[];
+  visualMinTemperature?: number;
+  visualMaxTemperature?: number;
+  visualTargetTemperatureStep?: number;
+  visualCurrentTemperatureStep?: number;
+  supportedFanModes?: number[];
+  supportedSwingModes?: number[];
+  supportedCustomFanModes?: string[];
+  supportedPresets?: number[];
+  supportedCustomPresets?: string[];
+  visualMinHumidity?: number;
+  visualMaxHumidity?: number;
+  featureFlags?: number;
+}
+
+export interface NumberEntity extends BaseEntity {
+
+  type: "number";
+  minValue?: number;
+  maxValue?: number;
+  step?: number;
+  unitOfMeasurement?: string;
+  mode?: NumberMode;
+  deviceClass?: string;
+}
+
+export interface SelectEntity extends BaseEntity {
+
+  type: "select";
+  options?: string[];
+}
+
+export interface SirenEntity extends BaseEntity {
+
+  type: "siren";
+  tones?: string[];
+  supportsDuration?: boolean;
+  supportsVolume?: boolean;
+}
+
+export interface LockEntity extends BaseEntity {
+
+  type: "lock";
+  assumedState?: boolean;
+  supportsOpen?: boolean;
+  requiresCode?: boolean;
+  codeFormat?: string;
+}
+
+export interface ButtonEntity extends BaseEntity {
+
+  type: "button";
+  deviceClass?: string;
+}
+
+export interface MediaPlayerEntity extends BaseEntity {
+
+  type: "media_player";
+  supportsPause?: boolean;
+  supportedFormats?: unknown[];
+  featureFlags?: number;
+}
+
+export interface CameraEntity extends BaseEntity {
+
+  type: "camera";
+}
+
+export interface AlarmControlPanelEntity extends BaseEntity {
+
+  type: "alarm_control_panel";
+  supportedFeatures?: number;
+  requiresCode?: boolean;
+  requiresCodeToArm?: boolean;
+}
+
+export interface TextEntity extends BaseEntity {
+
+  type: "text";
+  minLength?: number;
+  maxLength?: number;
+  pattern?: string;
+  mode?: TextMode;
+}
+
+export interface DateEntity extends BaseEntity {
+
+  type: "date";
+}
+
+export interface TimeEntity extends BaseEntity {
+
+  type: "time";
+}
+
+export interface DateTimeEntity extends BaseEntity {
+
+  type: "datetime";
+}
+
+export interface EventEntity extends BaseEntity {
+
+  type: "event";
+  deviceClass?: string;
+  eventTypes?: string[];
+}
+
+export interface ValveEntity extends BaseEntity {
+
+  type: "valve";
+  deviceClass?: string;
+  assumedState?: boolean;
+  supportsPosition?: boolean;
+  supportsStop?: boolean;
+}
+
+export interface UpdateEntity extends BaseEntity {
+
+
+  type: "update";
+  deviceClass?: string;
+}
+
+export type Entity =
+  BinarySensorEntity |
+  SensorEntity |
+  SwitchEntity |
+  TextSensorEntity |
+  CoverEntity |
+  FanEntity |
+  LightEntity |
+  ClimateEntity |
+  NumberEntity |
+  SelectEntity |
+  SirenEntity |
+  LockEntity |
+  ButtonEntity |
+  MediaPlayerEntity |
+  CameraEntity |
+  AlarmControlPanelEntity |
+  TextEntity |
+  DateEntity |
+  TimeEntity |
+  DateTimeEntity |
+  EventEntity |
+  ValveEntity |
+  UpdateEntity;
 
 /**
  * Represents a user-defined service argument definition.
@@ -1412,7 +1657,7 @@ export class EspHomeClient extends EventEmitter {
   private entityDeviceIds: Map<number, number>;
 
   // Map from entity keys to their type labels.
-  private entityTypes: Map<number, string>;
+  private entityTypes: Map<number, EntityType>;
 
   // Array storing all discovered user-defined services from the device.
   private discoveredServices: ServiceEntity[];
@@ -1506,7 +1751,7 @@ export class EspHomeClient extends EventEmitter {
     this.entityNames = new Map<number, string>();
     this.entityObjectIds = new Map<number, string>();
     this.entityDeviceIds = new Map<number, number>();
-    this.entityTypes = new Map<number, string>();
+    this.entityTypes = new Map<number, EntityType>();
     this.services = new Map<number, ServiceEntity>();
     this.voiceAssistantSubscribed = false;
     this.voiceAssistantConfig = null;
@@ -3216,13 +3461,9 @@ export class EspHomeClient extends EventEmitter {
    */
   private isListEntitiesResponse(type: number): boolean {
 
-    return ((type >= MessageType.LIST_ENTITIES_BINARY_SENSOR_RESPONSE) && (type <= MessageType.LIST_ENTITIES_TEXT_SENSOR_RESPONSE)) ||
-    [ MessageType.LIST_ENTITIES_SERVICES_RESPONSE, MessageType.LIST_ENTITIES_CAMERA_RESPONSE, MessageType.LIST_ENTITIES_CLIMATE_RESPONSE,
-      MessageType.LIST_ENTITIES_NUMBER_RESPONSE, MessageType.LIST_ENTITIES_SELECT_RESPONSE, MessageType.LIST_ENTITIES_SIREN_RESPONSE,
-      MessageType.LIST_ENTITIES_LOCK_RESPONSE, MessageType.LIST_ENTITIES_BUTTON_RESPONSE, MessageType.LIST_ENTITIES_MEDIA_PLAYER_RESPONSE,
-      MessageType.LIST_ENTITIES_ALARM_CONTROL_PANEL_RESPONSE, MessageType.LIST_ENTITIES_TEXT_RESPONSE, MessageType.LIST_ENTITIES_DATE_RESPONSE,
-      MessageType.LIST_ENTITIES_TIME_RESPONSE, MessageType.LIST_ENTITIES_EVENT_RESPONSE, MessageType.LIST_ENTITIES_VALVE_RESPONSE,
-      MessageType.LIST_ENTITIES_DATETIME_RESPONSE, MessageType.LIST_ENTITIES_UPDATE_RESPONSE ].includes(type);
+    const keys = Object.keys(this.listEntitiesFieldsMap);
+
+    return keys.includes(type.toString());
   }
 
   /**
@@ -3247,9 +3488,9 @@ export class EspHomeClient extends EventEmitter {
    * @param type - The message type enum value.
    * @returns The entity type label string.
    */
-  private getEntityTypeLabel(type: MessageType): string {
+  private getEntityTypeLabel(type: MessageType): EntityType {
 
-    return MessageType[type].replace(/^LIST_ENTITIES_/, "").replace(/_RESPONSE$/, "").replace(/_STATE$/, "").toLowerCase();
+    return MessageType[type].replace(/^LIST_ENTITIES_/, "").replace(/_RESPONSE$/, "").replace(/_STATE$/, "").toLowerCase() as EntityType;
   }
 
   /**
@@ -3329,6 +3570,240 @@ export class EspHomeClient extends EventEmitter {
     return stateDeviceIdFields[type];
   }
 
+  private listEntitiesFieldsMap: Record<number, (fields: Record<number,FieldValue[]>) => {}> = {
+
+    [MessageType.LIST_ENTITIES_BINARY_SENSOR_RESPONSE]: (fields) => ({
+
+      deviceClass: this.extractStringField(fields, 5),
+      disabledByDefault: this.extractNumberField(fields, 7) === 1,
+      entityCategory: this.extractNumberField(fields, 9),
+      icon: this.extractStringField(fields, 8),
+      isStatusBinarySensor: this.extractNumberField(fields, 6) === 1
+    }),
+    [MessageType.LIST_ENTITIES_SENSOR_RESPONSE]: (fields) => ({
+
+      accuracyDecimals: this.extractNumberField(fields, 7),
+      deviceClass: this.extractStringField(fields, 9),
+      deviceId: this.extractNumberField(fields, 14),
+      disabledByDefault: this.extractNumberField(fields, 12) === 1,
+      entityCategory: this.extractNumberField(fields, 13),
+      forceUpdate: this.extractNumberField(fields, 8) === 1,
+      icon: this.extractStringField(fields, 5),
+      stateClass: this.extractNumberField(fields, 10),
+      unitOfMeasurement: this.extractStringField(fields, 6)
+    }),
+    [MessageType.LIST_ENTITIES_SWITCH_RESPONSE]: (fields) => ({
+
+      assumedState: this.extractNumberField(fields, 6) === 1,
+      deviceClass: this.extractStringField(fields, 9),
+      deviceId: this.extractNumberField(fields, 10),
+      disabledByDefault: this.extractNumberField(fields, 7) === 1,
+      entityCategory: this.extractNumberField(fields, 8),
+      icon: this.extractStringField(fields, 5)
+    }),
+    [MessageType.LIST_ENTITIES_TEXT_SENSOR_RESPONSE]: (fields) => ({
+
+      deviceClass: this.extractStringField(fields, 8),
+      deviceId: this.extractNumberField(fields, 9),
+      disabledByDefault: this.extractNumberField(fields, 6) === 1,
+      entityCategory: this.extractNumberField(fields, 7),
+      icon: this.extractStringField(fields, 5)
+    }),
+    [MessageType.LIST_ENTITIES_CAMERA_RESPONSE]: (fields) => ({
+
+      deviceId: this.extractNumberField(fields, 8),
+      disabledByDefault: this.extractNumberField(fields, 5) === 1,
+      entityCategory: this.extractNumberField(fields, 7),
+      icon: this.extractStringField(fields, 6)
+    }),
+    [MessageType.LIST_ENTITIES_CLIMATE_RESPONSE]: (fields) => ({
+
+      deviceId: this.extractNumberField(fields, 26),
+      disabledByDefault: this.extractNumberField(fields, 18) === 1,
+      entityCategory: this.extractNumberField(fields, 20),
+      featureFlags: this.extractNumberField(fields, 27),
+      icon: this.extractStringField(fields, 19),
+      // supportedCustomFanModes: this.extractArrayField(fields, 15),
+      // supportedCustomPresets: this.extractArrayField(fields, 17),
+      // supportedFanModes: this.extractArrayField(fields, 13),
+      // supportedModes: this.extractArrayField(fields, 7),
+      // supportedPresets: this.extractArrayField(fields, 16),
+      // supportedSwingModes: this.extractArrayField(fields, 14),
+      visualCurrentTemperatureStep: this.extractNumberField(fields, 21),
+      visualMaxHumidity: this.extractNumberField(fields, 25),
+      visualMaxTemperature: this.extractNumberField(fields, 9),
+      visualMinHumidity: this.extractNumberField(fields, 24),
+      visualMinTemperature: this.extractNumberField(fields, 8),
+      visualTargetTemperatureStep: this.extractNumberField(fields, 10)
+    }),
+    [MessageType.LIST_ENTITIES_COVER_RESPONSE]: (fields) => ({
+
+      assumedState: this.extractNumberField(fields, 5) === 1,
+      deviceClass: this.extractStringField(fields, 8),
+      deviceId: this.extractNumberField(fields, 13),
+      disabledByDefault: this.extractNumberField(fields, 9) === 1,
+      entityCategory: this.extractNumberField(fields, 11),
+      icon: this.extractStringField(fields, 10),
+      supportsPosition: this.extractNumberField(fields, 6) === 1,
+      supportsStop: this.extractNumberField(fields, 12) === 1,
+      supportsTilt: this.extractNumberField(fields, 7) === 1
+    }),
+    [MessageType.LIST_ENTITIES_DATE_RESPONSE]: (fields) => ({
+
+      deviceId: this.extractNumberField(fields, 8),
+      disabledByDefault: this.extractNumberField(fields, 6) === 1,
+      entityCategory: this.extractNumberField(fields, 7),
+      icon: this.extractStringField(fields, 5)
+    }),
+    [MessageType.LIST_ENTITIES_FAN_RESPONSE]: (fields) => ({
+
+      deviceId: this.extractNumberField(fields, 13),
+      disabledByDefault: this.extractNumberField(fields, 9) === 1,
+      entityCategory: this.extractNumberField(fields, 11),
+      icon: this.extractStringField(fields, 10),
+      // supportedPresetModes: this.extractArrayField(fields, 12),
+      supportedSpeedCount: this.extractNumberField(fields, 8),
+      supportsDirection: this.extractNumberField(fields, 7) === 1,
+      supportsOscillation: this.extractNumberField(fields, 5) === 1,
+      supportsSpeed: this.extractNumberField(fields, 6) === 1
+    }),
+    [MessageType.LIST_ENTITIES_LIGHT_RESPONSE]: (fields) => ({
+
+      deviceId: this.extractNumberField(fields, 16),
+      disabledByDefault: this.extractNumberField(fields, 13) === 1,
+      // effects: this.extractArrayField(fields, 11),
+      entityCategory: this.extractNumberField(fields, 15),
+      icon: this.extractStringField(fields, 14),
+      maxMireds: this.extractNumberField(fields, 10),
+      minMireds: this.extractNumberField(fields, 9)
+      // supportedColorModes: this.extractArrayField(fields, 12),
+    }),
+    [MessageType.LIST_ENTITIES_LOCK_RESPONSE]: (fields) => ({
+
+      assumedState: this.extractNumberField(fields, 8) === 1,
+      codeFormat: this.extractStringField(fields, 11),
+      deviceId: this.extractNumberField(fields, 12),
+      disabledByDefault: this.extractNumberField(fields, 6) === 1,
+      entityCategory: this.extractNumberField(fields, 7),
+      icon: this.extractStringField(fields, 5),
+      requiresCode: this.extractNumberField(fields, 10) === 1,
+      supportsOpen: this.extractNumberField(fields, 9) === 1
+    }),
+    [MessageType.LIST_ENTITIES_MEDIA_PLAYER_RESPONSE]: (fields) => ({
+
+      deviceId: this.extractNumberField(fields, 10),
+      disabledByDefault: this.extractNumberField(fields, 6) === 1,
+      entityCategory: this.extractNumberField(fields, 7),
+      featureFlags: this.extractNumberField(fields, 11),
+      icon: this.extractStringField(fields, 5),
+      // supportedFormats: this.extractArrayField(fields, 9),
+      supportsPause: this.extractNumberField(fields, 8) === 1
+    }),
+    [MessageType.LIST_ENTITIES_NUMBER_RESPONSE]: (fields) => ({
+
+      deviceClass: this.extractStringField(fields, 13),
+      deviceId: this.extractNumberField(fields, 14),
+      disabledByDefault: this.extractNumberField(fields, 9) === 1,
+      entityCategory: this.extractNumberField(fields, 10),
+      icon: this.extractStringField(fields, 5),
+      maxValue: this.extractNumberField(fields, 7),
+      minValue: this.extractNumberField(fields, 6),
+      mode: this.extractNumberField(fields, 12),
+      step: this.extractNumberField(fields, 8),
+      unitOfMeasurement: this.extractStringField(fields, 11)
+    }),
+    [MessageType.LIST_ENTITIES_SELECT_RESPONSE]: (fields) => ({
+
+      deviceId: this.extractNumberField(fields, 9),
+      disabledByDefault: this.extractNumberField(fields, 7) === 1,
+      entityCategory: this.extractNumberField(fields, 8),
+      icon: this.extractStringField(fields, 5)
+      // options: this.extractArrayField(fields, 6),
+    }),
+    [MessageType.LIST_ENTITIES_SIREN_RESPONSE]: (fields) => ({
+
+      deviceId: this.extractNumberField(fields, 11),
+      disabledByDefault: this.extractNumberField(fields, 6) === 1,
+      entityCategory: this.extractNumberField(fields, 10),
+      icon: this.extractStringField(fields, 5),
+      supportsDuration: this.extractNumberField(fields, 8) === 1,
+      supportsVolume: this.extractNumberField(fields, 9) === 1
+      // tones: this.extractArrayField(fields, 7),
+    }),
+    [MessageType.LIST_ENTITIES_BUTTON_RESPONSE]: (fields) => ({
+
+      deviceClass: this.extractStringField(fields, 8),
+      deviceId: this.extractNumberField(fields, 9),
+      disabledByDefault: this.extractNumberField(fields, 6) === 1,
+      entityCategory: this.extractNumberField(fields, 7),
+      icon: this.extractStringField(fields, 5)
+    }),
+    [MessageType.LIST_ENTITIES_ALARM_CONTROL_PANEL_RESPONSE]: (fields) => ({
+
+      deviceId: this.extractNumberField(fields, 11),
+      disabledByDefault: this.extractNumberField(fields, 6) === 1,
+      entityCategory: this.extractNumberField(fields, 7),
+      icon: this.extractStringField(fields, 5),
+      requiresCode: this.extractNumberField(fields, 9) === 1,
+      requiresCodeToArm: this.extractNumberField(fields, 10) === 1,
+      supportedFeatures: this.extractNumberField(fields, 8)
+    }),
+    [MessageType.LIST_ENTITIES_TEXT_RESPONSE]: (fields) => ({
+
+      deviceId: this.extractNumberField(fields, 12),
+      disabledByDefault: this.extractNumberField(fields, 6) === 1,
+      entityCategory: this.extractNumberField(fields, 7),
+      icon: this.extractStringField(fields, 5),
+      maxLength: this.extractNumberField(fields, 9),
+      minLength: this.extractNumberField(fields, 8),
+      mode: this.extractNumberField(fields, 11),
+      pattern: this.extractStringField(fields, 10)
+    }),
+    [MessageType.LIST_ENTITIES_UPDATE_RESPONSE]: (fields) => ({
+
+      deviceClass: this.extractStringField(fields, 8),
+      deviceId: this.extractNumberField(fields, 9),
+      disabledByDefault: this.extractNumberField(fields, 6) === 1,
+      entityCategory: this.extractNumberField(fields, 7),
+      icon: this.extractStringField(fields, 5)
+    }),
+    [MessageType.LIST_ENTITIES_TIME_RESPONSE]: (fields) => ({
+
+      deviceId: this.extractNumberField(fields, 8),
+      disabledByDefault: this.extractNumberField(fields, 6) === 1,
+      entityCategory: this.extractNumberField(fields, 7),
+      icon: this.extractStringField(fields, 5)
+    }),
+    [MessageType.LIST_ENTITIES_EVENT_RESPONSE]: (fields) => ({
+
+      deviceClass: this.extractStringField(fields, 8),
+      deviceId: this.extractNumberField(fields, 10),
+      disabledByDefault: this.extractNumberField(fields, 6) === 1,
+      entityCategory: this.extractNumberField(fields, 7),
+      // eventTypes: this.extractArrayField(fields, 9),
+      eventTypes: this.extractStringField(fields, 9),
+      icon: this.extractStringField(fields, 5)
+    }),
+    [MessageType.LIST_ENTITIES_VALVE_RESPONSE]: (fields) => ({
+
+      assumedState: this.extractNumberField(fields, 9) === 1,
+      deviceClass: this.extractStringField(fields, 8),
+      deviceId: this.extractNumberField(fields, 12),
+      disabledByDefault: this.extractNumberField(fields, 6) === 1,
+      entityCategory: this.extractNumberField(fields, 7),
+      icon: this.extractStringField(fields, 5),
+      supportsPosition: this.extractNumberField(fields, 10) === 1,
+      supportsStop: this.extractNumberField(fields, 11) === 1
+    }),
+    [MessageType.LIST_ENTITIES_DATETIME_RESPONSE]: (fields) => ({
+
+      deviceId: this.extractNumberField(fields, 8),
+      disabledByDefault: this.extractNumberField(fields, 6) === 1,
+      entityCategory: this.extractNumberField(fields, 7),
+      icon: this.extractStringField(fields, 5)
+    })
+  };
+
   /**
    * Parses a single ListEntities*Response, logs it, and stores it. This registers a discovered entity in our internal maps for later reference.
    *
@@ -3399,26 +3874,17 @@ export class EspHomeClient extends EventEmitter {
       this.entityDeviceIds.set(key, deviceId);
     }
 
-    const icon = this.extractStringField(fields, 5);
-    const unitOfMeasurement = this.extractStringField(fields, 6);
-    const accuracyDecimals = this.extractNumberField(fields, 7);
-    const deviceClass = this.extractStringField(fields, 9);
-    const stateClass = this.extractNumberField(fields, 10);
-    const entityCategory = this.extractNumberField(fields, 12);
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
+    const data = (this.listEntitiesFieldsMap[type]?.(fields)) ?? {};
 
     // Create an entity object and add it to our discovered entities list.
     const ent: Entity = {
 
-      accuracyDecimals,
-      deviceClass,
-      entityCategory,
-      icon,
       key,
       name,
       objectId,
-      stateClass,
       type: label,
-      unitOfMeasurement
+      ...data
     };
 
     this.discoveredEntities.push(ent);
