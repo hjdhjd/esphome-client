@@ -2,6 +2,9 @@
 
 All notable changes to this project will be documented in this file. This project tries to use [semantic versioning](https://semver.org/).
 
+## 1.3.1 (2026-02-02)
+  * Housekeeping.
+
 ## 1.3.0 (2026-01-22)
   * New feature: extended entity metadata parsing. The `entities` event now includes all fields from ListEntities responses - things like `icon`, `deviceClass`, `unitOfMeasurement`, `stateClass`, `supportedColorModes`, `effects`, `options`, and capability flags. Each of the 22 entity types now has a dedicated TypeScript interface with type-specific properties.
   * New feature: exported entity types and enums for consumers. You can now import `Entity`, `SensorEntity`, `LightEntity`, etc., along with enums like `EntityCategory`, `StateClass`, `NumberMode`, and `TextMode`.
