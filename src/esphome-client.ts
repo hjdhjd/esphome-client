@@ -503,7 +503,7 @@ export interface ExecuteServiceArgumentValue {
  * @property autoGain - The automatic gain control setting.
  * @property volumeMultiplier - The volume multiplier for audio output.
  */
-interface VoiceAssistantAudioSettings {
+export interface VoiceAssistantAudioSettings {
 
   noiseSuppressionLevel: number;
   autoGain: number;
@@ -576,10 +576,28 @@ export interface VoiceAssistantTimerEventData {
  * @property data - The audio data bytes.
  * @property end - Whether this is the last audio packet.
  */
-interface VoiceAssistantAudioData {
+export interface VoiceAssistantAudioData {
 
   data: Buffer;
   end: boolean;
+}
+
+/**
+ * Voice assistant request event data.
+ *
+ * @property conversationId - The unique identifier for the conversation.
+ * @property start - Whether this is the start of a new request.
+ * @property flags - The voice assistant request flags.
+ * @property wakeWordPhrase - The detected wake word phrase, if any.
+ * @property audioSettings - The audio settings for the request.
+ */
+export interface VoiceAssistantRequest {
+
+  conversationId?: string;
+  start: boolean;
+  flags: number;
+  wakeWordPhrase?: string;
+  audioSettings?: VoiceAssistantAudioSettings;
 }
 
 /**
@@ -990,10 +1008,10 @@ export interface ClientEventsMap {
   timeSync: number;
   update: UpdateEvent;
   valve: ValveEvent;
-  voiceAssistantAnnounceFinished: Record<string, unknown>;
-  voiceAssistantAudio: { chunk: Buffer };
-  voiceAssistantConfiguration: Record<string, unknown>;
-  voiceAssistantRequest: Record<string, unknown>;
+  voiceAssistantAnnounceFinished: boolean;
+  voiceAssistantAudio: VoiceAssistantAudioData;
+  voiceAssistantConfiguration: VoiceAssistantConfiguration;
+  voiceAssistantRequest: VoiceAssistantRequest;
 }
 
 /**
