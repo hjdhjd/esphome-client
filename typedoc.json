@@ -4,21 +4,36 @@
   "categoryOrder": ["Constructor", "API Access" , "Utilities"],
   "cleanOutputDir": false,
   "disableSources": true,
-  "entryPoints": ["src/**/*.ts"],
+  "entryPoints": ["src/index.ts"],
   "enumMembersFormat": "table",
-  "exclude": [ "src/index.ts", "src/settings.ts", "src/util/espc.ts"],
   "excludeExternals": true,
   "excludeInternal": true,
   "excludeNotDocumented": false,
   "excludePrivate": true,
   "excludeProtected": true,
   "expandObjects": true,
+  "externalSymbolLinkMappings": {
+
+    "typescript": {
+
+      "__type.any":             "https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal/any_static",
+      "__type.timeout":         "https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal/timeout_static",
+      "AbortSignal":            "https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal",
+      "AbortSignal.any":        "https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal/any_static",
+      "AbortSignal.timeout":    "https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal/timeout_static",
+      "DOMException":           "https://developer.mozilla.org/en-US/docs/Web/API/DOMException",
+      "Promise.try":            "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise/try",
+      "PromiseConstructor.try": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise/try",
+      "Proxy":                  "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Proxy",
+      "ReadonlyMap":            "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Map"
+    }
+  },
   "gitRevision": "main",
   "hideGenerator": true,
   "indexFormat": "table",
   "mergeReadme": true,
   "out": "docs",
-  "outputFileStrategy": "modules",
+  "outputFileStrategy": "members",
   "parametersFormat": "table",
   "plugin": ["typedoc-plugin-markdown"],
   "propertiesFormat": "table",
@@ -28,5 +43,10 @@
     "breadcrumbs.home": "Home"
   },
   "typeDeclarationFormat": "table",
-  "useCodeBlocks": true
+  "useCodeBlocks": true,
+  "validation": {
+
+    "invalidLink": true,
+    "notExported": false
+  }
 }

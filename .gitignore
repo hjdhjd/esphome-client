@@ -7,6 +7,11 @@ dist
 # Ignore macOS attribute files.
 .DS_Store
 
+# Ignore Claude Code-related files.
+CLAUDE.md
+claude/
+.claude/
+
 # Ignore generated files.
 homebridge-ui/public/lib
 

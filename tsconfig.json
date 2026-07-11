@@ -1,11 +1,12 @@
 {
   "compilerOptions": {
 
+    "exactOptionalPropertyTypes": true,
     "outDir": "dist",
     "rootDir": "src"
   },
 
-  "exclude": [ "dist", "node_modules" ],
+  "exclude": [ "dist", "node_modules", "test", "tests", "bench" ],
   "extends": "./node_modules/homebridge-plugin-utils/build/tsconfig.json",
   "include": [ "eslint.config.mjs", "src" ]
 }

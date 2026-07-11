@@ -1,0 +1,16 @@
+name: "Close Non-Conforming Issues"
+
+on:
+  issues:
+    types: [opened]
+
+# The reusable workflow narrows this to the autoclose job, but GitHub requires the caller to grant the ceiling of permissions the reusable workflow can claim.
+permissions:
+  issues: write
+
+jobs:
+  validate:
+    uses: hjdhjd/github-workflows/.github/workflows/issue-validate.yml@main
+    secrets: inherit
+    with:
+      issue-pattern: "Describe the problem|Describe the feature request"

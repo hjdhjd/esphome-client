@@ -1,7 +1,7 @@
 {
   "name": "esphome-client",
   "type": "module",
-  "version": "1.3.1",
+  "version": "2.0.0",
   "displayName": "ESPHome Client",
   "description": "A nearly complete implementation of the ESPHome client protocol with encryption support.",
   "author": {
@@ -41,33 +41,51 @@
     "x25519"
   ],
   "engines": {
-    "node": ">=20"
+    "node": ">=22.20"
   },
   "main": "dist/index.js",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./testing": {
+      "types": "./dist/testing/index.d.ts",
+      "import": "./dist/testing/index.js"
+    }
+  },
   "bin": {
-    "espc": "./dist/util/espc.js"
+    "espc": "./dist/util/espc-bin.js"
   },
   "scripts": {
-    "build": "shx rm -rf ./dist && tsc && shx chmod a+x ./dist/util/espc.js",
-    "build-docs": "shx rm -f ./docs/[^CO]*.md && npx typedoc",
-    "clean": "shx rm -rf ./dist",
-    "lint": "eslint --max-warnings=${ESLINT_MAX_WARNINGS:-\"-1\"} eslint.config.mjs src/**/*.ts",
+    "build": "npm run clean && tsc -p tsconfig.build.json && node -e \"require('node:fs').chmodSync('dist/util/espc-bin.js',0o755)\"",
+    "build-docs": "node -e \"for(const p of ['docs/classes', 'docs/functions', 'docs/interfaces', 'docs/type-aliases', 'docs/variables', 'docs/README.md'])require('node:fs').rmSync(p,{force:true,recursive:true})\" && npx typedoc",
+    "clean": "node -e \"require('node:fs').rmSync('dist',{force:true,recursive:true})\"",
+    "lint": "eslint --max-warnings=${ESLINT_MAX_WARNINGS:-\"-1\"} eslint.config.mjs \"src/**/*.ts\"",
+    "lint:proto": "node --strip-types scripts/lint-proto-sync.ts",
+    "lint:test-file-globs": "node scripts/check-test-file-globs.mjs",
+    "lint:types-test-files": "node --strip-types scripts/lint-types-test-files.ts",
     "postpublish": "npm run clean",
-    "prepublishOnly": "npm run lint && npm run build",
-    "test": "eslint src/**/*.ts"
+    "prepublishOnly": "npm run lint && npm run lint:proto && npm run lint:types-test-files && npm run lint:test-file-globs && npm run typecheck && npm run build",
+    "test": "node --strip-types --test --experimental-test-coverage --test-coverage-include='src/**/*.ts' --test-coverage-exclude='src/**/*.test.ts' --test-coverage-exclude='src/**/*.types.test.ts' --test-coverage-exclude='src/testing/**' --test-coverage-lines=85 --test-coverage-branches=80 --test-coverage-functions=85 --test-timeout=15000 \"src/**/*.test.ts\"",
+    "test:e2e": "node --strip-types --test --test-timeout=120000 \"test/e2e/**/*.test.ts\"",
+    "test:fuzz": "node --strip-types --test --test-timeout=60000 \"test/fuzz/**/*.test.ts\"",
+    "test:watch": "node --strip-types --test --watch \"src/**/*.test.ts\"",
+    "test:all": "npm run test && npm run test:e2e && npm run test:fuzz",
+    "typecheck": "tsc --noEmit -p tsconfig.check.json",
+    "bench": "node --expose-gc --strip-types bench/frames-per-second.bench.ts && node --expose-gc --strip-types bench/gc-churn.bench.ts && node --expose-gc --strip-types bench/heap-stability.bench.ts",
+    "check:example-refs": "node scripts/check-example-references.mjs",
+    "check:proto-drift": "node scripts/check-proto-drift.mjs",
+    "refresh:proto": "node scripts/check-proto-drift.mjs --write"
   },
   "devDependencies": {
-    "@stylistic/eslint-plugin": "5.7.1",
-    "@types/node": "25.2.0",
+    "@stylistic/eslint-plugin": "5.10.0",
+    "@types/node": "26.0.1",
     "eslint": "9.39.2",
-    "homebridge-plugin-utils": "1.31.0",
-    "shx": "0.4.0",
-    "typedoc": "0.28.16",
-    "typedoc-plugin-markdown": "4.9.0",
+    "homebridge-plugin-utils": "file:../homebridge-plugin-utils",
+    "typedoc": "0.28.19",
+    "typedoc-plugin-markdown": "4.12.0",
     "typescript": "5.9.3",
-    "typescript-eslint": "8.54.0"
-  },
-  "overrides": {
-    "@types/readable-stream": "4.0.23"
+    "typescript-eslint": "8.62.0"
   }
 }

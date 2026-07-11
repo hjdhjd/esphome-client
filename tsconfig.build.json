@@ -1,0 +1,17 @@
+{
+  "extends": "./tsconfig.json",
+
+  "exclude": [
+    "dist",
+    "node_modules",
+    "test",
+    "tests",
+    "bench",
+    "src/internal",
+    "src/**/*.test.ts",
+    "src/**/*.fixtures.ts",
+    "src/**/*.helpers.ts",
+    "src/**/*.types.test.ts",
+    "src/**/*.types.ts"
+  ]
+}
