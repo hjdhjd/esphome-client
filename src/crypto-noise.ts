@@ -6,101 +6,18 @@
 /**
  * Node-native Noise_NNpsk0_25519_ChaChaPoly_SHA256 handshake implementation with no external dependencies.
  *
+ * @remarks Implements the handshake using only Node's built-in `crypto` primitives (X25519 via `diffieHellman`, ChaCha20-Poly1305 via `createCipheriv`, SHA-256 via
+ * `createHash`, HKDF via `hkdfSync`). Exports {@link HandshakeState} (the high-level driver), {@link CipherState} (a single-direction cipher state; the handshake
+ * produces a pair of them for bidirectional traffic), the ESPHome-specific prologue constant, and the typed {@link NoiseHandshakeError} thrown on failure.
+ * After the handshake completes, the returned cipher pair carries the keys for bidirectional encrypted traffic on the live transport.
+ *
  * @module crypto-noise
- *
- * This module implements the Noise_NNpsk0_25519_ChaChaPoly_SHA256 handshake pattern with optional prologue support. The implementation only uses Node native
- * cryptographic primitives for X25519 key exchange operations and includes robust logging support. After completing the handshake, you'll have access to
- * cipher states for bidirectional encrypted communication.
- *
- * @example Basic Handshake and Encryption
- * ```typescript
- * import { createHandshake } from "./crypto-noise";
- * import { randomBytes } from "node:crypto";
- *
- * // Create a pre-shared key that both parties must possess. This must be exactly 32 bytes.
- * const psk = randomBytes(32);
- *
- * // Initialize the initiator and responder with their respective roles.
- * const initiator = createHandshake({ role: "initiator", psk });
- * const responder = createHandshake({ role: "responder", psk });
- *
- * // Perform the two-message handshake pattern. First, the initiator sends their ephemeral key.
- * const msg1 = initiator.writeMessage();
- * const payload1 = responder.readMessage(msg1);
- *
- * // Then the responder replies with their ephemeral key, completing the handshake.
- * const msg2 = responder.writeMessage();
- * const payload2 = initiator.readMessage(msg2);
- *
- * // After the handshake completes, both parties have cipher states for secure communication.
- * // The initiator uses sendCipher to encrypt and receiveCipher to decrypt.
- * const encrypted = initiator.sendCipher.EncryptWithAd(Buffer.alloc(0), Buffer.from("Hello World"));
- * const decrypted = responder.receiveCipher.DecryptWithAd(Buffer.alloc(0), encrypted);
- * console.log("Decrypted message:", decrypted.toString());
- *
- * // The responder can send messages back using their sendCipher.
- * const response = responder.sendCipher.EncryptWithAd(Buffer.alloc(0), Buffer.from("Hello back!"));
- * const responseDecrypted = initiator.receiveCipher.DecryptWithAd(Buffer.alloc(0), response);
- * ```
- *
- * @example ESPHome Device Connection
- * ```typescript
- * import { createESPHomeHandshake } from "./crypto-noise";
- * import { connect } from "node:net";
- *
- * // Connect to an ESPHome device using its pre-shared key from the YAML configuration.
- * // The PSK is configured in your device's YAML under api.encryption.key.
- * const handshake = createESPHomeHandshake({
- *   role: "initiator",  // Clients are always initiators when connecting to ESPHome devices.
- *   psk: Buffer.from("your-32-byte-psk-from-esphome-config", "base64"),
- *   logger: myLogger
- * });
- *
- * // Connect to the device on port 6053, which is the standard ESPHome API port.
- * const socket = connect(6053, "192.168.1.100");
- *
- * socket.on("connect", () => {
- *   // Send the first handshake message containing our ephemeral public key.
- *   const hello = handshake.writeMessage();
- *   socket.write(hello);
- * });
- *
- * socket.on("data", (data) => {
- *   if (!handshake.isComplete) {
- *     // Process the device's handshake response.
- *     handshake.readMessage(data);
- *
- *     // The handshake is now complete. We can use the cipher states for API communication.
- *     // All subsequent API messages must be encrypted using these cipher states.
- *     const apiHello = createAPIHelloMessage(); // Your API protocol implementation.
- *     const encrypted = handshake.sendCipher.EncryptWithAd(Buffer.alloc(0), apiHello);
- *     socket.write(encrypted);
- *   } else {
- *     // Decrypt incoming API messages from the device.
- *     const plaintext = handshake.receiveCipher.DecryptWithAd(Buffer.alloc(0), data);
- *     processAPIMessage(plaintext); // Your API message handler.
- *   }
- * });
- * ```
- *
- * @example Using Associated Data for Message Authentication
- * ```typescript
- * // You can include associated data that gets authenticated but not encrypted.
- * // This is useful for message sequence numbers or protocol headers.
- * const sequenceNumber = Buffer.allocUnsafe(4);
- * sequenceNumber.writeUInt32LE(messageCount++, 0);
- *
- * // The associated data is authenticated but transmitted in plaintext.
- * const encrypted = handshake.sendCipher.EncryptWithAd(sequenceNumber, payload);
- *
- * // The receiver must provide the same associated data to decrypt successfully.
- * const decrypted = handshake.receiveCipher.DecryptWithAd(sequenceNumber, encrypted);
- * ```
  */
-import type { EspHomeLogging, Nullable } from "./types.js";
+import type { EspHomeLogging, Nullable } from "./types.ts";
 import { createCipheriv, createDecipheriv, createHash, createPublicKey, diffieHellman, generateKeyPairSync, hkdfSync } from "node:crypto";
 import { Buffer } from "node:buffer";
 import type { KeyObject } from "node:crypto";
+import { NoiseHandshakeError } from "./errors.ts";
 
 // Protocol constants that define the specific Noise protocol variant we're implementing.
 const PROTOCOL_NAME = "Noise_NNpsk0_25519_ChaChaPoly_SHA256";
@@ -109,7 +26,7 @@ const CIPHER_ALGO = "chacha20-poly1305";
 const AUTH_TAG_LEN = 16;
 const HASH_ALGO = "sha256";
 
-// Cached empty buffer to avoid repeated allocations for commonly used empty buffers.
+// Cached empty buffer used as the standard empty-AD/empty-payload argument across the handshake, avoiding repeated zero-length allocations at the handshake call sites.
 const EMPTY_BUFFER = Buffer.alloc(0);
 
 /**
@@ -123,6 +40,13 @@ export const NOISE_MAX_MESSAGE_LEN = 65535;
 export const NOISE_PSK_LEN = 32;
 
 /**
+ * The maximum ChaCha20-Poly1305 nonce (2^64 - 1). Per Noise Protocol Framework §5.1 this value is RESERVED for {@link CipherState.Rekey} and must never encrypt or
+ * decrypt a transport message. The single source of truth for both the rekey nonce and the exhaustion guard in {@link CipherState.EncryptWithAd} / {@link
+ * CipherState.DecryptWithAd}.
+ */
+const MAX_NONCE = (1n << 64n) - 1n;
+
+/**
  * Length of Diffie-Hellman public keys in bytes.
  */
 export const NOISE_DH_LEN = 32;
@@ -132,26 +56,17 @@ export const NOISE_DH_LEN = 32;
  */
 export const ESPHOME_NOISE_PROLOGUE = "NoiseAPIInit\x00\x00";
 
-// Cache the protocol name hash since it never changes.
-const PROTOCOL_NAME_HASH = ((): Buffer => {
+// Cache the protocol name hash since it never changes. Per Noise §5.2, when the protocol-name buffer is at most HASHLEN (32) bytes, it is zero-padded into the hash;
+// otherwise it is itself hashed. The actual protocol name "Noise_NNpsk0_25519_ChaChaPoly_SHA256" is 36 bytes, so the hashed branch is the one that fires. We skip the
+// short-name branch entirely - re-add it (with a test) only if a future refactor introduces a pattern whose name is short enough to need it.
+const PROTOCOL_NAME_HASH = createHash(HASH_ALGO).update(Buffer.from(PROTOCOL_NAME, "ascii")).digest();
 
-  const nameBuf = Buffer.from(PROTOCOL_NAME, "ascii");
-
-  if(nameBuf.length <= 32) {
-
-    const h = Buffer.alloc(32);
-
-    nameBuf.copy(h);
-
-    return h;
-  }
-
-  return createHash(HASH_ALGO).update(nameBuf).digest() as Buffer;
-})();
-
-// Type definitions for message patterns to ensure compile-time safety.
-type NoiseToken = "psk" | "e" | "ee" | "es" | "se" | "ss" | "s";
-type MessagePattern = readonly NoiseToken[];
+// The Noise spec defines a wider set of pattern tokens (psk, e, ee, es, se, ss, s) used across various handshake patterns. NNpsk0 only uses three of them, and this
+// module is committed to NNpsk0 specifically: the narrow type below is the dispatch contract, and adding a new token to a future pattern is an explicit, deliberate
+// extension - not a silent rule violation. Using the narrow union as the switch input makes processWriteToken and processReadToken exhaustive without a default
+// arm, and TypeScript will reject any attempt to add a token to NNPSK0_PATTERN that this dispatch doesn't handle.
+type NNpsk0Token = "e" | "ee" | "psk";
+type MessagePattern = readonly NNpsk0Token[];
 type HandshakePattern = readonly MessagePattern[];
 
 // The NNpsk0 handshake pattern: first message mixes PSK and sends ephemeral, second message sends ephemeral and performs DH.
@@ -203,30 +118,8 @@ export interface ESPHomeHandshakeOptions {
   logger?: EspHomeLogging;
 }
 
-/**
- * Noise handshake error codes to allow precise error handling by consumers.
- */
-export type NoiseHandshakeErrorCode = "AUTH_FAILED" | "CT_TOO_SHORT" | "HANDSHAKE_COMPLETE" | "INVALID_PSK_LENGTH" | "MISSING_KEYS" | "MSG_TOO_LONG" | "NO_PATTERN" |
-  "NOT_INITIALIZED" | "TRUNCATED_E" | "UNSUPPORTED_TOKEN";
-
-/**
- * Custom error class for Noise protocol errors with error codes for better error handling.
- */
-export class NoiseHandshakeError extends Error {
-
-  /**
-   * Creates a new NoiseHandshakeError.
-   * @param message - The error message.
-   * @param code - A machine-readable error code.
-   */
-  constructor(message: string, public readonly code: string) {
-
-    super(message);
-
-    this.code = code;
-    this.name = "NoiseHandshakeError";
-  }
-}
+// NoiseHandshakeError is imported from "./errors.ts" so the entire library shares one error hierarchy. Its companion NoiseHandshakeErrorCode union lives in the same
+// module but is not referenced here. Consumers import the same names from the same package entry point because index.ts re-exports the errors module.
 
 /**
  * Generates an X25519 key pair and returns both the private key and raw 32-byte public key.
@@ -276,16 +169,20 @@ function hkdf(chainingKey: Buffer, ikm: Buffer, numOutputs: 2 | 3): [Buffer, Buf
 
   if(numOutputs === 2) {
 
-    return [ derivedKey.subarray(0, 32) as Buffer, derivedKey.subarray(32, 64) as Buffer ];
+    return [ derivedKey.subarray(0, 32), derivedKey.subarray(32, 64) ];
   } else {
 
-    return [ derivedKey.subarray(0, 32) as Buffer, derivedKey.subarray(32, 64) as Buffer, derivedKey.subarray(64, 96) as Buffer ];
+    return [ derivedKey.subarray(0, 32), derivedKey.subarray(32, 64), derivedKey.subarray(64, 96) ];
   }
 }
 
 /**
  * CipherState manages the encryption state for a single direction of communication.
  * Implements the CipherState object as specified in Noise Protocol Framework §5.1 using ChaCha20-Poly1305.
+ *
+ * Usage:
+ *
+ * {@includeCode ./examples/showcase.ts#crypto-noise-associated-data}
  */
 export class CipherState {
 
@@ -298,12 +195,17 @@ export class CipherState {
   // The nonce buffer.
   private readonly nonce;
 
-  constructor(private readonly log?: EspHomeLogging) {
+  // Optional logger reference, captured for debug output during cipher operations.
+  private readonly log: EspHomeLogging | undefined;
 
-    // Initialize our class. We allocate the nonce buffer only once as a performance optimization and reuse it throughout our session.
+  constructor(log?: EspHomeLogging) {
+
     this.k = null;
-    this.n = BigInt(0);
+    this.n = 0n;
+
+    // We allocate the nonce buffer only once as a performance optimization and reuse it throughout our session.
     this.nonce = Buffer.alloc(12);
+    this.log = log;
   }
 
   /**
@@ -312,8 +214,8 @@ export class CipherState {
   public InitializeKey(key: Nullable<Buffer>): void {
 
     this.k = key;
-    this.n = BigInt(0);
-    this.log?.debug("CipherState: Key initialized, hasKey=" + (key !== null) + ".");
+    this.n = 0n;
+    this.log?.debug("CipherState: Key initialized, hasKey=" + String(key !== null) + ".");
   }
 
   /**
@@ -347,6 +249,13 @@ export class CipherState {
       return plaintext;
     }
 
+    // Noise §5.1: the maximum nonce (2^64 - 1) is reserved for Rekey and must never encrypt a transport message. Refuse it with a typed error before the nonce is
+    // consumed, rather than encrypting under the reserved nonce and then throwing a raw RangeError from writeBigUInt64LE on the following call.
+    if(this.n >= MAX_NONCE) {
+
+      throw new NoiseHandshakeError("Nonce exhausted: the reserved maximum nonce must not encrypt a transport message.", "NONCE_EXHAUSTED");
+    }
+
     if(plaintext.length + AUTH_TAG_LEN > NOISE_MAX_MESSAGE_LEN) {
 
       throw new NoiseHandshakeError("Message too long", "MSG_TOO_LONG");
@@ -354,7 +263,8 @@ export class CipherState {
 
     const cipher = createCipheriv(CIPHER_ALGO, this.k, this.updateNonce(), { authTagLength: AUTH_TAG_LEN });
 
-    // We specify plaintextLength here to ensure we're forward-compatible with Node 22 and beyond.
+    // We pass plaintextLength purely for symmetry with the CCM-capable setAAD call shape. The option only matters for CCM-mode ciphers, so ChaCha20-Poly1305
+    // ignores it - it is harmless here and simply keeps the call shape uniform.
     cipher.setAAD(ad, { plaintextLength: plaintext.length });
 
     // For empty plaintext, we still need to generate the auth tag.
@@ -362,7 +272,8 @@ export class CipherState {
 
     const tag = cipher.getAuthTag();
 
-    this.log?.debug("CipherState: Encrypted with nonce=" + this.n + ", plaintext=" + plaintext.length + " bytes, ciphertext=" + ct.length + " bytes.");
+    this.log?.debug("CipherState: Encrypted with nonce=" + String(this.n) + ", plaintext=" + String(plaintext.length) + " bytes, ciphertext=" + String(ct.length) +
+      " bytes.");
     this.n++;
 
     return Buffer.concat([ ct, tag ]);
@@ -377,6 +288,12 @@ export class CipherState {
     if(!this.HasKey() || (this.k === null)) {
 
       return data;
+    }
+
+    // Noise §5.1: refuse the reserved maximum nonce on the receive side too (see {@link EncryptWithAd}).
+    if(this.n >= MAX_NONCE) {
+
+      throw new NoiseHandshakeError("Nonce exhausted: the reserved maximum nonce must not decrypt a transport message.", "NONCE_EXHAUSTED");
     }
 
     // We reject packets that are shorter than our tag length.
@@ -399,7 +316,8 @@ export class CipherState {
       // For empty ciphertext, just verify the tag without calling update.
       const pt = ciphertext.length === 0 ? decipher.final() : Buffer.concat([ decipher.update(ciphertext), decipher.final() ]);
 
-      this.log?.debug("CipherState: Decrypted with nonce=" + this.n + ", ciphertext=" + ciphertext.length + " bytes, plaintext=" + pt.length + " bytes.");
+      this.log?.debug("CipherState: Decrypted with nonce=" + String(this.n) + ", ciphertext=" + String(ciphertext.length) +
+        " bytes, plaintext=" + String(pt.length) + " bytes.");
       this.n++;
 
       return pt;
@@ -409,7 +327,7 @@ export class CipherState {
 
         this.log?.error("CipherState: Decryption failed: " + e.message + ".");
       }
-      throw new NoiseHandshakeError("Authentication failed", "AUTH_FAILED");
+      throw new NoiseHandshakeError("Authentication failed", "AUTH_FAILED", { cause: e });
     }
   }
 
@@ -423,11 +341,9 @@ export class CipherState {
       return;
     }
 
-    // Use the maximum possible nonce value (2^64 - 1) for the rekey operation.
-    const maxNonce = (BigInt(1) << BigInt(64)) - BigInt(1);
-
+    // Use the reserved maximum nonce (2^64 - 1) for the rekey operation - the same {@link MAX_NONCE} the AEAD entry points refuse for transport messages.
     this.nonce.fill(0, 0, 4);
-    this.nonce.writeBigUInt64LE(maxNonce, 4);
+    this.nonce.writeBigUInt64LE(MAX_NONCE, 4);
 
     // Encrypt 32 bytes of zeros to generate the new key material. Must be zeros for the rekey operation.
     const zeros = Buffer.alloc(32);
@@ -439,6 +355,31 @@ export class CipherState {
     // The first 32 bytes of the ciphertext become our new key.
     this.InitializeKey(ct.subarray(0, 32));
     this.log?.debug("CipherState: Rekey operation completed successfully.");
+  }
+
+  /**
+   * Zero out the key material and reset state. The key Buffer is filled with zeros before the reference is dropped, ensuring sensitive material does not linger in
+   * memory waiting on garbage collection. Safe to call more than once.
+   */
+  public destroy(): void {
+
+    if(this.k) {
+
+      this.k.fill(0);
+      this.k = null;
+    }
+
+    this.nonce.fill(0);
+    this.n = 0n;
+  }
+
+  /**
+   * Symbol.dispose hook so consumers can `using cipher = new CipherState(log);` and have key material zeroized deterministically when the binding leaves scope. Aliased
+   * to {@link destroy} for callers that prefer the explicit method.
+   */
+  public [Symbol.dispose](): void {
+
+    this.destroy();
   }
 }
 
@@ -457,9 +398,13 @@ class SymmetricState {
   // The cipher state for encryption/decryption.
   private cs: CipherState;
 
-  constructor(private readonly log?: EspHomeLogging) {
+  // Optional logger reference, mirrored to the underlying CipherState so handshake-phase debug output stays attributable.
+  private readonly log: EspHomeLogging | undefined;
+
+  constructor(log?: EspHomeLogging) {
 
     this.cs = new CipherState(log);
+    this.log = log;
   }
 
   /**
@@ -482,7 +427,7 @@ class SymmetricState {
    */
   public MixHash(data: Buffer): void {
 
-    this.h = createHash(HASH_ALGO).update(Buffer.concat([ this.h, data ])).digest() as Buffer;
+    this.h = createHash(HASH_ALGO).update(Buffer.concat([ this.h, data ])).digest();
     this.log?.debug("SymmetricState: Mixed data into hash, new h=" + this.h.toString("hex") + ".");
   }
 
@@ -495,7 +440,11 @@ class SymmetricState {
 
     this.ck = ck;
     this.cs.InitializeKey(tempK);
-    this.log?.debug("SymmetricState: Mixed key material, new ck=" + ck.toString("hex") + ".");
+
+    // We log only a non-reversible progress signal here - NEVER the chaining key itself. The `ck` transitively incorporates the PSK and the DH shared secrets and is the
+    // exact HKDF input that Split() expands into the live transport ChaCha20 keys, so emitting it (even at debug) would let anyone with the log re-derive the session
+    // keys, defeating the zeroization this module performs everywhere else.
+    this.log?.debug("SymmetricState: Mixed key material into the chaining key.");
   }
 
   /**
@@ -541,66 +490,52 @@ class SymmetricState {
    */
   public Split(): [CipherState, CipherState] {
 
-    // Derive both keys at once using HKDF, which is more efficient than separate calls. We get both 32-byte keys at once here.
+    // Single HKDF call producing 64 bytes (two 32-byte keys) is cheaper than two 32-byte derivations because the underlying expansion is sequential by construction.
     const derivedKey = Buffer.from(hkdfSync(HASH_ALGO, EMPTY_BUFFER, this.ck, EMPTY_BUFFER, 64));
 
     const c1 = new CipherState(this.log);
     const c2 = new CipherState(this.log);
 
     // Use subarray to create views without copying the underlying buffer.
-    c1.InitializeKey(derivedKey.subarray(0, 32) as Buffer);
-    c2.InitializeKey(derivedKey.subarray(32, 64) as Buffer);
+    c1.InitializeKey(derivedKey.subarray(0, 32));
+    c2.InitializeKey(derivedKey.subarray(32, 64));
 
     this.log?.debug("SymmetricState: Split into two cipher states for transport encryption.");
 
     return [ c1, c2 ];
   }
+
+  /**
+   * Zero out the chaining key, handshake hash, and the embedded CipherState's key. Cascades to {@link CipherState.destroy} so all derived key material is wiped together.
+   * Safe to call more than once.
+   */
+  public destroy(): void {
+
+    this.ck.fill(0);
+    this.h.fill(0);
+    this.cs.destroy();
+  }
+
 }
 
 /**
- * HandshakeState manages the complete Noise protocol handshake, implementing the NNpsk0 pattern with optional prologue support.
- * This class implements the HandshakeState object as specified in Noise Protocol Framework §5.3. After the handshake completes, the sendCipher and receiveCipher
- * properties provide access to the encryption states for ongoing communication.
+ * HandshakeState manages the complete Noise protocol handshake, implementing the NNpsk0 pattern with optional prologue support. This class implements the
+ * HandshakeState object as specified in Noise Protocol Framework §5.3. After the handshake completes, the sendCipher and receiveCipher properties provide access to
+ * the encryption states for ongoing communication.
  *
- * @example Direct Handshake Usage
- * ```typescript
- * const handshake = new HandshakeState(true, psk, logger, prologue);
+ * Usage:
  *
- * // Write the first message with an optional payload.
- * const message = handshake.writeMessage(Buffer.from("client-hello"));
+ * {@includeCode ./examples/showcase.ts#crypto-noise-error-handling}
  *
- * // After the handshake completes, use the cipher states directly.
- * if (handshake.isComplete) {
- *   const encrypted = handshake.sendCipher.EncryptWithAd(Buffer.alloc(0), data);
- * }
- * ```
- *
- * @example ESPHome Connection Pattern
- * ```typescript
- * // For ESPHome connections, use the specialized factory function which sets up
- * // the correct prologue automatically. ESPHome uses "NoiseAPIInit" as its prologue.
- * import { createESPHomeHandshake } from "./crypto-noise";
- *
- * const handshake = createESPHomeHandshake({
- *   role: "initiator",
- *   psk: Buffer.from(esphomeKey, "base64")
- * });
- *
- * // The handshake follows a strict two-message pattern.
- * const clientHello = handshake.writeMessage();
- * // Send to device and receive response...
- * handshake.readMessage(deviceResponse);
- *
- * // Now handshake.isComplete is true and cipher states are available.
- * ```
  */
 export class HandshakeState {
 
-  // Cipher for sending encrypted messages after handshake.
-  public sendCipher?: CipherState;
+  // Cipher for sending encrypted messages after handshake. We type this as `T | undefined` rather than `T?` because destroy() explicitly assigns undefined as part of
+  // the zero-out semantics; presence-with-undefined is intentional, not field-omission.
+  public sendCipher: CipherState | undefined;
 
-  // Cipher for receiving encrypted messages after handshake.
-  public receiveCipher?: CipherState;
+  // Cipher for receiving encrypted messages after handshake. Same `T | undefined` rationale as sendCipher.
+  public receiveCipher: CipherState | undefined;
 
   // Whether the handshake has completed successfully.
   public isComplete = false;
@@ -608,34 +543,46 @@ export class HandshakeState {
   // The symmetric state managing the handshake.
   private ss: SymmetricState;
 
-  // Our ephemeral key pair.
-  private ephemeral?: { privateKey: KeyObject; publicKeyRaw: Buffer };
+  // Our ephemeral key pair. Typed `T | undefined` (not `T?`) because destroy() resets it to undefined as a security measure.
+  private ephemeral: { privateKey: KeyObject; publicKeyRaw: Buffer } | undefined;
 
-  // The remote party's public key.
-  private remotePubKey?: KeyObject;
+  // The remote party's public key. Same `T | undefined` rationale.
+  private remotePubKey: KeyObject | undefined;
 
   // Current position in the handshake pattern.
   private patternIndex = 0;
 
+  // Handshake role - true if we're the initiator (client), false if responder.
+  private readonly initiator: boolean;
+
+  // The pre-shared key for the NNpsk0 pattern. Held read-only for the lifetime of the handshake.
+  private readonly psk: Buffer;
+
+  // Optional logger reference for debug output during handshake processing.
+  private readonly log: EspHomeLogging | undefined;
+
   /**
    * Constructs a new handshake state for the NNpsk0 pattern.
+   *
    * @param initiator - True if we're the initiator, false if we're the responder.
    * @param psk - The 32-byte pre-shared key for authentication.
-   * @param log - Optional Homebridge-compatible logger for debugging.
+   * @param log - Optional logger for debugging.
    * @param prologue - Optional fixed prologue bytes to mix into the handshake hash.
    * @throws {NoiseHandshakeError} If the PSK is not exactly 32 bytes.
    */
-  constructor(private readonly initiator: boolean, private readonly psk: Buffer, private readonly log?: EspHomeLogging, prologue: Buffer = EMPTY_BUFFER) {
+  constructor(initiator: boolean, psk: Buffer, log?: EspHomeLogging, prologue: Buffer = EMPTY_BUFFER) {
 
-    // Validate PSK length.
     if(psk.length !== NOISE_PSK_LEN) {
 
-      throw new NoiseHandshakeError("PSK must be exactly " + NOISE_PSK_LEN + " bytes, got " + psk.length, "INVALID_PSK_LENGTH");
+      throw new NoiseHandshakeError("PSK must be exactly " + String(NOISE_PSK_LEN) + " bytes, got " + String(psk.length) + ".", "INVALID_PSK_LENGTH");
     }
 
+    this.initiator = initiator;
+    this.psk = psk;
+    this.log = log;
     this.ss = new SymmetricState(log);
 
-    // Initialize the symmetric state to set up initial handshake hash and chaining key.
+    // Folds the Noise protocol name into the handshake hash, anchoring every subsequent MixHash and MixKey operation to this specific pattern.
     this.ss.InitializeSymmetric();
 
     // Mix the prologue into the handshake hash before any messages to bind the handshake to pre-agreed context data.
@@ -645,56 +592,57 @@ export class HandshakeState {
     this.log?.debug("HandshakeState: Initialized as " + (initiator ? "initiator" : "responder") + ".");
   }
 
-  /**
-   * Gets the role of this party in the handshake.
-   */
-  public get role(): NoiseRole {
+  // Single source of truth for "advance to the next handshake step." Returns the pattern at the current index, throws if the pattern is exhausted, and advances the
+  // index in one place. Returning a non-undefined MessagePattern means callers don't need their own bounds re-checks - TS narrowing carries through the return type,
+  // so writeMessage and readMessage operate on a guaranteed-present pattern without a follow-up `if(!pattern)`.
+  private nextPatternStep(): MessagePattern {
 
-    return this.initiator ? "initiator" : "responder";
-  }
+    const pattern = NNPSK0_PATTERN[this.patternIndex];
 
-  /**
-   * Checks if this party can send encrypted messages (handshake complete and send cipher available).
-   */
-  public get canSend(): boolean {
-
-    return (this.sendCipher !== undefined) && this.sendCipher.HasKey();
-  }
-
-  /**
-   * Checks if this party can receive encrypted messages (handshake complete and receive cipher available).
-   */
-  public get canReceive(): boolean {
-
-    return (this.receiveCipher !== undefined) && this.receiveCipher.HasKey();
-  }
-
-  /**
-   * Ensures the handshake is still in progress (not yet complete).
-   */
-  private ensureHandshakeInProgress(): void {
-
-    if(this.patternIndex >= NNPSK0_PATTERN.length) {
+    if(!pattern) {
 
       throw new NoiseHandshakeError("Handshake already complete", "HANDSHAKE_COMPLETE");
     }
+
+    this.patternIndex++;
+
+    return pattern;
   }
 
-  /**
-   * Ensures both ephemeral and remote public keys are available for DH operations.
-   */
-  private ensureKeysForDH(): void {
+  // Validate-and-extract for the DH inputs: throws when either key is missing, returns the (now non-nullable) keys when both are present. The return-narrowed shape -
+  // rather than an `asserts this is ...` form on this method - is the more direct masterclass pattern: callers see exactly what's being validated and what comes out,
+  // narrowing flows by destructuring rather than by an implicit predicate on the receiver, and we sidestep TypeScript's nominal-private-field semantics that make
+  // intersecting the receiver type with private fields collapse to `never`. Single source of truth for the DH-key rule; no redundant null re-checks downstream.
+  private requireKeysForDH(): { privateKey: KeyObject; remotePubKey: KeyObject } {
 
     if(!this.ephemeral || !this.remotePubKey) {
 
       throw new NoiseHandshakeError("Missing keys for Diffie-Hellman operation", "MISSING_KEYS");
+    }
+
+    return { privateKey: this.ephemeral.privateKey, remotePubKey: this.remotePubKey };
+  }
+
+  // Single source of truth for the X25519 key-agreement step shared by both `ee` token sites (write and read). Node's `diffieHellman` throws a RAW OpenSSL error
+  // (ERR_OSSL_FAILED_DURING_DERIVATION) when the remote ephemeral is malformed or a low-order point. Because this is a PUBLIC module, we must never leak that raw error;
+  // we wrap it in our own typed `NoiseHandshakeError` (code `INVALID_REMOTE_KEY`) preserving the original on the `cause` chain. The error stays phase-agnostic by design:
+  // the primitive cannot know whether this is the connect-flow handshake or some other use, so the connect-flow orchestrator (`lifecycle/handshake.ts`) is what re-tags
+  // this into the permanent `EncryptionKeyInvalidError`.
+  private computeDH(keys: { privateKey: KeyObject; remotePubKey: KeyObject }): Buffer {
+
+    try {
+
+      return diffieHellman({ privateKey: keys.privateKey, publicKey: keys.remotePubKey });
+    } catch(err) {
+
+      throw new NoiseHandshakeError("X25519 key agreement failed; the remote ephemeral public key is invalid.", "INVALID_REMOTE_KEY", { cause: err });
     }
   }
 
   /**
    * Processes a single token during message writing.
    */
-  private processWriteToken(token: NoiseToken): Buffer {
+  private processWriteToken(token: NNpsk0Token): Buffer {
 
     switch(token) {
 
@@ -723,31 +671,21 @@ export class HandshakeState {
 
       case "ee": {
 
-        this.ensureKeysForDH();
-
-        if(!this.ephemeral || !this.remotePubKey) {
-
-          throw new NoiseHandshakeError("Keys not available after validation", "MISSING_KEYS");
-        }
-        // Compute the shared secret using X25519 and mix it into the handshake state.
-        const dh = diffieHellman({ privateKey: this.ephemeral.privateKey, publicKey: this.remotePubKey });
+        // Compute the shared secret using X25519 (via the shared, raw-error-wrapping helper) and mix it into the handshake state.
+        const dh = this.computeDH(this.requireKeysForDH());
 
         this.ss.MixKey(dh);
         this.log?.debug("HandshakeState: Processed ephemeral-ephemeral DH exchange.");
 
         return EMPTY_BUFFER;
       }
-
-      default:
-
-        throw new NoiseHandshakeError("Unsupported token: " + token, "UNSUPPORTED_TOKEN");
     }
   }
 
   /**
    * Processes a single token during message reading.
    */
-  private processReadToken(token: NoiseToken, message: Buffer, index: number): number {
+  private processReadToken(token: NNpsk0Token, message: Buffer, index: number): number {
 
     switch(token) {
 
@@ -783,57 +721,28 @@ export class HandshakeState {
 
       case "ee": {
 
-        this.ensureKeysForDH();
-
-        if(!this.ephemeral || !this.remotePubKey) {
-
-          throw new NoiseHandshakeError("Keys not available after validation", "MISSING_KEYS");
-        }
-
-        // Compute the shared secret using X25519 and mix it into the handshake state.
-        const dh = diffieHellman({ privateKey: this.ephemeral.privateKey, publicKey: this.remotePubKey });
+        // Compute the shared secret using X25519 (via the shared, raw-error-wrapping helper) and mix it into the handshake state.
+        const dh = this.computeDH(this.requireKeysForDH());
 
         this.ss.MixKey(dh);
         this.log?.debug("HandshakeState: Processed ephemeral-ephemeral DH exchange.");
 
         return 0;
       }
-
-      default:
-
-        throw new NoiseHandshakeError("Unsupported token: " + token, "UNSUPPORTED_TOKEN");
     }
   }
 
   /**
    * Writes a handshake message according to the next pattern in the sequence.
+   *
    * @param payload - Optional payload data to encrypt and include in the message.
    * @returns The complete handshake message to send.
    * @throws {NoiseHandshakeError} If the handshake is already complete or if pattern processing fails.
    *
-   * @example
-   * ```typescript
-   * try {
-   *   const message1 = initiator.writeMessage();
-   *   const message2 = initiator.writeMessage(Buffer.from("hello"));
-   * } catch (error) {
-   *   if (error instanceof NoiseHandshakeError) {
-   *     console.error("Write failed:", error.message, "Code:", error.code);
-   *   }
-   * }
-   * ```
    */
   public writeMessage(payload: Buffer = EMPTY_BUFFER): Buffer {
 
-    this.ensureHandshakeInProgress();
-
-    const pattern = NNPSK0_PATTERN[this.patternIndex++];
-
-    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
-    if(!pattern) {
-
-      throw new NoiseHandshakeError("No pattern available to process", "NO_PATTERN");
-    }
+    const pattern = this.nextPatternStep();
 
     // Collect message parts to minimize concatenation operations.
     const parts: Buffer[] = [];
@@ -849,13 +758,8 @@ export class HandshakeState {
       }
     }
 
-    // Handle empty messages efficiently.
-    if((payload === EMPTY_BUFFER) && (parts.length === 0)) {
-
-      return this.ss.EncryptAndHash(EMPTY_BUFFER);
-    }
-
-    // Encrypt and add the payload if present.
+    // Encrypt and add the payload. NNpsk0 always emits at least 32 bytes from the first token (the ephemeral key), so an empty-message early-return path is
+    // unreachable. Re-add such a path (with a covering test) only if a future pattern with zero-byte tokens is introduced.
     const encPayload = this.ss.EncryptAndHash(payload);
 
     if(encPayload.length > 0) {
@@ -863,10 +767,11 @@ export class HandshakeState {
       parts.push(encPayload);
     }
 
-    // Optimize for common cases to avoid unnecessary concatenation.
-    const out = (parts.length === 0) ? EMPTY_BUFFER : ((parts.length === 1) ? parts[0] : Buffer.concat(parts));
+    // Optimize for common cases to avoid unnecessary concatenation. The `?? EMPTY_BUFFER` fallback is unreachable at runtime - parts.length === 1 guarantees parts[0]
+    // exists - but it satisfies the strict-mode index-access check without a non-null assertion.
+    const out: Buffer = (parts.length === 0) ? EMPTY_BUFFER : ((parts.length === 1) ? (parts[0] ?? EMPTY_BUFFER) : Buffer.concat(parts));
 
-    this.log?.debug("HandshakeState: Wrote message with " + payload.length + " byte payload.");
+    this.log?.debug("HandshakeState: Wrote message with " + String(payload.length) + " byte payload.");
 
     // If this was the last message and we're the responder, split the state (responder splits after writing final message).
     if((this.patternIndex >= NNPSK0_PATTERN.length) && !this.initiator) {
@@ -885,27 +790,15 @@ export class HandshakeState {
 
   /**
    * Reads a handshake message according to the next pattern in the sequence.
+   *
    * @param message - The received handshake message to process.
    * @returns The decrypted payload from the message.
    * @throws {NoiseHandshakeError} If the handshake is already complete or authentication fails.
    *
-   * @example
-   * ```typescript
-   * const payload = responder.readMessage(message1);
-   * console.log("Received:", payload.toString());
-   * ```
    */
   public readMessage(message: Buffer): Buffer {
 
-    this.ensureHandshakeInProgress();
-
-    const pattern = NNPSK0_PATTERN[this.patternIndex++];
-
-    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
-    if(!pattern) {
-
-      throw new NoiseHandshakeError("No pattern available to process", "NO_PATTERN");
-    }
+    const pattern = this.nextPatternStep();
 
     let index = 0;
 
@@ -921,7 +814,7 @@ export class HandshakeState {
     const cipherPayload = message.subarray(index);
     const payload = this.ss.DecryptAndHash(cipherPayload);
 
-    this.log?.debug("HandshakeState: Read message with " + payload.length + " byte payload.");
+    this.log?.debug("HandshakeState: Read message with " + String(payload.length) + " byte payload.");
 
     // If this was the last message and we're the initiator, split the state (initiator splits after reading final message).
     if((this.patternIndex >= NNPSK0_PATTERN.length) && this.initiator) {
@@ -939,25 +832,26 @@ export class HandshakeState {
   }
 
   /**
-   * Clears sensitive key material from memory where possible.
-   * Note: Cannot clear KeyObject internal memory in Node.js.
-   *
-   * @example
-   * ```typescript
-   * // Clean up after handshake
-   * handshake.destroy();
-   * ```
+   * Clears sensitive key material from memory where possible. Note: cannot clear `KeyObject` internal memory in Node.js.
    */
   public destroy(): void {
 
-    // Clear sensitive key material from memory where possible.
+    // Clear ephemeral public key material that we own directly.
     if(this.ephemeral) {
 
       this.ephemeral.publicKeyRaw.fill(0);
-      // Note: Cannot clear KeyObject internal memory in Node.js.
     }
 
-    // Reset state to prevent reuse.
+    // Zero the pre-shared key in place so the failure-path teardown also wipes it; .fill(0) mutates the buffer contents without reassigning the readonly reference.
+    this.psk.fill(0);
+
+    // Cascade destroy() to the symmetric state and the post-handshake cipher states. Each child zeros its own key material before we drop the references. This is the
+    // piece of the destroy contract that matters: setting fields to undefined alone leaves the underlying key bytes sitting in memory until garbage collection.
+    this.ss.destroy();
+    this.sendCipher?.destroy();
+    this.receiveCipher?.destroy();
+
+    // Mark the handshake exhausted so any post-destroy method call no-ops or fails fast rather than touching now-freed key material.
     this.patternIndex = NNPSK0_PATTERN.length;
     this.isComplete = false;
     this.ephemeral = undefined;
@@ -965,42 +859,55 @@ export class HandshakeState {
     this.sendCipher = undefined;
     this.receiveCipher = undefined;
   }
+
+  /**
+   * Symbol.dispose hook for the explicit-resource-management proposal. Lets consumers write `using handshake = createESPHomeHandshake({ ... });` and have key material
+   * zeroized deterministically when the binding leaves scope, including on thrown errors. Aliased to {@link destroy} so call sites and `using` agree on behavior.
+   */
+  public [Symbol.dispose](): void {
+
+    this.destroy();
+  }
+
+  /**
+   * Zeroize the handshake-only secrets - the PSK, the `SymmetricState` chaining key / handshake hash (and its embedded handshake cipher), and our ephemeral public
+   * key - while LEAVING the post-handshake {@link sendCipher} / {@link receiveCipher} intact. Called on the success path AFTER the cipher pair has been installed on the
+   * transport, so the live session keys survive while the now-spent handshake inputs (the PSK and the HKDF chaining material that derived the session keys) do not linger
+   * in memory. The cipher references are relinquished (set to undefined, NOT destroyed) because ownership has transferred to the transport via `installCipher`; this also
+   * makes a later {@link destroy} on this spent handshake a safe no-op that can never zero the transport's live keys. Contrast {@link destroy}, which additionally
+   * cascades into the cipher states and is the correct teardown for a FAILED handshake (no ciphers in use). Safe to call more than once. Best-effort: Node Buffer
+   * zeroization cannot guarantee the GC made no prior copy.
+   */
+  public destroyHandshakeSecrets(): void {
+
+    this.psk.fill(0);
+    this.ss.destroy();
+
+    if(this.ephemeral) {
+
+      this.ephemeral.publicKeyRaw.fill(0);
+    }
+
+    this.ephemeral = undefined;
+    this.remotePubKey = undefined;
+
+    // Relinquish - do NOT destroy - the post-handshake ciphers: the transport owns them now.
+    this.sendCipher = undefined;
+    this.receiveCipher = undefined;
+  }
 }
 
 /**
- * Factory function to create a Noise handshake with a cleaner API. This is the primary way to create a handshake for general Noise protocol usage. For ESPHome specific
- * connections, use createESPHomeHandshake instead.
+ * Factory function to create a Noise handshake with a cleaner API. This is the primary way to create a handshake for general Noise protocol usage. For ESPHome
+ * specific connections, use {@link createESPHomeHandshake} instead.
+ *
+ * Usage:
+ *
+ * {@includeCode ./examples/showcase.ts#crypto-noise-handshake-basic}
  *
  * @param options - Configuration options for the handshake.
  * @returns A configured HandshakeState instance ready for the handshake process.
  *
- * @example Standard Usage
- * ```typescript
- * import { createHandshake } from "./crypto-noise";
- *
- * const handshake = createHandshake({
- *   role: "initiator",
- *   psk: myPreSharedKey,
- *   prologue: Buffer.from("application-specific-data"),
- *   logger: myLogger
- * });
- *
- * // Perform the handshake and then use the cipher states.
- * const msg = handshake.writeMessage();
- * // ... exchange messages ...
- *
- * // After completion, encrypt data using the cipher states.
- * const encrypted = handshake.sendCipher.EncryptWithAd(Buffer.alloc(0), plaintext);
- * ```
- *
- * @example Minimal Configuration
- * ```typescript
- * // The minimal configuration only requires a role and PSK.
- * const handshake = createHandshake({
- *   role: "responder",
- *   psk: sharedSecret
- * });
- * ```
  */
 export function createHandshake(options: NoiseHandshakeOptions): HandshakeState {
 
@@ -1008,124 +915,20 @@ export function createHandshake(options: NoiseHandshakeOptions): HandshakeState 
 }
 
 /**
- * Factory function to create a Noise handshake specifically for ESPHome connections.
- * This function automatically configures the correct prologue for ESPHome Native API communication.
- * ESPHome devices expect a specific prologue format and this function handles that setup automatically.
+ * Factory function to create a Noise handshake specifically for ESPHome connections. This function automatically configures the correct prologue for ESPHome Native
+ * API communication. ESPHome devices expect a specific prologue format and this function handles that setup automatically.
+ *
+ * Usage:
+ *
+ * {@includeCode ./examples/showcase.ts#crypto-noise-esphome-connection}
+ *
+ * Usage (with logging):
+ *
+ * {@includeCode ./examples/showcase.ts#crypto-noise-with-logging}
  *
  * @param options - Configuration options for the ESPHome handshake.
  * @returns A configured HandshakeState instance ready for ESPHome communication.
  *
- * @example Complete ESPHome Connection Flow
- * ```typescript
- * import { createESPHomeHandshake } from "./crypto-noise";
- * import { connect } from "node:net";
- *
- * // The PSK is configured in your ESPHome device YAML file. Look for the api.encryption.key field in your device configuration.
- * // api:
- * //   encryption:
- * //     key: "base64-encoded-32-byte-key"
- *
- * const psk = Buffer.from("your-base64-key", "base64");
- * const handshake = createESPHomeHandshake({
- *   role: "initiator",  // Clients connecting to ESPHome devices are always initiators.
- *   psk: psk
- * });
- *
- * // Connect to the ESPHome device on its API port (default 6053).
- * const socket = connect(6053, "device-ip-address");
- *
- * // Perform the two-message Noise handshake once connected.
- * socket.on("connect", () => {
- *   const clientHello = handshake.writeMessage();
- *   socket.write(clientHello);
- * });
- *
- * socket.on("data", (data) => {
- *   if (!handshake.isComplete) {
- *     // Complete the handshake by processing the device's response.
- *     handshake.readMessage(data);
- *     console.log("Handshake complete, ready for encrypted API communication.");
- *
- *     // Now you can send encrypted API messages using the established cipher states.
- *     const apiMessage = createConnectRequest(); // Your API message creation.
- *     const encrypted = handshake.sendCipher.EncryptWithAd(Buffer.alloc(0), apiMessage);
- *     socket.write(encrypted);
- *   } else {
- *     // All subsequent communication is encrypted using the cipher states.
- *     const decrypted = handshake.receiveCipher.DecryptWithAd(Buffer.alloc(0), data);
- *     handleAPIResponse(decrypted); // Your API response handler.
- *   }
- * });
- * ```
- *
- * @example With Logging for Debugging
- * ```typescript
- * // Enable detailed logging to troubleshoot handshake issues.
- * const handshake = createESPHomeHandshake({
- *   role: "initiator",
- *   psk: myPSK,
- *   logger: {
- *     debug: (msg) => console.log("[DEBUG]", msg),
- *     error: (msg) => console.error("[ERROR]", msg)
- *   }
- * });
- *
- * // The logger will output detailed information about each handshake step,
- * // including key exchanges, hash updates, and cipher state transitions.
- * ```
- *
- * @example Implementing an ESPHome-Compatible Server
- * ```typescript
- * // If you're implementing a server that ESPHome devices can connect to,
- * // configure the handshake as a responder. This is uncommon but supported.
- * const handshake = createESPHomeHandshake({
- *   role: "responder",
- *   psk: serverPSK,
- *   additionalPrologueData: Buffer.from("server-identifier")
- * });
- *
- * // Wait for incoming connections and process the initiator's hello message.
- * server.on("connection", (socket) => {
- *   socket.on("data", (data) => {
- *     if (!handshake.isComplete) {
- *       // Read the client's hello message.
- *       handshake.readMessage(data);
- *
- *       // Send our response to complete the handshake.
- *       const response = handshake.writeMessage();
- *       socket.write(response);
- *     } else {
- *       // Handle encrypted API messages.
- *       const decrypted = handshake.receiveCipher.DecryptWithAd(Buffer.alloc(0), data);
- *       processIncomingMessage(decrypted);
- *     }
- *   });
- * });
- * ```
- *
- * @example Error Handling
- * ```typescript
- * try {
- *   const handshake = createESPHomeHandshake({
- *     role: "initiator",
- *     psk: psk
- *   });
- *
- *   // Process messages with proper error handling.
- *   handshake.readMessage(incomingData);
- * } catch (error) {
- *   if (error instanceof NoiseHandshakeError) {
- *     // Handle specific Noise protocol errors.
- *     console.error("Handshake failed:", error.message, "Code:", error.code);
- *
- *     // Common error codes include:
- *     // AUTH_FAILED - Authentication tag verification failed.
- *     // INVALID_PSK_LENGTH - PSK is not exactly 32 bytes.
- *     // HANDSHAKE_COMPLETE - Attempting operations after handshake finished.
- *     // MISSING_KEYS - Required keys not available for DH operation.
- *   }
- * }
- * ```
  */
 export function createESPHomeHandshake(options: ESPHomeHandshakeOptions): HandshakeState {
 
