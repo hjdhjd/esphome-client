@@ -9,5 +9,7 @@
  * @module protocol
  */
 
-export * from "./message-types.js";
-export * from "./wire-types.js";
+export * from "./codec.ts";
+export * from "./field-extractors.ts";
+export * from "./message-types.ts";
+export * from "./wire-types.ts";
