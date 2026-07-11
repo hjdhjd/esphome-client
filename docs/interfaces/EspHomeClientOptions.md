@@ -1,0 +1,43 @@
+[**esphome-client**](../README.md)
+
+***
+
+[Home](../README.md) / EspHomeClientOptions
+
+# Interface: EspHomeClientOptions\<Extras\>
+
+Configuration options for creating an ESPHome client instance. These options control how the client connects to and communicates with ESPHome devices.
+
+## Extended by
+
+- [`EspHomeClientOpenOptions`](EspHomeClientOpenOptions.md)
+
+## Type Parameters
+
+| Type Parameter | Default type | Description |
+| ------ | ------ | ------ |
+| `Extras` *extends* [`ExtraSchemaSet`](../type-aliases/ExtraSchemaSet.md) | \{ \} | Optional [ExtraSchemaSet](../type-aliases/ExtraSchemaSet.md) threaded through the client's type-system surface. Defaults to `{}` (no extras) so existing call sites continue to type-check unchanged. When supplied, the public surface (`command`, `commandAndAwait`, `latest`, `snapshotFor`, `telemetryFor`, `telemetryForId`) widens to accept the extras-keyed entity types alongside the built-in [EntityType](../type-aliases/EntityType.md) union. |
+
+## Properties
+
+| Property | Type | Description |
+| ------ | ------ | ------ |
+| <a id="clientid"></a> `clientId?` | [`Nullable`](../type-aliases/Nullable.md)\<`string`\> | Optional client identifier to announce when connecting (default: "esphome-client"). |
+| <a id="clock"></a> `clock?` | `ClockFn` | Injectable wall-clock seam. Defaults to `Date.now`. The client reads every elapsed-time and connection-uptime measurement through this function - the heartbeat supervisor's idle/stall/RTT timing and the connect-timing/health-epoch stamps - so a deterministic test can advance time without real timers. Real consumers should leave this field unset and let the client use the system clock; test code injects a controllable clock. Note: the `connectTimeoutMs` bound is an `AbortSignal.timeout` and is NOT governed by this clock. |
+| <a id="connecttimeoutms"></a> `connectTimeoutMs?` | `number` | Overall connect timeout in milliseconds. Bounds the entire [EspHomeClient.connect](../classes/EspHomeClient.md#connect) flow when the consumer does not pass their own AbortSignal. Composed with the user signal via `AbortSignal.any` so either trigger aborts the in-flight connect. Default 30000. |
+| <a id="extraschemas"></a> `extraSchemas?` | `Extras` | Optional registry of additional entity schemas registered for this client instance only. See [ExtraSchemaSet](../type-aliases/ExtraSchemaSet.md) for the contract. |
+| <a id="gracefuldisconnecttimeoutms"></a> `gracefulDisconnectTimeoutMs?` | `number` | Graceful disconnect timeout in milliseconds. [EspHomeClient.disconnectAsync](../classes/EspHomeClient.md#disconnectasync) sends DISCONNECT_REQUEST and waits this long for the matching response before falling through to immediate teardown. Default 1000. Sync [EspHomeClient.disconnect](../classes/EspHomeClient.md#disconnect) ignores this option entirely. |
+| <a id="handshaketimeoutms"></a> `handshakeTimeoutMs?` | `number` | Per-step handshake timeout in milliseconds. Bounds each individual handshake-message wait (server-hello, server-handshake, hello-response, list-entities done). Default 5000. Tune up for very slow devices, down for tighter test harnesses. |
+| <a id="host"></a> `host` | `string` | The hostname or IP address of the ESPHome device. |
+| <a id="keepalive"></a> `keepAlive?` | \| `false` \| \{ `intervalMs`: `number`; `stallTimeoutMs`: `number`; \} | Lazy heartbeat configuration. When enabled (the default), the client sends `PING_REQUEST` after `intervalMs` of inbound silence and emits [HeartbeatStalledError](../classes/HeartbeatStalledError.md) if no inbound activity follows within `stallTimeoutMs`. Pass `false` to disable heartbeat entirely (useful for tests and short-lived scripts). Default `{ intervalMs: 30000, stallTimeoutMs: 60000 }`. |
+| <a id="logger"></a> `logger?` | [`EspHomeLogging`](EspHomeLogging.md) | Optional logging interface for debug and error messages. |
+| <a id="maxfieldspermessage"></a> `maxFieldsPerMessage?` | `number` | Maximum protobuf field count permitted in a single decoded message. The decoder allocates one record entry per field number; this caps that allocation to defend against malformed or hostile devices that might emit a message claiming an unbounded number of fields. Default 1024 - far above any realistic ESPHome message (typical: 5-50 fields). Exceeding triggers a `MessageTooManyFieldsError` and disconnects the client. |
+| <a id="maxframebytes"></a> `maxFrameBytes?` | `number` | Maximum byte size for a single decoded protocol frame. Hard cap on how large any one inbound message may be; protects against malformed length-prefixes that would otherwise drive an unbounded slice. Default 1 MiB - comfortably above camera image payloads (typically 50-200 KiB) and far below DoS-class allocations. Exceeding triggers a `FrameTooLargeError` and disconnects the client. |
+| <a id="maximagebytes"></a> `maxImageBytes?` | `number` | Maximum byte size of a single reassembled multi-packet camera image. ESPHome streams a camera image across multiple `CameraImageResponse` frames; the camera sub-API accumulates them until the `done` flag, then concatenates. This bounds that above-transport accumulator - which `maxRecvBufferBytes` does not cover - so a device that never sets `done`, or a `done` frame lost mid-image, cannot grow it without limit or silently corrupt the next image. Default 8 MiB, far above any realistic ESPHome camera frame. Unlike the wire-boundary caps, exceeding this drops the in-flight image and emits a warning rather than disconnecting: a single malformed image is a per-image fault, not a connection fault. |
+| <a id="maxrecvbufferbytes"></a> `maxRecvBufferBytes?` | `number` | Maximum bytes allowed to accumulate in the receive buffer before declaring the device is sending garbage. Set higher than `maxFrameBytes` to allow legitimate burst traffic during entity discovery on devices with hundreds of entities. Default 4 MiB. Exceeding triggers a `BufferOverflowError` and disconnects the client. |
+| <a id="metrics"></a> `metrics?` | [`ClientMetrics`](ClientMetrics.md) | Optional metrics interface. When supplied, the library emits structured counters, timings, and gauges per the [ClientMetrics](ClientMetrics.md) contract. Default `undefined` short-circuits to no overhead at all. |
+| <a id="port"></a> `port?` | `number` | The port number for the ESPHome API (default: 6053). |
+| <a id="psk"></a> `psk?` | [`Nullable`](../type-aliases/Nullable.md)\<`string`\> | Optional base64 encoded pre-shared key for Noise encryption. |
+| <a id="reconnect"></a> `reconnect?` | `false` \| [`ReconnectConfig`](ReconnectConfig.md) | Auto-reconnect configuration. When enabled (the default), a non-permanent disconnect triggers a backoff-scheduled reconnect; consumer-held subscriptions survive the cycle. Pass `false` to disable entirely. Default `{}` (defaults applied internally). |
+| <a id="servername"></a> `serverName?` | [`Nullable`](../type-aliases/Nullable.md)\<`string`\> | Optional expected server name for validation during encrypted connections. |
+| <a id="transportfactory"></a> `transportFactory?` | (`options`) => `TransportLike` \| `Promise`\<`TransportLike`\> | Transport factory injection point. When provided, [EspHomeClient.connect](../classes/EspHomeClient.md#connect) invokes this factory to construct a fresh `TransportLike` for each handshake attempt instead of the default `Transport.open` path. The host owns and disposes whatever the factory returns. **Lifetime contract.** A `TransportLike` is single-shot: open, use, dispose. The factory is therefore called more than once per [EspHomeClient.connect](../classes/EspHomeClient.md#connect) invocation when the noise -> plaintext fallback fires (the failed transport is disposed and a fresh one constructed for the plaintext retry). The factory MUST return a brand-new transport on each call. The factory receives the fully-resolved `TransportOpenOptions` the host would otherwise hand to `Transport.open` - host, port, log, frame and buffer limits, optional metrics, and the composed connect signal. A factory that wraps the real transport (e.g. a recording tee) constructs it via `Transport.open(options)` with no need to re-derive any of that configuration; a factory that returns an in-memory test transport may ignore the argument entirely. The `options.signal` field composes the user-supplied connect signal with the host's overall connect timeout, so I/O-bearing factories should honour it. Real consumers should leave this field unset and let the host construct its own `Transport`. Test code uses this to inject a `MockTransport` from the `esphome-client/testing` subpath - see the testing docs for the canonical wiring patterns. |
