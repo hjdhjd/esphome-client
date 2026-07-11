@@ -7,620 +7,322 @@
 
 [![Downloads](https://img.shields.io/npm/dt/esphome-client?color=%2318BCF2&logo=icloud&logoColor=%2318BCF2&style=for-the-badge)](https://www.npmjs.com/package/esphome-client)
 [![Version](https://img.shields.io/npm/v/esphome-client?color=%2318BCF2&label=ESPHome%20Client%20API&logo=esphome&logoColor=%2318BCF2&style=for-the-badge)](https://www.npmjs.com/package/esphome-client)
+[![License](https://img.shields.io/npm/l/esphome-client?color=%2318BCF2&logo=open%20source%20initiative&logoColor=%2318BCF2&style=for-the-badge)](https://github.com/hjdhjd/esphome-client/blob/main/LICENSE.md)
+[![Build Status](https://img.shields.io/github/actions/workflow/status/hjdhjd/esphome-client/ci.yml?branch=main&color=%2318BCF2&logo=github-actions&logoColor=%2318BCF2&style=for-the-badge)](https://github.com/hjdhjd/esphome-client/actions?query=workflow%3A%22Continuous+Integration%22)
 
 ## A complete Node-native ESPHome API client implementation with full protocol support.
 </DIV>
 </SPAN>
 
-`esphome-client` is a comprehensive library that enables you to connect to and communicate with ESPHome devices using their native API protocol. [ESPHome](https://esphome.io) is an open-source system for controlling ESP8266/ESP32 microcontrollers using simple yet powerful configuration files and control them remotely through home automation systems.
+[ESPHome](https://esphome.io) is the open-source firmware platform for ESP8266/ESP32 microcontrollers that defines its own native API protocol for control and observation. `esphome-client` is a TypeScript-first Node 22+ library that speaks that API end-to-end against ESPHome 2025.10+ firmware. It is zero-dependency, ESM-only, and ships a complete Noise Protocol Framework implementation (`Noise_NNpsk0_25519_ChaChaPoly_SHA256`) using only Node's built-in `crypto` and `net` modules. The library is the runtime for `homebridge-ratgdo` and other Homebridge plugins that bridge ESPHome devices into HomeKit; its v2 surface was shaped against that real-world consumer.
 
-## Why use this library for ESPHome support?
-In short - because I use it every day to support a very popular [Homebridge](https://homebridge.io) plugin named [homebridge-ratgdo](https://www.npmjs.com/package/homebridge-ratgdo) that I maintain. This library has been extracted and refined from real-world usage to provide a robust foundation for ESPHome communication.
+## Contents
 
-What makes this implementation unique is that it's **completely Node-native** - there are no external dependencies, no WebAssembly modules, and no native code compilation required. All encryption support is provided by Node.js's built-in crypto module, making installation and deployment straightforward and reliable across all platforms.
+- [Why v2](#why-v2)
+- [Install](#install)
+- [Quick start](#quick-start)
+- [Common patterns](#common-patterns) — task-oriented entry points
+- [Core model](#core-model) — entities, commands, telemetry, errors
+- [Runtime](#runtime) — lifecycle, health, auto-reconnect, latest-state cache, capabilities, logs
+- [Sub-APIs](#sub-apis) — camera, voice, serial, Bluetooth, Z-Wave, Home Assistant, user-services
+- [CLI](#cli) — `espc` interactive tool
+- [Testing](#testing) — `MockClient`, `MockTransport`, factory helpers
+- [Schema extensions](#schema-extensions) — `aliasOf`, `extending`
+- [Protocol reference](#protocol-reference)
+- [Versioning and license](#versioning-and-license)
 
-The library implements the complete Noise Protocol Framework (specifically Noise_NNpsk0_25519_ChaChaPoly_SHA256) for secure communication with ESPHome devices, with automatic fallback to plaintext connections when encryption is not required or available.
+Runnable examples for every workflow named below live in [`src/examples/showcase.ts`](./src/examples/showcase.ts).
 
-Finally - the most significant reason that you should use this library: it's well-tested in production, it is modern TypeScript, and most importantly, *it just works*. The library handles all the complexity of the ESPHome native API protocol, including automatic encryption negotiation, entity discovery, and real-time state updates.
+## Why v2
 
-### Features
-- **Zero external dependencies** - Uses only Node.js built-in modules
-- **Complete protocol implementation** - Full support for all ESPHome entity types and message types
-- **Secure encryption** - Complete Noise Protocol implementation using Node's native crypto
-- **Automatic encryption negotiation** - Seamlessly handles both encrypted and plaintext connections
-- **Entity discovery** - Automatically discovers all entities exposed by the ESPHome device
-- **Real-time updates** - Receive instant telemetry updates for all entity states
-- **Voice assistant support** - Full implementation of ESPHome's voice assistant features
-- **Type-safe API** - Full TypeScript support with comprehensive type definitions
-- **Production tested** - Battle-tested in the popular homebridge-ratgdo plugin
-- **Protocol-compliant** - Carefully verified against the official ESPHome protocol specification
+v2.0 is a clean break from v1 designed for modern TypeScript consumers. The surface composes rather than inherits, every wire identity is typed at compile time, and every async path is cancellable and reconnect-aware.
 
-## Supported Message Types
+- **Composition over inheritance.** `EspHomeClient` no longer extends `EventEmitter`. Subscriptions return `Disposable` callbacks, one-shot `Promise`s, or `AsyncIterable` streams with explicit backpressure policy. Sub-APIs (`client.voiceAssistant`, `client.camera(id)`, ...) compose through narrow seams.
+- **Typed safety.** Branded `EntityId<T>` carries the entity type tag at compile time - passing a switch id to a light command is a type error. The error hierarchy is a typed `EspHomeError` tree with `cause` chains and a `PermanentError` marker the auto-reconnect loop filters on. State-event enum fields narrow to literal unions (e.g., `LockState`, `CoverOperation`, `MediaPlayerState`) rather than plain `number`.
+- **Zero-allocation streams.** `client.telemetry()`, `client.logs()`, `client.lifecycle()`, `client.voiceAssistant.audio()`, and `client.camera(id).stream()` are async iterables with `AbortSignal` cancellation; each has a Web Streams adapter (`telemetryReadable()`, `logsReadable()`, `lifecycleReadable()`, `voiceAssistant.audioReadable()`, and `camera(id).readable()`) that bridges into the pipeline (`pipeThrough`, `tee`, `pipeTo`).
 
-### ✅ Fully Implemented
-This library provides complete support for the ESPHome native API protocol:
+See the [changelog](./docs/Changelog.md) for the full list of breaking changes, additions, and fixes against v1.
 
-#### Core Protocol
-- `HELLO_REQUEST` / `HELLO_RESPONSE` - Initial handshake with protocol version verification
-- `CONNECT_REQUEST` / `CONNECT_RESPONSE` - Connection establishment
-- `DISCONNECT_REQUEST` / `DISCONNECT_RESPONSE` - Clean disconnection
-- `PING_REQUEST` / `PING_RESPONSE` - Keep-alive and latency monitoring
-- `DEVICE_INFO_REQUEST` / `DEVICE_INFO_RESPONSE` - Complete device metadata retrieval
+## Install
 
-#### Entity Discovery (All Types Supported)
-- `LIST_ENTITIES_ALARM_CONTROL_PANEL_RESPONSE` - Alarm panel discovery
-- `LIST_ENTITIES_BINARY_SENSOR_RESPONSE` - Binary sensor discovery
-- `LIST_ENTITIES_BUTTON_RESPONSE` - Button discovery
-- `LIST_ENTITIES_CAMERA_RESPONSE` - Camera discovery
-- `LIST_ENTITIES_CLIMATE_RESPONSE` - Climate/HVAC discovery
-- `LIST_ENTITIES_COVER_RESPONSE` - Cover (garage door, blind, etc.) discovery
-- `LIST_ENTITIES_DATE_RESPONSE` - Date entity discovery
-- `LIST_ENTITIES_DATETIME_RESPONSE` - DateTime entity discovery
-- `LIST_ENTITIES_EVENT_RESPONSE` - Event entity discovery
-- `LIST_ENTITIES_FAN_RESPONSE` - Fan discovery with speed and oscillation
-- `LIST_ENTITIES_LIGHT_RESPONSE` - Light discovery with effects and color modes
-- `LIST_ENTITIES_LOCK_RESPONSE` - Lock discovery
-- `LIST_ENTITIES_MEDIA_PLAYER_RESPONSE` - Media player discovery
-- `LIST_ENTITIES_NUMBER_RESPONSE` - Number entity discovery
-- `LIST_ENTITIES_REQUEST` / `LIST_ENTITIES_DONE_RESPONSE` - Entity enumeration
-- `LIST_ENTITIES_SELECT_RESPONSE` - Select/dropdown discovery
-- `LIST_ENTITIES_SENSOR_RESPONSE` - Sensor discovery
-- `LIST_ENTITIES_SERVICES_RESPONSE` - User-defined service discovery
-- `LIST_ENTITIES_SWITCH_RESPONSE` - Switch discovery
-- `LIST_ENTITIES_TEXT_RESPONSE` - Text input discovery
-- `LIST_ENTITIES_TEXT_SENSOR_RESPONSE` - Text sensor discovery
-- `LIST_ENTITIES_TIME_RESPONSE` - Time entity discovery
-- `LIST_ENTITIES_UPDATE_RESPONSE` - Update entity discovery
-- `LIST_ENTITIES_VALVE_RESPONSE` - Valve discovery
-
-#### State Updates (All Types Supported)
-- `ALARM_CONTROL_PANEL_STATE_RESPONSE` - Alarm panel state
-- `BINARY_SENSOR_STATE_RESPONSE` - Binary sensor state updates
-- `BUTTON_STATE_RESPONSE` - Button state (not typically used)
-- `CLIMATE_STATE_RESPONSE` - Climate state with modes and temperatures
-- `COVER_STATE_RESPONSE` - Cover state with position and tilt
-- `DATE_STATE_RESPONSE` - Date value updates
-- `DATETIME_STATE_RESPONSE` - DateTime value updates
-- `EVENT_RESPONSE` - Event triggers
-- `FAN_STATE_RESPONSE` - Fan state with speed and oscillation
-- `LIGHT_STATE_RESPONSE` - Light state with color and effects
-- `LOCK_STATE_RESPONSE` - Lock state updates
-- `MEDIA_PLAYER_STATE_RESPONSE` - Media player state
-- `NUMBER_STATE_RESPONSE` - Number value updates
-- `SELECT_STATE_RESPONSE` - Select option updates
-- `SENSOR_STATE_RESPONSE` - Sensor value updates
-- `SUBSCRIBE_STATES_REQUEST` - Subscribe to state changes
-- `SWITCH_STATE_RESPONSE` - Switch state updates
-- `TEXT_SENSOR_STATE_RESPONSE` - Text sensor updates
-- `TEXT_STATE_RESPONSE` - Text value updates
-- `TIME_STATE_RESPONSE` - Time value updates
-- `UPDATE_STATE_RESPONSE` - Update availability
-- `VALVE_STATE_RESPONSE` - Valve state with position
-
-#### Commands (All Types Supported)
-- `ALARM_CONTROL_PANEL_COMMAND_REQUEST` - Alarm control with codes
-- `BUTTON_COMMAND_REQUEST` - Trigger button actions
-- `CLIMATE_COMMAND_REQUEST` - Climate control (mode, temperature, fan, swing)
-- `COVER_COMMAND_REQUEST` - Cover control (open/close/stop, position, tilt)
-- `DATE_COMMAND_REQUEST` - Set date values
-- `DATETIME_COMMAND_REQUEST` - Set datetime values
-- `FAN_COMMAND_REQUEST` - Fan control (speed, oscillation, direction)
-- `LIGHT_COMMAND_REQUEST` - Full light control (on/off, brightness, color, effects)
-- `LOCK_COMMAND_REQUEST` - Lock control (lock/unlock with optional code)
-- `MEDIA_PLAYER_COMMAND_REQUEST` - Media player control
-- `NUMBER_COMMAND_REQUEST` - Set number values
-- `SELECT_COMMAND_REQUEST` - Select options
-- `SWITCH_COMMAND_REQUEST` - Control switches
-- `TEXT_COMMAND_REQUEST` - Set text values
-- `TIME_COMMAND_REQUEST` - Set time values
-- `UPDATE_COMMAND_REQUEST` - Trigger updates
-- `VALVE_COMMAND_REQUEST` - Valve control (open/close, position)
-
-#### Advanced Features
-- `CAMERA_IMAGE_REQUEST` / `CAMERA_IMAGE_RESPONSE` - Camera image capture
-- `EXECUTE_SERVICE_REQUEST` - Execute user-defined services
-- `GET_TIME_REQUEST` / `GET_TIME_RESPONSE` - Time synchronization
-- `SUBSCRIBE_LOGS_REQUEST` / `SUBSCRIBE_LOGS_RESPONSE` - Device log streaming
-
-#### Voice Assistant Support
-- `SUBSCRIBE_VOICE_ASSISTANT_REQUEST` - Voice assistant subscription
-- `VOICE_ASSISTANT_ANNOUNCE_REQUEST` / `VOICE_ASSISTANT_ANNOUNCE_FINISHED` - Announcements
-- `VOICE_ASSISTANT_AUDIO` - Bidirectional audio streaming
-- `VOICE_ASSISTANT_CONFIGURATION_REQUEST` / `VOICE_ASSISTANT_CONFIGURATION_RESPONSE` - Configuration
-- `VOICE_ASSISTANT_EVENT_RESPONSE` - Voice assistant events
-- `VOICE_ASSISTANT_REQUEST` - Voice requests from device
-- `VOICE_ASSISTANT_RESPONSE` - Voice responses to device
-- `VOICE_ASSISTANT_SET_CONFIGURATION` - Wake word configuration
-- `VOICE_ASSISTANT_TIMER_EVENT_RESPONSE` - Timer events
-
-#### Security Features
-- `NOISE_ENCRYPTION_SET_KEY_REQUEST` / `NOISE_ENCRYPTION_SET_KEY_RESPONSE` - Dynamic key updates
-
-### Protocol Compliance
-This implementation has been carefully verified against the official ESPHome protocol specification (`api.proto`). All field numbers, data types, and message structures exactly match the protocol definition as of v1.12 of the native ESPHome protocol. The library correctly:
-
-- Handles all required and optional fields
-- Properly encodes/decodes varint, fixed32, and length-delimited fields
-- Avoids all deprecated functionality (e.g., legacy cover commands, deprecated fan speed)
-- Correctly implements device_id fields for multi-device support
-- Properly handles missing state indicators for sensors
-
-## Installation
-To use this library in Node, install it from the command line:
-
-```sh
+```bash
 npm install esphome-client
 ```
 
-### Requirements
+Requires Node.js 22.20 or later and an ESPHome 2025.10+ device. The library is Node-only - browsers cannot satisfy the `net` and `crypto` dependencies.
 
-- **Node.js 20 or later** - This library uses modern Node.js features and APIs
-- **Node.js only** - This library is not compatible with browsers. It relies on Node.js built-in modules (`net` for TCP sockets, `crypto` for encryption) that are not available in browser environments.
-- **ESPHome 2025.10 or later** - Earlier ESPHome firmware versions are not supported.
+## Quick start
 
-### Command Line Tool
-The package includes `espc`, a CLI utility for interacting with ESPHome devices:
+A complete working example: connect to a device with a Noise pre-shared key, lock a deadbolt, await the matching state event, and dispose cleanly on scope exit.
 
-```sh
-# Display device information
-espc --host 192.168.1.100 info
+```ts
+import { LockCommand, LockState, entityId, openEspHomeClient } from "esphome-client";
 
-# List all entities
-espc --host esp-device.local --psk MySecret123 list
+await using client = await openEspHomeClient({
 
-# Control entities (auto-detects type)
-espc --host 192.168.1.100 control bedroom_light on
-espc --host 192.168.1.100 control garage_door open
-
-# Monitor real-time telemetry
-espc --host 192.168.1.100 monitor --duration 60
-
-# Interactive mode for exploration
-espc --host 192.168.1.100 -i
-```
-
-The CLI supports all ESPHome entity types including switches, lights, covers, fans, locks, climate controls, and more. Use `espc --help` for full documentation.
-
-## Entity ID Format
-
-All command methods and state events use entity IDs to identify specific entities on the device. Entity IDs follow the pattern:
-
-```
-{type}-{object_id}
-```
-
-Where:
-- **type** is one of the 22 supported entity types: `alarm_control_panel`, `binary_sensor`, `button`, `climate`, `cover`, `date`, `datetime`, `event`, `fan`, `light`, `lock`, `media_player`, `number`, `select`, `sensor`, `siren`, `switch`, `text`, `text_sensor`, `time`, `update`, `valve`
-- **object_id** is the ID specified in your ESPHome YAML configuration (the `id` field of the component)
-
-Examples:
-- `light-bedroom_lamp` - A light with `id: bedroom_lamp` in the ESPHome config
-- `switch-relay_1` - A switch with `id: relay_1`
-- `sensor-temperature` - A sensor with `id: temperature`
-- `cover-garage_door` - A cover with `id: garage_door`
-- `climate-thermostat` - A climate entity with `id: thermostat`
-
-To discover all entity IDs on a connected device, use `client.logAllEntityIds()` after connection or listen to the `entities` event.
-
-## Quick Start
-
-### Basic Connection
-```typescript
-import { EspHomeClient, LogLevel } from "esphome-client";
-
-// Create a client instance. Available options: clientId, host (required), logger, port, psk, serverName.
-const client = new EspHomeClient({
-  clientId: "my-esphome-app",
-  host: "192.168.1.100",
-  port: 6053
+  host: "front-door.local",
+  psk: process.env["ESPHOME_PSK"] ?? null
 });
 
-// Listen for connection events. The callback receives a boolean indicating if the connection is encrypted.
-client.on("connect", (encrypted) => {
-  console.log("Connected to ESPHome device (encrypted: " + encrypted + ")");
+using deviceSub = client.on("deviceInfo", (info) => {
 
-  // Subscribe to device logs at INFO level.
-  client.subscribeToLogs(LogLevel.INFO);
-
-  // Log all discovered entity IDs to help identify available entities.
-  client.logAllEntityIds();
+  console.info("Connected to", info.name, info.esphomeVersion);
 });
 
-// Listen for discovered entities. This fires after the device reports all configured entities.
-// Each entity is a typed object with extended metadata: icon, deviceClass, unitOfMeasurement,
-// stateClass, entityCategory, and type-specific fields (e.g., effects for lights, options for selects).
-client.on("entities", (entities) => {
-  console.log("Discovered entities:", entities);
-});
+const frontDoor = entityId("lock", "front_door_deadbolt");
 
-// Listen for device information. Contains device name, version, model, MAC address, and more.
-client.on("deviceInfo", (info) => {
-  console.log("Device: " + info.name + " v" + info.esphomeVersion);
-  console.log("Model: " + info.model + ", MAC: " + info.macAddress);
-});
+using lockSub = client.on("lock", (event) => {
 
-// Handle disconnection events.
-client.on("disconnect", (reason) => {
-  console.log("Disconnected from device: " + reason);
-});
+  if(event.state === LockState.LOCKED) {
 
-// Connect to the device. This is a synchronous call that initiates the connection.
-client.connect();
-```
-
-### Encrypted Connection
-```typescript
-import { EspHomeClient } from "esphome-client";
-
-// Create a client with encryption using the pre-shared key from your ESPHome YAML configuration.
-// The psk value should be the base64-encoded key from your ESPHome device's api.encryption.key setting.
-const client = new EspHomeClient({
-  host: "192.168.1.100",
-  psk: "your-base64-encoded-psk-from-esphome-yaml"
-});
-
-// The client will automatically attempt encrypted connection when psk is provided.
-// If the device does not support encryption, it falls back to plaintext automatically.
-client.on("connect", (encrypted) => {
-  if(encrypted) {
-    console.log("Secure connection established.");
-  } else {
-    console.log("Connected without encryption (device may not support it).");
+    console.info("Deadbolt is secured.");
   }
 });
 
-client.connect();
+const lockState = await client.commandAndAwait(frontDoor, { command: LockCommand.LOCK });
+
+console.info("Lock command settled:", lockState);
 ```
 
-### Controlling Entities
-```typescript
-import { EspHomeClient, MediaPlayerCommand } from "esphome-client";
+The factory resolves once the handshake, device-info exchange, and entity discovery have completed; the `await using` binding ensures the graceful `DISCONNECT_REQUEST` round-trip runs at scope exit.
 
-// All command methods are synchronous (return void) and use entity IDs in the format: {type}-{object_id}
+The `lockSub` listener is illustrative — `commandAndAwait` pre-subscribes internally, so the awaited round-trip works without it. The callback rail is shown so an unrelated consumer's pattern (observing lock state independently of command-and-await) is visible in the same snippet.
 
-// Control switches - turn on or off.
-client.sendSwitchCommand("switch-garage_light", true);
-client.sendSwitchCommand("switch-garage_light", false);
+## Common patterns
 
-// Control buttons - trigger a press action.
-client.sendButtonCommand("button-restart");
+A few task-oriented entry points into the rest of the doc:
 
-// Control lights with various options.
-client.sendLightCommand("light-living_room", {
-  brightness: 0.8,
-  colorTemperature: 4000,
-  effect: "Rainbow",
-  rgb: { b: 0, g: 128, r: 255 },
-  state: true,
-  transitionLength: 2000
-});
+- **Monitor every state change** — the [Telemetry](#telemetry) rails (`client.on`, `client.stream`, `client.telemetry()`).
+- **Send a command and confirm it landed** — [`client.commandAndAwait`](#commands).
+- **Read latest known state without subscribing** — the [Latest-state cache](#latest-state-cache) (`client.latest`, `client.snapshot`).
+- **Re-run setup work each time the connection comes up** — [`withReconnect`](#auto-reconnect).
+- **Probe a feature before using it** — [`client.capabilities()`](#capabilities).
+- **Wait until a known set of entities has reported state, then construct** — compose `client.on("telemetry")`, `client.snapshot()`, `client.entitiesByDevice()`, and `AbortSignal.any`. v2 deliberately omits a built-in `waitForInitialState` helper because the right completion predicate is consumer-specific (some entity types are stateless, some legitimately suppress a first state response under specific configurations).
+- **Test consumer code against the client** — the [Testing](#testing) subpath (`MockClient` + factory helpers).
 
-// Turn off a light.
-client.sendLightCommand("light-living_room", { state: false });
+## Core model
 
-// Control covers using position (0.0 = closed, 1.0 = open) or stop.
-client.sendCoverCommand("cover-garage_door", { position: 1.0 });
-client.sendCoverCommand("cover-garage_door", { position: 0.0 });
-client.sendCoverCommand("cover-garage_door", { stop: true });
-client.sendCoverCommand("cover-blinds", { position: 0.5, tilt: 0.25 });
+### Entities
 
-// Control climate/HVAC using string mode values.
-client.sendClimateCommand("climate-thermostat", {
-  fanMode: "auto",
-  mode: "heat_cool",
-  swingMode: "vertical",
-  targetTemperature: 22,
-  targetTemperatureHigh: 24,
-  targetTemperatureLow: 20
-});
+- Addressed by branded `EntityId<T>` values shaped `${type}-${objectId}`.
+- Mint with `entityId(type, objectId)`; narrow untrusted input (CLI args, network responses, configuration files) with `isEntityId(value, type)` or `parseEntityId(value)`.
+- The brand is compile-time only - `EntityId<"light">` and `EntityId<"switch">` are distinct types but share the same lowercase-string runtime representation, so the brand has zero allocation cost.
+- The built-in entity types are: `alarm_control_panel`, `binary_sensor`, `button`, `camera`, `climate`, `cover`, `date`, `datetime`, `event`, `fan`, `infrared`, `light`, `lock`, `media_player`, `number`, `radio_frequency`, `select`, `sensor`, `siren`, `switch`, `text`, `text_sensor`, `time`, `update`, `valve`, `water_heater`.
 
-// Control fans with speed level (0-100), oscillation, and direction.
-client.sendFanCommand("fan-bedroom", {
-  direction: "forward",
-  oscillating: true,
-  speedLevel: 75,
-  state: true
-});
+`infrared` and `radio_frequency` expose a raw-timings transmit primitive (`client.transmitRawTimings(id, options)`) plus inbound receive events surfaced on the `infrared` / `radio_frequency` telemetry channels, keyed by entity. Higher-level codecs (NEC, RC5, Sony, Pronto Hex on the IR side; OOK encoders on the RF side) are downstream concerns.
 
-// Control locks using string commands.
-client.sendLockCommand("lock-front_door", "lock");
-client.sendLockCommand("lock-front_door", "unlock", "1234");
-client.sendLockCommand("lock-front_door", "open");
+Some ESPHome nodes advertise multiple logical **sub-devices** under one connection. `client.subDevices()` returns the advertised `SubDevice` records (`{ id, name?, areaId? }`), and `client.entitiesByDevice(deviceId)` scopes the discovered entities to a sub-device id (`0` for the parent ESP, `undefined` for every entity). Nodes without sub-devices report an empty list.
 
-// Control media players using the MediaPlayerCommand enum.
-client.sendMediaPlayerCommand("media_player-speaker", {
-  command: MediaPlayerCommand.PLAY,
-  mediaUrl: "http://example.com/audio.mp3",
-  volume: 0.5
-});
+### Commands
 
-// Control number entities.
-client.sendNumberCommand("number-target_temperature", 72.5);
+- `client.command<T>(id, options)` is fire-and-forget. It logs and drops on encoder failures or unknown ids.
+- `client.commandAndAwait<T>(id, options, awaitOptions?)` subscribes to the matching state-event channel before sending the command frame (avoiding the fast-device race) and resolves with the first event matching the optional `predicate`. Rejects with `DOMException("TimeoutError")` after the default 2000ms or the consumer's `AbortSignal`.
+- Read-only, stateless, and transmit-only entity types (`binary_sensor`, `button`, `camera`, `infrared`, `radio_frequency`, `sensor`, `text_sensor`) are excluded from `commandAndAwait` at the type level - awaiting a state echo is meaningless for them.
 
-// Control select entities.
-client.sendSelectCommand("select-hvac_mode", "cooling");
+### Telemetry
 
-// Control text entities.
-client.sendTextCommand("text-device_name", "Living Room Sensor");
+Three subscription rails over the typed `ClientEventsMap`:
 
-// Control date entities.
-client.sendDateCommand("date-schedule", 2025, 12, 25);
+- `client.on(event, handler)` returns a `Disposable` callback.
+- `client.once(event, options?)` returns a `Promise` that resolves on the next emission.
+- `client.stream(event, options?)` returns an `AsyncIterable` with `dropOldest` / `dropNewest` / `throw` backpressure policy.
 
-// Control time entities.
-client.sendTimeCommand("time-alarm", 7, 30, 0);
+Higher-level wrappers narrow on `event.type` and emit type-narrowed payloads:
 
-// Control datetime entities using epoch seconds.
-client.sendDateTimeCommand("datetime-last_update", Math.floor(Date.now() / 1000));
+- `client.telemetry()` - every state event.
+- `client.telemetryFor("light")` - one entity type.
+- `client.telemetryForId(id)` - one entity.
 
-// Control alarm panels using string commands.
-client.sendAlarmControlPanelCommand("alarm_control_panel-home", "arm_away", "1234");
-client.sendAlarmControlPanelCommand("alarm_control_panel-home", "disarm", "1234");
+State-event fields with wire-level enums narrow to literal unions automatically: `event.state` on a lock-channel event is typed as `LockState`, not `number`. Exhaustive `switch` over the literal-union rails is verified at compile time.
 
-// Control sirens.
-client.sendSirenCommand("siren-alarm", { duration: 30, state: true, tone: "alarm", volume: 0.8 });
+### Errors
 
-// Control valves using position (0.0 = closed, 1.0 = open).
-client.sendValveCommand("valve-water_main", { position: 1.0 });
-client.sendValveCommand("valve-water_main", { stop: true });
+Failures surface as typed subclasses of `EspHomeError`:
 
-// Check for and install firmware updates.
-client.sendUpdateCommand("update-firmware", "check");
-client.sendUpdateCommand("update-firmware", "update");
+- **Encryption** (all `PermanentError`) - `EncryptionKeyMissingError`, `EncryptionKeyInvalidError`, `EncryptionRequiredError`.
+- **Negotiation** (`PermanentError`) - `NegotiationFailedError`, raised when API-version negotiation finds no overlap.
+- **Handshake** - `NoiseHandshakeError` (with a tagged `code`), `NoiseHandshakeTimeoutError`, `PeerClosedDuringNoiseError`, `PlaintextHandshakeError`.
+- **Connection** - `ConnectionRefusedError`, `ConnectionTimeoutError`, `ConnectionClosedByPeerError`, `HeartbeatStalledError`.
+- **Protocol** - `FrameTooLargeError`, `BufferOverflowError`, `DecodingError`, `EncodingError`.
+- **Operational** - `BackpressureError` (with dropped-item count), `CameraStreamClosedError` (with branded `cameraId`).
+- **Configuration** - `ConfigurationError` (with `code` one of `MALFORMED_ENTITY_ID`, `UNKNOWN_ENTITY_ID`, `AWAIT_STREAM_CLOSED`, `EXTRA_SCHEMA_OVERRIDES_BUILTIN`).
 
-// Execute user-defined services by name.
-client.executeServiceByName("play_rtttl", [
-  { stringValue: "mario:d=4,o=5,b=100:16e6,16e6,32p,8e6" }
-]);
-```
+The auto-reconnect supervisor's default `shouldRetry` predicate filters out every `PermanentError` subclass automatically. Consumers can `instanceof`-check for precise dispatch.
 
-### Real-time State Monitoring
-```typescript
-import { EspHomeClient, LogLevel } from "esphome-client";
+## Runtime
 
-// Listen to sensor updates. Each event includes entity name, key, state value, and missingState flag.
-client.on("sensor", (data) => {
-  if(!data.missingState) {
-    console.log("Sensor " + data.entity + ": " + data.state);
+### Construction and disposal
+
+Two construction paths cover the consumer surface:
+
+- **`openEspHomeClient(options)`** (canonical) - async factory with bounded retry on transient errors (default three retries with exponential backoff and jitter) and short-circuit on `PermanentError` subclasses.
+- **`new EspHomeClient(options)` + `await client.connect({ signal })`** - explicit two-step construction for consumers who need to attach subscriptions before the discovery handshake fans out.
+
+Disposal flows through `Symbol.dispose` (sync, immediate teardown) and `Symbol.asyncDispose` (graceful: sends `DISCONNECT_REQUEST` and awaits the matching response within `gracefulDisconnectTimeoutMs`, then falls through). The two `using` keywords pick the matching path; consumers not using explicit resource management call the same paths imperatively as `client.disconnect()` (sync) and `client.disconnectAsync()` (graceful).
+
+### Lifecycle and health observability
+
+- `client.health()` returns a synchronous `ConnectionHealth` snapshot - a discriminated union over `state` whose common fields are `encrypted`, `consecutiveStalls`, `lastInboundActivityAt`, and optional `lastPingRttMs`; the live (`connected` / `stalled`) variant additionally carries `connectedAtMs`. Narrow with the `isConnectionLive(health)` type guard and derive uptime with `connectionUptimeMs(health)`. Disconnect reasons live on `lifecycle()`, not on the health record.
+- `client.onHealthChange(callback)` returns a `Disposable` callback over health transitions.
+- `client.healthStream({ signal })` returns an `AsyncIterable` over health transitions.
+- `client.lifecycle({ signal })` emits `LifecycleEvent`s tagged by `event.kind` (`connect`, carrying `encrypted`; `disconnect`, carrying an optional typed `cause`) - the canonical observation path for disconnect reasons. Reconnect activity surfaces through the `ReconnectConfig.onAttempt` callback and the health stream; the separate `noiseKeySet` boolean event reports a noise-key rotation.
+
+The legacy `disconnect: string | undefined` event remains on the bus for backwards compatibility but is no longer the structured path.
+
+### Auto-reconnect
+
+On by default with `PermanentError`-filtered retry, exponential backoff (500ms initial, 2x, 30s cap, 20% jitter, unlimited attempts), and consumer subscriptions that survive each cycle. Pass `reconnect: false` to disable.
+
+`withReconnect(client, body, options)` re-runs a body callback once per successful connect with a disconnect-aware `AbortSignal` - the canonical "do this work for each connection" supervisor pattern.
+
+### Heartbeat
+
+A lazy keep-alive guards against a silently dead socket, on by default. After `intervalMs` of inbound silence (default 30s) the client sends a `PING_REQUEST`; if no inbound activity follows within `stallTimeoutMs` (default 60s) the connection is declared stalled - a `HeartbeatStalledError` surfaces, the transport is torn down, and auto-reconnect takes over when enabled. Ping round-trip time and the running stall count surface on the health record as `lastPingRttMs` and `consecutiveStalls`. Pass `keepAlive: false` to disable, or `keepAlive: { intervalMs, stallTimeoutMs }` to tune the thresholds.
+
+### Latest-state cache
+
+- `client.latest(id)` returns the most recent state event for a branded entity id, or `undefined` if none has arrived since the most recent connect.
+- `client.snapshot()` and `client.snapshotFor(type)` return type-narrowed `Map`s of every cached entity state.
+
+The cache is updated **before** listeners are notified, so a `client.latest(id)` / `client.snapshot()` read from inside an `on("telemetry")` or per-type listener sees the event that fired the listener. The cache is cleared on every reconnect.
+
+### Capabilities
+
+`client.capabilities()` returns a structured `ClientCapabilities` record describing API minor version, encryption status, voice-assistant feature flags, Bluetooth proxy support, serial proxy, Z-Wave proxy, modern handshake, and noise-key rotation (`client.setNoiseEncryptionKey(key, options?)` performs the rotation when that capability is present). Feature gating consults this record rather than parsing version-number strings.
+
+### Logs
+
+`client.logs(level, options?)` returns an `AsyncIterable<LogEventData>` with the same `StreamOptions` shape (signal, backpressure policy) as the other streaming methods, plus refcounted device-side level upgrade: opening a second iterator at a higher verbosity upgrades the device subscription. ESPHome has no unsubscribe path, so the highest level any open iterator has requested persists for the connection's lifetime.
+
+## Sub-APIs
+
+Each sub-API is a lazy single-instance namespace reached through a property on the client. The instance persists across reconnects and any consumer subscriptions survive each cycle.
+
+### Camera
+
+`client.camera(id)` returns a per-id `CameraApi` (cached for the lifetime of the client).
+
+- `snapshot({ signal })` - single image, awaits the next complete frame.
+- `stream({ signal })` - continuous async iterable of complete frames.
+- `readable({ signal })` - Web Streams adapter over `stream()`.
+
+Multi-packet image reassembly lives in the sub-API. Operational failures surface through `CameraStreamClosedError` (transport disconnected mid-snapshot) and `DOMException("TimeoutError" | "AbortError")`.
+
+### Voice assistant
+
+`client.voiceAssistant` exposes the bidirectional audio + control surface:
+
+- **Streaming** - `audio({ signal })` inbound, `sendAudio(buffer, end)` outbound.
+- **Control** - `subscribe()`, `sendEvent(eventType, data?)`, `sendTimerEvent(timer)`.
+- **Pipeline** - `requests({ signal })` iterates the device's inbound pipeline-run requests; `respondToRequest(options?)` acknowledges each one (a start request left unacknowledged stalls the device-side pipeline).
+- **Announce** - `announce(options, awaitOptions?)` for synchronous TTS playback.
+- **Configuration** - `configuration({ signal, refresh? })`, `setActiveWakeWords(ids)`.
+
+### Serial proxy
+
+`client.serial` bridges the device's UART instances (advertised on `DeviceInfo.serialProxies`):
+
+- **Discovery** - `list()`.
+- **Configuration** - `configure(instance, options)`, `setModemPins(instance, lineStates)`, `getModemPins(instance, awaitOptions?)`.
+- **Data** - `write(instance, data)`, `data(instance, { signal })` (refcounted iterable), `flush(instance, awaitOptions?)`.
+
+Subscriptions are refcounted per-instance.
+
+### Bluetooth proxy
+
+`client.bluetooth` is the BLE proxy surface. The Bluetooth Core spec's GATT model addresses a remote device by its MAC address and an attribute handle - a small integer pointing into the device's attribute table; reads, writes, and notifications target a specific `(address, handle)` pair. The proxy exposes that surface as typed RPC, plus advertisement scanning and connection-lifecycle management.
+
+- **Availability** - `available` (boolean gate; the device's `bluetoothProxyFeatureFlags` must declare the proxy).
+- **Advertisement scanning** - `advertisements({ signal })`, `setScannerMode`, `scannerState({ signal })`, `lastScannerState()`.
+- **GATT** - `connect`, `disconnect`, `getServices`, `readCharacteristic`, `writeCharacteristic`, `readDescriptor`, `writeDescriptor`, `setNotify` / `notify({ signal })`.
+- **Pairing** - `pair`, `unpair`, `clearCache`.
+- **Connection management** - `setConnectionParams`, `connectionsFree({ signal })` / `lastConnectionsFree()`, plus the connection-state surface `isConnected(address)`, `connectionState(address)`, `connectionStates({ signal })`.
+
+### Z-Wave proxy
+
+`client.zwave` is a deliberately thin transparent byte pipe to the device's Z-Wave radio Serial API. The shape is unusual enough relative to the other sub-APIs that it gets its own contract.
+
+**What it does NOT do.** The Z-Wave proxy is not a Z-Wave protocol stack. The library does NOT parse Z-Wave Serial API frames, handle command classes, manage S0 / S2 security envelopes, route messages, associate nodes, or manage the Z-Wave network. There are no helpers for inclusion / exclusion, no key exchange, no scene management, no association groups. None of that surface exists by design.
+
+**What it does provide.** A transparent bidirectional byte pipe (`client.zwave.send(frame)` outbound, `client.zwave.frames({ signal })` inbound), feature-flag gated availability (`client.zwave.available`), home-id awareness (`client.zwave.homeId()` synchronous snapshot plus `client.zwave.homeIdChanges({ signal })` push stream), and the usual reconnect-aware lifecycle.
+
+**What consumers need on top.** A library that speaks Z-Wave - [`zwave-js`](https://github.com/zwave-js/node-zwave-js) is the canonical choice. The typical integration routes the inbound `client.zwave.frames()` stream into the Z-Wave library's serial-API ingest and writes the library's outbound frames back via `client.zwave.send(buffer)`:
+
+```ts
+if(client.zwave.available) {
+
+  for await (const frame of client.zwave.frames({ signal })) {
+
+    // Route the raw Z-Wave Serial API frame into a Z-Wave-aware library. The buffer is passed unchanged - validation and parsing are the library's job.
+    zwaveDriver.serialApi.write(frame);
   }
-});
-
-// Listen to binary sensor updates. State is a boolean (true/false).
-client.on("binary_sensor", (data) => {
-  console.log("Binary sensor " + data.entity + ": " + (data.state ? "ON" : "OFF"));
-});
-
-// Listen to switch state changes.
-client.on("switch", (data) => {
-  console.log("Switch " + data.entity + ": " + (data.state ? "ON" : "OFF"));
-});
-
-// Listen to climate state updates. Contains mode, temperatures, fan mode, and action.
-client.on("climate", (data) => {
-  console.log("Climate " + data.entity + ":");
-  console.log("  Mode: " + data.mode + ", Action: " + data.action);
-  console.log("  Current: " + data.currentTemperature + ", Target: " + data.targetTemperature);
-});
-
-// Listen to cover state updates. Contains position, tilt, and current operation.
-client.on("cover", (data) => {
-  console.log("Cover " + data.entity + ": position=" + data.position + ", operation=" + data.currentOperation);
-});
-
-// Listen to light state updates.
-client.on("light", (data) => {
-  console.log("Light " + data.entity + ": " + (data.state ? "ON" : "OFF") + ", brightness=" + data.brightness);
-});
-
-// Listen to all telemetry updates via the generic telemetry event.
-client.on("telemetry", (data) => {
-  console.log("Telemetry [" + data.type + "] " + data.entity + ":", data);
-});
-
-// Monitor device logs. Level is a LogLevel enum value.
-client.on("log", (data) => {
-  console.log("[" + LogLevel[data.level] + "] " + data.message);
-});
+}
 ```
 
-### Voice Assistant Integration
-```typescript
-import { EspHomeClient, VoiceAssistantEvent, VoiceAssistantSubscribeFlag } from "esphome-client";
+**Contrast with the Bluetooth proxy.** `client.bluetooth` is GATT-level RPC: the BLE Core spec carries a typed attribute table the client addresses directly via `(address, handle)` pairs with typed reads / writes / notifications. `client.zwave` is byte-pipe: opaque frames flow in both directions because the Z-Wave Serial API is a stream the radio's host stack must interpret. Both shapes are correct for their respective protocols; the parity asymmetry is deliberate, not an oversight.
 
-// Subscribe to voice assistant with audio streaming support.
-client.subscribeVoiceAssistant(VoiceAssistantSubscribeFlag.API_AUDIO);
+### Home Assistant
 
-// Handle voice assistant requests from the device.
-client.on("voiceAssistantRequest", (data) => {
-  console.log("Voice request - conversation: " + data.conversationId);
-  console.log("  Flags: " + data.flags + ", wake word: " + data.wakeWordPhrase);
+`client.homeAssistant` exposes the ESPHome-to-HA bridging surface:
 
-  // Respond with the audio port for streaming (or error flag).
-  const audioPort = 12345;
-  client.sendVoiceAssistantResponse(audioPort, false);
-});
+- `subscribeServices()`, `subscribeStates()` - opt into inbound HA event streams.
+- `sendState(entityId, state, attribute?)` - push an HA entity's current state to the device.
+- `respondToAction(callId, options)` - reply to an HA action call when the device's firmware enables action responses.
 
-// Handle incoming audio data from the device. The event provides data (Buffer) and end (boolean) properties.
-client.on("voiceAssistantAudio", (audioData) => {
-  console.log("Received audio chunk: " + audioData.data.length + " bytes, end: " + audioData.end);
-});
+### User-defined services
 
-// Send voice assistant events to indicate processing stages.
-client.sendVoiceAssistantEvent(VoiceAssistantEvent.WAKE_WORD_START);
-client.sendVoiceAssistantEvent(VoiceAssistantEvent.STT_END, [
-  { name: "text", value: "Turn on the living room lights" }
-]);
+`client.services` exposes ESPHome's user-defined service catalog:
 
-// Request and configure wake words.
-client.requestVoiceAssistantConfiguration();
+- `list()` - enumerate the discovered services.
+- `execute(key, args?)`, `executeByName(name, args?)` - invoke by numeric key or name.
 
-client.on("voiceAssistantConfiguration", (config) => {
-  console.log("Available wake words:", config.availableWakeWords);
-  console.log("Active wake words:", config.activeWakeWords);
-  console.log("Max active:", config.maxActiveWakeWords);
+A `serviceCallResult` bus event surfaces `EXECUTE_SERVICE_RESPONSE` when the device enables action responses (`{ callId, success, errorMessage?, responseData? }`).
 
-  // Set active wake words.
-  client.setVoiceAssistantConfiguration(["alexa", "hey_jarvis"]);
-});
+## CLI
 
-// Handle announcement completion.
-client.on("voiceAssistantAnnounceFinished", (success) => {
-  console.log("Announcement finished, success: " + success);
-});
+The package ships an `espc` binary for interactive device exploration:
+
+```bash
+espc -h front-door.local info
+espc -h front-door.local list --type light
+espc -h front-door.local control switch-front_door on
+espc -h front-door.local monitor --duration 60
+espc -h front-door.local -i
 ```
 
-### Custom Logger
-```typescript
-import { EspHomeClient } from "esphome-client";
-import type { EspHomeLogging } from "esphome-client";
+The CLI supports every entity type the schema registry exposes, accepts Noise PSKs via `-k`, and switches into a REPL with `-i`. Run `espc --help` for the complete flag and command reference.
 
-// We define a custom logger that implements the EspHomeLogging interface. All four methods (debug, error, info, warn) are required. By default, the library logs
-// to the console, but you can redirect output to your own logging infrastructure.
-const customLogger: EspHomeLogging = {
+## Testing
 
-  debug: (message, ...params) => console.debug("[DEBUG]", message, ...params),
-  error: (message, ...params) => console.error("[ERROR]", message, ...params),
-  info: (message, ...params) => console.info("[INFO]", message, ...params),
-  warn: (message, ...params) => console.warn("[WARN]", message, ...params)
-};
+Test helpers ship under the `esphome-client/testing` conditional subpath, separate from the production entry point:
 
-// We pass the logger in the client options.
-const client = new EspHomeClient({
-
-  host: "192.168.1.100",
-  logger: customLogger
-});
+```ts
+import { MockClient, MockTransport, mockEntity, mockStateMessage } from "esphome-client/testing";
 ```
 
-## Noise Protocol Encryption
+- **`MockClient`** - consumer-facing test harness. Mirrors the real `EspHomeClient` surface so production code under test runs unchanged. Drive state via `populate*` / `set*` / `emit*` methods; assert on a `commands` log capturing every issued command. Every sub-API on `MockClient` is a `Proxy`-backed recording mock; address its recorded calls and stage return values through the exported `MOCK` symbol (`mock.bluetooth[MOCK]` exposes a `MockController`).
+- **`MockTransport`** - integration-level seam. Return it from `EspHomeClientOptions.transportFactory` (a factory yielding a fresh transport per connect, e.g. `transportFactory: () => transport`) to exercise the real client's handshake / decoder / dispatcher pipelines against a scripted byte sequence rather than a device. Script that sequence with the exported `push*` fixture-injection helpers.
+- **Factory helpers** - `mockEntity`, `mockEntityDiscovery`, `mockStateMessage`, `mockDeviceInfo`, `mockHealth`, `mockNoiseHandshakeExchange`.
 
-This library includes a complete, Node-native implementation of the Noise Protocol Framework, specifically the `Noise_NNpsk0_25519_ChaChaPoly_SHA256` handshake pattern used by ESPHome. The implementation:
+## Schema extensions
 
-- Uses only Node.js built-in crypto functions
-- Supports X25519 key exchange
-- Implements ChaCha20-Poly1305 AEAD encryption
-- Handles the complete handshake and transport encryption
-- Automatically falls back to plaintext when encryption is not available
+Downstream consumers integrating vendor firmware that exposes entity types outside the standard set can register additional entity-type schemas at construction time via the `extraSchemas` option. Two helpers cover the common cases:
 
-### Using the Noise Protocol Directly
-```typescript
-import { Socket } from "net";
-import { createESPHomeHandshake } from "esphome-client";
+- `aliasOf("cover")` registers a custom type that mirrors an upstream entity type with a different type tag (encode + decode passes are byte-equal to the upstream).
+- `extending("switch", { addedListEntitiesFields, addedStateFields })` adds read-side fields to an upstream entity type. The command-side spec is preserved verbatim by design - `extending()` is read-side only, locking the encoder to the upstream so a vendor-extended type stays byte-compatible with its parent.
 
-// The createESPHomeHandshake function creates a HandshakeState configured for ESPHome.
-// Options: psk (required Buffer), role (optional, defaults to "initiator"), logger (optional).
-const handshake = createESPHomeHandshake({
-  psk: Buffer.from("your-base64-encoded-psk", "base64")
-});
+Built-in entity-type keys cannot be silently shadowed; a collision throws `ConfigurationError("EXTRA_SCHEMA_OVERRIDES_BUILTIN")` at construction. The surface exists so a consumer like [`homebridge-ratgdo`](https://github.com/hjdhjd/homebridge-ratgdo) can teach the client about entity types a vendor's firmware exposes outside the standard set - the flexibility that lets it support hardware variants without the library needing to know about them. (The `door_cover` alias in the examples is an illustrative custom type; a real garage door, Konnected or otherwise, is a standard `cover`.)
 
-// Example: Manual handshake over a TCP socket.
-const socket = new Socket();
+## Protocol reference
 
-socket.connect(6053, "192.168.1.100", () => {
-  // Step 1: Write the first handshake message (client hello with ephemeral key).
-  const clientHello = handshake.writeMessage();
+The client advertises ESPHome API 1.14 in `HelloRequest` and accepts any major-1 device. Firmware floor for regression-tested support is ESPHome 2025.10; older firmwares may negotiate and work but are not part of v2's test matrix. Feature gating consults the `ClientCapabilities` record, which derives boolean flags from a single declarative table at `src/api-feature-versions.ts`. Adding support for a new minor is a small, additive change.
 
-  // Frame it for ESPHome: [0x01][length_high][length_low][payload]
-  const frame = Buffer.alloc(3 + clientHello.length);
-  frame[0] = 0x01;
-  frame[1] = (clientHello.length >> 8) & 0xff;
-  frame[2] = clientHello.length & 0xff;
-  clientHello.copy(frame, 3);
-  socket.write(frame);
-});
+`object_id` is derived client-side from `name` via the upstream `sanitize(snake_case(name))` algorithm on firmware 1.14+ that omits the wire field; older firmware sends `object_id` and the discovery decoder uses the wire value. Both paths produce byte-identical canonical ids.
 
-socket.on("data", (data) => {
-  if(!handshake.isComplete) {
-    // Step 2: Process the server's handshake response.
-    // Skip the 3-byte frame header to get the payload.
-    const serverResponse = data.subarray(3);
-    handshake.readMessage(serverResponse);
+The canonical ESPHome protocol reference is [`src/api.proto`](./src/api.proto); a CI lint (`npm run lint:proto`) keeps `ENTITY_SCHEMAS` in sync with it, and `npm run check:proto-drift` compares the local snapshot against upstream's `dev` branch. Contributors should read the source modules in [`src/`](./src/) directly - every public symbol carries its own module-level and per-symbol JSDoc, and the [generated API reference](./docs/) is the rendered view.
 
-    if(handshake.isComplete) {
-      console.log("Handshake complete. Encryption established.");
+## Versioning and license
 
-      // Now use the cipher states for all subsequent communication.
-      // sendCipher encrypts outgoing messages, receiveCipher decrypts incoming.
-      const plaintext = Buffer.from("Hello ESPHome");
-      const encrypted = handshake.sendCipher.EncryptWithAd(Buffer.alloc(0), plaintext);
-      console.log("Encrypted message length:", encrypted.length);
-    }
-  } else {
-    // Decrypt incoming encrypted messages.
-    const payload = data.subarray(3);
-    const decrypted = handshake.receiveCipher.DecryptWithAd(Buffer.alloc(0), payload);
-    console.log("Decrypted message:", decrypted);
-  }
-});
-```
+This library follows semantic versioning. The current major (v2) is a clean break from v1 - see the [changelog](./docs/Changelog.md) for the full release notes including the v2.0.0 breaking changes. The library is ISC-licensed.
 
-## API Documentation
-
-Complete API documentation is available in the [docs](https://github.com/hjdhjd/esphome-client/tree/main/docs) directory. The library provides comprehensive TypeScript definitions for all message types, entity types, and protocol structures.
-
-### Key Classes and Interfaces
-
-- `EspHomeClient` - Main client class for device communication
-  - Event-driven architecture extending Node.js EventEmitter
-  - Automatic encryption negotiation with plaintext fallback
-  - Complete entity discovery and state caching
-  - Type-safe command methods for all 22 entity types
-
-- `HandshakeState` - Noise protocol handshake implementation
-  - Complete Noise_NNpsk0_25519_ChaChaPoly_SHA256 implementation
-  - Cipher state management via `sendCipher` and `receiveCipher`
-  - Methods: `writeMessage()`, `readMessage()`, `isComplete` property
-
-- `CipherState` - Encryption/decryption after handshake completion
-  - `EncryptWithAd(ad, plaintext)` - Encrypt with associated data
-  - `DecryptWithAd(ad, ciphertext)` - Decrypt with associated data
-
-- `createESPHomeHandshake` - Factory for ESPHome-specific Noise handshakes
-  - Configures correct prologue (`NoiseAPIInit`) for ESPHome compatibility
-  - Options: `psk` (Buffer), `role` (optional), `logger` (optional)
-
-### Event Types
-
-All events are fully typed with TypeScript definitions:
-
-- Connection events: `connect`, `disconnect`, `error`
-- Discovery events: `entities`, `services`, `deviceInfo`
-- State events: One for each entity type (e.g., `switch`, `sensor`, `light`)
-- System events: `log`, `heartbeat`, `timeSync`
-- Voice events: `voiceAssistantRequest`, `voiceAssistantConfiguration`
-
-For a real-world example of this library in action, check out [homebridge-ratgdo](https://github.com/hjdhjd/homebridge-ratgdo), which uses this library to provide HomeKit integration for ratgdo garage door controllers.
-
-## Protocol Details
-
-The ESPHome native API uses a binary protocol based on Protocol Buffers over TCP (default port 6053). Messages are framed with either:
-
-- **Plaintext**: `[0x00][length_varint][type_varint][payload]`
-- **Encrypted**: `[0x01][size_high][size_low][encrypted_payload]`
-
-The library handles all protocol details automatically, including:
-
-- Message framing and parsing
-- Varint encoding/decoding
-- Protocol buffer field encoding (without requiring protobuf libraries)
-- Automatic encryption negotiation
-- Connection state management
-- Entity discovery and caching
-- Proper handling of all field types (varint, fixed32, fixed64, length-delimited)
-
-## Contributing
-
-Contributions are welcome! The library has complete protocol support, but there are always opportunities for improvement:
-
-1. **Testing** - Add unit tests and integration tests
-2. **Documentation** - Improve examples and API documentation
-3. **Bug fixes** - Report and fix any issues you encounter
-
-Please ensure all code follows the existing style and includes appropriate TypeScript types.
-
-## Library Development Dashboard
-This is mostly of interest to the true developer nerds amongst us.
-
-[![License](https://img.shields.io/npm/l/esphome-client?color=%2318BCF2&logo=open%20source%20initiative&logoColor=%2318BCF2&style=for-the-badge)](https://github.com/hjdhjd/esphome-client/blob/main/LICENSE.md)
-[![Build Status](https://img.shields.io/github/actions/workflow/status/hjdhjd/esphome-client/ci.yml?branch=main&color=%2318BCF2&logo=github-actions&logoColor=%2318BCF2&style=for-the-badge)](https://github.com/hjdhjd/esphome-client/actions?query=workflow%3A%22Continuous+Integration%22)
-[![Dependencies](https://img.shields.io/librariesio/release/npm/esphome-client?color=%2318BCF2&logo=dependabot&style=for-the-badge)](https://libraries.io/npm/esphome-client)
-[![GitHub commits since latest release (by SemVer)](https://img.shields.io/github/commits-since/hjdhjd/esphome-client/latest?color=%2318BCF2&logo=github&sort=semver&style=for-the-badge)](https://github.com/hjdhjd/esphome-client/commits/main)
+For a real-world v2 consumer pattern, [`homebridge-ratgdo`](https://github.com/hjdhjd/homebridge-ratgdo) integrates this library into a Homebridge plugin and exercises the entire surface (sub-APIs, schema extensions, auto-reconnect, lifecycle observation).

@@ -4,482 +4,135 @@
  */
 
 /**
- * ESPHome native API client with complete protocol and encryption support.
+ * ESPHome native API client - the main consumer entry point.
+ *
+ * @remarks Exports the host class {@link EspHomeClient}, the async {@link openEspHomeClient} factory, the typed {@link ClientEventsMap} event surface, and the
+ * {@link EspHomeClientOptions} configuration shape. Per-symbol docstrings below document each export. The [README](https://github.com/hjdhjd/esphome-client#readme) is
+ * the canonical consumer guide (entities, commands, telemetry, sub-APIs, schema extensions); runnable examples for every documented workflow live in
+ * [`src/examples/showcase.ts`](./examples/showcase.ts).
  *
  * @module esphome-client
- *
- * A comprehensive ESPHome native API client implementation that provides full access to ESPHome devices over TCP connections. This module implements the complete
- * ESPHome native API protocol, including entity discovery, state management, command execution, and real-time telemetry streaming. The client supports both encrypted
- * connections using the Noise protocol and plaintext connections for local network communication.
- *
- * The ESPHome native API operates over TCP on port 6053 by default and uses a binary protocol based on Protocol Buffers. This implementation handles all the protocol
- * complexity internally, providing a clean event-driven interface for interacting with your ESPHome devices. Whether you're controlling lights, reading sensors,
- * managing climate systems, or processing voice assistant requests, this client provides type-safe methods for every ESPHome entity type.
- *
- * ## Key Features
- *
- * - **Automatic Encryption Detection**: The client intelligently detects whether a device supports encryption and adapts accordingly. When provided with an encryption
- *   key, it attempts a secure connection first, falling back to plaintext if the device doesn't support encryption.
- *
- * - **Complete Entity Support**: Every ESPHome entity type is fully supported, from simple switches and sensors to complex climate controls and media players. The
- *   client discovers all entities on connection and provides typed interfaces for controlling them.
- *
- * - **Real-time Telemetry**: Subscribe to state changes and receive immediate updates when any entity changes state. The event-driven architecture ensures you never
- *   miss an update from your devices.
- *
- * - **Voice Assistant Integration**: Full support for ESPHome's voice assistant features, including wake word detection, speech-to-text, and text-to-speech streaming.
- *
- * - **Service Execution**: Execute custom user-defined services on your ESPHome devices with full argument support.
- *
- * - **Robust Error Handling**: Automatic reconnection logic, connection timeout handling, and comprehensive error reporting ensure reliable operation.
- *
- * @example Basic Connection and Control
- * ```typescript
- * import { EspHomeClient } from "./esphome-client";
- *
- * // Create a client instance with optional encryption key.
- * const client = new EspHomeClient({
- *   host: "192.168.1.100",
- *   port: 6053,
- *   encryptionKey: "your-base64-encoded-32-byte-key", // From your ESPHome YAML configuration
- *   clientId: "my-home-automation",
- *   reconnect: true,
- *   reconnectInterval: 15000
- * });
- *
- * // Listen for connection events.
- * client.on("connect", (data) => {
- *   console.log(`Connected to ESPHome device (encrypted: ${data.encrypted})`);
- * });
- *
- * // Discover all entities on the device.
- * client.on("entities", (entities) => {
- *   console.log("Discovered entities:", entities);
- *
- *   // Control a switch entity once discovered.
- *   client.sendSwitchCommand("switch-living_room", true);
- * });
- *
- * // Subscribe to real-time state updates.
- * client.on("switch", (data) => {
- *   console.log(`Switch ${data.entity} is now ${data.state ? "ON" : "OFF"}`);
- * });
- *
- * // Connect to the device.
- * await client.connect();
- * ```
- *
- * @example Sensor Monitoring with Logging
- * ```typescript
- * // Monitor temperature and humidity sensors with debug logging.
- * const client = new EspHomeClient({
- *   host: "weather-station.local",
- *   subscribeLogsLevel: LogLevel.DEBUG
- * });
- *
- * // Track sensor readings.
- * const readings = new Map();
- *
- * client.on("sensor", (data) => {
- *   readings.set(data.entity, data.state);
- *
- *   if (data.entity === "sensor-temperature") {
- *     console.log(`Temperature: ${data.state}°C`);
- *
- *     // Trigger actions based on temperature.
- *     if (data.state > 25) {
- *       client.sendFanCommand("fan-cooling", { state: true, speedLevel: 75 });
- *     }
- *   }
- * });
- *
- * // Monitor device logs for debugging.
- * client.on("log", (data) => {
- *   console.log(`[${LogLevel[data.level]}] ${data.message}`);
- * });
- * ```
- *
- * @example Climate Control Automation
- * ```typescript
- * // Sophisticated climate control with scheduling.
- * const client = new EspHomeClient({ host: "thermostat.local" });
- *
- * client.on("climate", (data) => {
- *   console.log(`HVAC Mode: ${ClimateMode[data.mode]}`);
- *   console.log(`Current: ${data.currentTemperature}°C, Target: ${data.targetTemperature}°C`);
- * });
- *
- * // Set up a daily schedule.
- * function applySchedule(hour: number): void {
- *   if ((hour >= 6) && (hour < 9)) {
- *     // Morning warm-up.
- *     client.sendClimateCommand("climate-thermostat", {
- *       mode: ClimateMode.HEAT,
- *       targetTemperature: 22
- *     });
- *   } else if ((hour >= 22) || (hour < 6)) {
- *     // Night setback.
- *     client.sendClimateCommand("climate-thermostat", {
- *       mode: ClimateMode.HEAT,
- *       targetTemperature: 18
- *     });
- *   }
- * }
- * ```
- *
- * @example Voice Assistant Integration
- * ```typescript
- * // Set up voice assistant with wake word detection.
- * const client = new EspHomeClient({ host: "voice-assistant.local" });
- *
- * // Subscribe to voice assistant events.
- * client.subscribeVoiceAssistant(VoiceAssistantSubscribeFlag.API_AUDIO);
- *
- * client.on("voiceAssistantRequest", (data) => {
- *   console.log(`Voice request started: ${data.conversationId}`);
- *
- *   if (data.start) {
- *     // Start audio streaming on port 12345.
- *     client.sendVoiceAssistantResponse(12345, false);
- *     startAudioStreaming(12345);
- *   }
- * });
- *
- * // Handle voice assistant events.
- * client.on("voiceAssistantEvent", (event) => {
- *   switch (event.eventType) {
- *     case VoiceAssistantEvent.WAKE_WORD_START:
- *       console.log("Wake word detected!");
- *       break;
- *     case VoiceAssistantEvent.STT_END:
- *       console.log(`Recognized: ${event.data?.find(d => d.name === "text")?.value}`);
- *       break;
- *   }
- * });
- * ```
  */
-import { ENTITY_SCHEMAS, findSchemaByListEntitiesMessageType, findSchemaByStateMessageType } from "./schemas/index.js";
-import type { Entity, EntitySchema, EntityType, FieldSpec, HasPatternField, RepeatedFieldSpec, StateSchema } from "./schemas/index.js";
-import type { EspHomeLogging, Nullable } from "./types.js";
-import { type HandshakeState, createESPHomeHandshake } from "./crypto-noise.js";
-import { MessageType, WireType } from "./protocol/index.js";
-import { type Socket, createConnection } from "node:net";
+import type {
+  ConnectionStateData as BluetoothConnectionStateData, ConnectionsFreeData as BluetoothConnectionsFreeData, BluetoothLERawAdvertisement,
+  NotifyDataChunk as BluetoothNotifyDataChunk, BluetoothProxyHost, BluetoothScannerStateData
+} from "./bluetooth-proxy.ts";
+import type { ClientMetrics, EspHomeLogging, Nullable, ServiceEntity } from "./types.ts";
+import type { ClockFn, HeartbeatConfig, HeartbeatHost } from "./heartbeat.ts";
+import type { CommandAndAwaitOptions, CommandHost, NonAwaitableEntityType } from "./command-runner.ts";
+import type { CommandFor, StateEventFor } from "./schemas/derived.ts";
+import { ConnectionClosedByPeerError, ConnectionError, EspHomeError, PeerClosedDuringNoiseError, PermanentError } from "./errors.ts";
+import {
+  ENTITY_SCHEMAS, buildListEntitiesMessageTypes, buildSchemasTable, buildStateMessageTypes, findSchemaByListEntitiesMessageTypeIn,
+  findSchemaByStateMessageTypeIn, getSchemaIn
+} from "./schemas/index.ts";
+import type { Entity, EntityType, TelemetryEvent } from "./schemas/index.ts";
+import type { EntitySchema, ExtendedEntityType, ExtraSchemaSet, SchemaForExtended, SchemasTable } from "./schemas/index.ts";
+import type { FieldValue, ProtoField } from "./protocol/codec.ts";
+import { HealthState, disconnectedHealth, isConnectionLive } from "./health.ts";
+import type { HomeAssistantApiHost, HomeAssistantServiceEvent, HomeAssistantStateRequest } from "./home-assistant.ts";
+import type { InboundMessage, TransportLike, TransportOpenOptions } from "./transport.ts";
+import { InfraredCapabilityFlags, LogLevel } from "./api-constants.ts";
+import { MessageType, WireType, extractEntityKey, extractNumberField, extractStringField, extractTelemetryValue, messageTypeName } from "./protocol/index.ts";
+import type { ReconnectConfig, ResolvedReconnectConfig } from "./reconnect.ts";
+import type { SerialDataChunk, SerialProxyHost, SerialProxyInfo } from "./serial-proxy.ts";
+import { SerialProxyApi, extractSerialProxies } from "./serial-proxy.ts";
+import type { VoiceAssistantHost, VoiceAssistantInboundContext } from "./voice-assistant.ts";
+import { authenticateIfNeeded, performDiscovery, performNoiseHandshake, performPlaintextHandshake } from "./lifecycle/handshake.ts";
+import { decodeEntityFromSchema, decodeServiceEntity, getEntityTypeLabel } from "./discovery.ts";
+import { decodeProtobuf, encodeProtoFields } from "./protocol/codec.ts";
+import { disconnectedCapabilities, parseCapabilities } from "./capabilities.ts";
+import { nextBackoffDelay, reconnectDelay, resolveReconnectConfig } from "./reconnect.ts";
+import { runCommand, runCommandAndAwait } from "./command-runner.ts";
+import { BluetoothProxyApi } from "./bluetooth-proxy.ts";
 import { Buffer } from "node:buffer";
-import { EventEmitter } from "node:events";
+import { CameraApi } from "./camera.ts";
+import type { CameraHost } from "./camera.ts";
+import type { ClientCapabilities } from "./capabilities.ts";
+import type { ConnectionHealth } from "./health.ts";
+import { Correlator } from "./correlator.ts";
+import type { EntityId } from "./entity-id.ts";
+import { EntityRegistry } from "./registries/entity-registry.ts";
+import { EventBus } from "./event-bus.ts";
+import { HeartbeatScheduler } from "./heartbeat.ts";
+import type { HeartbeatStalledError } from "./errors.ts";
+import { HomeAssistantApi } from "./home-assistant.ts";
+import { LatestStateCache } from "./latest-state-cache.ts";
+import type { LifecycleEvent } from "./lifecycle.ts";
+import { LogSubscriptionManager } from "./log-subscription-manager.ts";
+import type { LogSubscriptionManagerHost } from "./log-subscription-manager.ts";
+import type { MessageHandlers } from "./message-receiver.ts";
+import { MessageReceiver } from "./message-receiver.ts";
+import { ReadableStream } from "node:stream/web";
+import type { RunPhaseHost } from "./run-phase-handlers.ts";
+import { ServiceRegistry } from "./registries/service-registry.ts";
+import type { StreamOptions } from "./event-bus.ts";
+import type { SubDevice } from "./sub-device.ts";
+import type { SubscriptionLifecycle } from "./reissuable-subscription.ts";
+import { Transport } from "./transport.ts";
+import { UserServicesApi } from "./user-services.ts";
+import { VoiceAssistantApi } from "./voice-assistant.ts";
+import type { VoiceAssistantTimerEvent } from "./api-constants.ts";
+import { ZWaveProxyApi } from "./zwave-proxy.ts";
+import type { ZWaveProxyHost } from "./zwave-proxy.ts";
+import { buildRunPhaseHandlers } from "./run-phase-handlers.ts";
+import { decodeStateFromSchema } from "./telemetry.ts";
+import { setTimeout as delay } from "node:timers/promises";
+import { extractSubDevices } from "./sub-device.ts";
+import { entityId as mintEntityId } from "./entity-id.ts";
 
-// Define the minimum frame header size for message validation.
-const MIN_FRAME_SIZE = 3;
+// Default resource bounds. Each is overridable via EspHomeClientOptions. Sized against observed real-world workloads: 1 MiB frame for camera images, 1024 fields per
+// message for entity discovery on large devices, 4 MiB buffer to allow burst-traffic margin during enumeration on devices with hundreds of entities.
+const DEFAULT_MAX_FRAME_BYTES = 1024 * 1024;
+const DEFAULT_MAX_FIELDS_PER_MESSAGE = 1024;
+const DEFAULT_MAX_RECV_BUFFER_BYTES = 4 * 1024 * 1024;
+const DEFAULT_MAX_IMAGE_BYTES = 8 * 1024 * 1024;
 
-// Define the fixed32 field size in bytes.
-const FIXED32_SIZE = 4;
+// Default per-step handshake timeout. Bounds each individual handshake-message wait via AbortSignal.timeout composed with the user's signal at the connect() entry.
+// Tunable via EspHomeClientOptions.handshakeTimeoutMs.
+const DEFAULT_HANDSHAKE_TIMEOUT_MS = 5000;
 
-// Define the ESPHome API protocol version we support.
-enum ProtocolVersion {
+// Default overall connect timeout. Bounds the transport open + handshake + discovery phases when the consumer does not supply their own AbortSignal. Composed with
+// the user signal via AbortSignal.any so either trigger aborts the in-flight connect.
+const DEFAULT_CONNECT_TIMEOUT_MS = 30000;
 
-  // Major version for breaking changes in base protocol - mismatch causes immediate disconnect.
-  MAJOR = 1,
+// Default graceful disconnect window. {@link EspHomeClient.disconnectAsync} sends DISCONNECT_REQUEST and waits this long for the matching response before falling
+// through to immediate teardown. Long enough to give a healthy device time to acknowledge, short enough that a hung device doesn't stall consumer shutdown.
+const DEFAULT_GRACEFUL_DISCONNECT_TIMEOUT_MS = 1000;
 
-  // Minor version for breaking changes in individual messages - mismatch causes warning.
-  MINOR = 12
-}
+// Default bound on the noise-encryption-key set request/response round-trip. Unlike the three lifecycle timeouts above, this is a per-call request/response await, so
+// its structural siblings are the serial and command await timeouts in their own modules rather than the connection-lifecycle trio. setNoiseEncryptionKey is a rare
+// administrative operation, so the bound is a module constant rather than a constructor option.
+const DEFAULT_NOISE_KEY_SET_TIMEOUT_MS = 5000;
 
-// Define the Noise handshake states.
-enum Handshake {
+// Protocol-version negotiation: the supported major-version range is range-based - a peer's announced major must satisfy `min <= peerMajor <= max`. When ESPHome
+// ships a major-version bump, this client adds support with a one-line constant change here rather than a new major version of this library.
+const SUPPORTED_API_MAJORS = { max: 1, min: 1 } as const;
 
-  HELLO = 1,
-  HANDSHAKE = 2,
-  READY = 3,
-  CLOSED = 4
-}
+// Client API version we send in HELLO_REQUEST. Major must be in SUPPORTED_API_MAJORS; minor advertises feature parity with the upstream spec we implement. Bumping
+// this constant is deliberate - it declares that we honestly support every feature at or below the advertised minor. See `api-feature-versions.ts` for the per-feature
+// version floors that match this number. ESPHome 1.14 added the `clientDerivedObjectId` behavior (server omits `object_id` from `ListEntities*Response`); the
+// discovery decoder handles both shapes via wire-first-with-fallback so this constant only needs to advance when a NEW capability requires implementation work.
+const CLIENT_API_VERSION = { major: 1, minor: 14 } as const;
 
-// Connection states for adaptive encryption detection. When a PSK is provided, we try encryption first before falling back to attempting a plaintext connection.
-// Without a PSK, we only attempt a plaintext connection.
-enum ConnectionState {
+// Protocol enumerations live in `./api-constants.ts`. Re-exported below to preserve the public-API surface.
+export {
+  AlarmControlPanelCommand, AlarmControlPanelState, ClimateAction, ClimateFanMode, ClimateMode, ClimatePreset, ClimateSwingMode,
+  ColorMode, CoverOperation, EntityCategory, FanDirection, InfraredCapabilityFlags, LockCommand, LockState, LogLevel, MediaPlayerCommand, MediaPlayerState,
+  NumberMode, RadioFrequencyCapabilityFlags, RadioFrequencyModulation, SensorStateClass, SerialProxyLineStateFlags, SerialProxyParity, SerialProxyPortType,
+  SerialProxyRequestType, SerialProxyStatus, TemperatureUnit, TextMode, UpdateCommand, ValveOperation, VoiceAssistantEvent, VoiceAssistantRequestFlag,
+  VoiceAssistantSubscribeFlag, VoiceAssistantTimerEvent, WaterHeaterMode, logLevelName
+} from "./api-constants.ts";
 
-  INITIAL           = 0,
-  TRYING_PLAINTEXT  = 1,
-  TRYING_NOISE      = 2,
-  CONNECTED         = 3,
-  FAILED            = 4
-}
+// Service argument types and the matching ServiceArgument/ServiceEntity interfaces live in `./types.ts` so that pure decoders can use them without pulling the host
+// class into their dependency graph. Re-exported below to preserve the public-API surface.
+export type { ServiceArgument, ServiceEntity } from "./types.ts";
+export { ServiceArgType } from "./types.ts";
 
-// Protocols that the ESPHome API supports.
-enum ProtocolType {
-
-  PLAINTEXT         = 0x00,
-  NOISE             = 0x01
-}
-
-/**
- * Log levels supported by ESPHome for log subscriptions. These control the verbosity of log messages received from the device.
- */
-export enum LogLevel {
-
-  NONE         = 0,
-  ERROR        = 1,
-  WARN         = 2,
-  INFO         = 3,
-  DEBUG        = 4,
-  VERBOSE      = 5,
-  VERY_VERBOSE = 6
-}
-
-/**
- * Climate modes supported by ESPHome climate entities. These define the primary operating state of HVAC systems.
- */
-export enum ClimateMode {
-
-  OFF        = 0,
-  HEAT_COOL  = 1,
-  COOL       = 2,
-  HEAT       = 3,
-  FAN_ONLY   = 4,
-  DRY        = 5,
-  AUTO       = 6
-}
-
-/**
- * Climate fan modes supported by ESPHome climate entities. These control how the fan operates within the HVAC system.
- */
-export enum ClimateFanMode {
-
-  ON       = 0,
-  OFF      = 1,
-  AUTO     = 2,
-  LOW      = 3,
-  MEDIUM   = 4,
-  HIGH     = 5,
-  MIDDLE   = 6,
-  FOCUS    = 7,
-  DIFFUSE  = 8,
-  QUIET    = 9
-}
-
-/**
- * Climate swing modes supported by ESPHome climate entities. These control the direction of airflow from the HVAC system.
- */
-export enum ClimateSwingMode {
-
-  OFF        = 0,
-  BOTH       = 1,
-  VERTICAL   = 2,
-  HORIZONTAL = 3
-}
-
-/**
- * Climate presets supported by ESPHome climate entities. These are predefined configurations for common scenarios.
- */
-export enum ClimatePreset {
-
-  NONE     = 0,
-  HOME     = 1,
-  AWAY     = 2,
-  BOOST    = 3,
-  COMFORT  = 4,
-  ECO      = 5,
-  SLEEP    = 6,
-  ACTIVITY = 7
-}
-
-/**
- * Climate actions that indicate the current activity of the HVAC system. These represent what the climate device is actively doing.
- */
-export enum ClimateAction {
-
-  OFF     = 0,
-  COOLING = 2,
-  HEATING = 3,
-  IDLE    = 4,
-  DRYING  = 5,
-  FAN     = 6
-}
-
-/**
- * Valve operation states that indicate the current activity of a valve. These represent what the valve is actively doing.
- */
-export enum ValveOperation {
-
-  IDLE       = 0,
-  IS_OPENING = 1,
-  IS_CLOSING = 2
-}
-
-/**
- * Alarm control panel state commands for controlling the alarm system.
- */
-export enum AlarmControlPanelCommand {
-
-  DISARM            = 0,
-  ARM_AWAY          = 1,
-  ARM_HOME          = 2,
-  ARM_NIGHT         = 3,
-  ARM_VACATION      = 4,
-  ARM_CUSTOM_BYPASS = 5,
-  TRIGGER           = 6
-}
-
-/**
- * Color modes supported by ESPHome light entities. These define the color control capabilities of lights.
- */
-export enum ColorMode {
-
-  UNKNOWN                 = 0,
-  ON_OFF                  = 1,
-  BRIGHTNESS              = 3,
-  WHITE                   = 7,
-  COLOR_TEMPERATURE       = 11,
-  COLD_WARM_WHITE         = 19,
-  RGB                     = 35,
-  RGB_WHITE               = 39,
-  RGB_COLOR_TEMPERATURE   = 47,
-  RGB_COLD_WARM_WHITE     = 51
-}
-
-/**
- * Media player commands supported by ESPHome media player entities.
- */
-export enum MediaPlayerCommand {
-
-  PLAY            = 0,
-  PAUSE           = 1,
-  STOP            = 2,
-  MUTE            = 3,
-  UNMUTE          = 4,
-  TOGGLE          = 5,
-  VOLUME_UP       = 6,
-  VOLUME_DOWN     = 7,
-  ENQUEUE         = 8,
-  REPEAT_ONE      = 9,
-  REPEAT_OFF      = 10,
-  CLEAR_PLAYLIST  = 11,
-  TURN_ON         = 12,
-  TURN_OFF        = 13
-}
-
-/**
- * Lock commands supported by ESPHome lock entities.
- */
-export enum LockCommand {
-
-  UNLOCK = 0,
-  LOCK   = 1,
-  OPEN   = 2
-}
-
-/**
- * Cover operation states indicating what a cover is currently doing.
- */
-export enum CoverOperation {
-
-  IDLE       = 0,
-  IS_OPENING = 1,
-  IS_CLOSING = 2
-}
-
-/**
- * Service argument types supported by ESPHome user-defined services.
- */
-export enum ServiceArgType {
-
-  BOOL         = 0,
-  INT          = 1,
-  FLOAT        = 2,
-  STRING       = 3,
-  BOOL_ARRAY   = 4,
-  INT_ARRAY    = 5,
-  FLOAT_ARRAY  = 6,
-  STRING_ARRAY = 7
-}
-
-/**
- * Voice assistant subscription flags that control what data is received.
- */
-export enum VoiceAssistantSubscribeFlag {
-
-  NONE       = 0,
-  API_AUDIO  = 1
-}
-
-/**
- * Voice assistant request flags that control how the assistant operates.
- */
-export enum VoiceAssistantRequestFlag {
-
-  NONE          = 0,
-  USE_VAD       = 1,
-  USE_WAKE_WORD = 2
-}
-
-/**
- * Voice assistant events that indicate the state of voice processing.
- */
-export enum VoiceAssistantEvent {
-
-  ERROR              = 0,
-  RUN_START          = 1,
-  RUN_END            = 2,
-  STT_START          = 3,
-  STT_END            = 4,
-  INTENT_START       = 5,
-  INTENT_END         = 6,
-  TTS_START          = 7,
-  TTS_END            = 8,
-  WAKE_WORD_START    = 9,
-  WAKE_WORD_END      = 10,
-  STT_VAD_START      = 11,
-  STT_VAD_END        = 12,
-  TTS_STREAM_START   = 98,
-  TTS_STREAM_END     = 99,
-  INTENT_PROGRESS    = 100
-}
-
-/**
- * Voice assistant timer events that indicate timer state changes.
- */
-export enum VoiceAssistantTimerEvent {
-
-  STARTED   = 0,
-  UPDATED   = 1,
-  CANCELLED = 2,
-  FINISHED  = 3
-}
-
-/**
- * Define the valid types that a decoded ESPHome field value can have. Field values can be either raw bytes in a Buffer or numeric values.
- */
-type FieldValue = Buffer | number;
-
-// Re-export entity types and enums from schemas module for public API access.
-export { EntityCategory, NumberMode, StateClass, TextMode } from "./schemas/index.js";
+// Re-export entity types from the schemas module for public API access.
 export type { AlarmControlPanelEntity, BaseEntity, BinarySensorEntity, ButtonEntity, CameraEntity, ClimateEntity, CoverEntity, DateEntity, DateTimeEntity, Entity,
-  EntityType, EventEntity, FanEntity, LightEntity, LockEntity, MediaPlayerEntity, NumberEntity, SelectEntity, SensorEntity, SirenEntity, SwitchEntity, TextEntity,
-  TextSensorEntity, TimeEntity, UpdateEntity, ValveEntity } from "./schemas/index.js";
-
-/**
- * Represents a user-defined service argument definition.
- *
- * @property name - The name of the argument.
- * @property type - The type of the argument (from ServiceArgType enum).
- */
-export interface ServiceArgument {
-
-  name: string;
-  type: ServiceArgType;
-}
-
-/**
- * Represents a user-defined service entity.
- *
- * @property key - The unique numeric identifier for the service.
- * @property name - The name of the service.
- * @property args - The list of arguments the service accepts.
- */
-export interface ServiceEntity {
-
-  key: number;
-  name: string;
-  args: ServiceArgument[];
-}
+  EntityType, EventEntity, FanEntity, InfraredEntity, LightEntity, LockEntity, MediaPlayerEntity, NumberEntity, RadioFrequencyEntity, SelectEntity, SensorEntity,
+  SirenEntity, SwitchEntity, TextEntity, TextSensorEntity, TimeEntity, UpdateEntity, ValveEntity, WaterHeaterEntity } from "./schemas/index.ts";
 
 /**
  * Represents an argument value when executing a service.
@@ -573,12 +226,15 @@ export interface VoiceAssistantTimerEventData {
 /**
  * Voice assistant audio data for streaming audio.
  *
- * @property data - The audio data bytes.
+ * @property data - The audio data bytes (primary channel; mono on pre-1.14 firmware, left channel on stereo-capable firmware).
+ * @property data2 - The second channel of a stereo audio stream (right channel). Present only when the device firmware supports the stereo audio extension; check
+ *   `client.capabilities().voiceAssistant.stereoAudio` to know whether the connected device can send it. Always `undefined` on mono streams and pre-1.14 firmware.
  * @property end - Whether this is the last audio packet.
  */
 export interface VoiceAssistantAudioData {
 
   data: Buffer;
+  data2?: Buffer;
   end: boolean;
 }
 
@@ -598,52 +254,6 @@ export interface VoiceAssistantRequest {
   flags: number;
   start: boolean;
   wakeWordPhrase?: string;
-}
-
-/**
- * Home Assistant service call event data. This is emitted when an ESPHome device triggers a `homeassistant.action` or `homeassistant.service` call.
- *
- * @property data - Key-value data for the service call.
- * @property dataTemplate - Templated key-value data for the service call.
- * @property isEvent - Whether this is an event (true) or a service call (false).
- * @property service - The service being called (e.g., "notify.html5").
- * @property variables - Variables for template rendering.
- */
-export interface HomeAssistantServiceEvent {
-
-  data: Record<string, string>;
-  dataTemplate: Record<string, string>;
-  isEvent: boolean;
-  service: string;
-  variables: Record<string, string>;
-}
-
-/**
- * Home Assistant state request event data. This is emitted when an ESPHome device requests the state of a Home Assistant entity.
- *
- * @property attribute - The specific attribute being requested (empty string if requesting the main state).
- * @property entityId - The Home Assistant entity ID being requested.
- * @property once - Whether this is a one-time request (true) or a subscription (false).
- */
-export interface HomeAssistantStateRequest {
-
-  attribute: string;
-  entityId: string;
-  once: boolean;
-}
-
-/**
- * Represents a protobuf field with tag and wire type. This is used when encoding messages to send to the ESPHome device.
- *
- * @property fieldNumber - The field number in the protobuf message.
- * @property wireType - The wire type for encoding the field.
- * @property value - The field value (number or Buffer).
- */
-interface ProtoField {
-
-  fieldNumber: number;
-  wireType: WireType;
-  value: number | Buffer;
 }
 
 /**
@@ -668,6 +278,13 @@ interface ProtoField {
  * @property voiceAssistantFeatureFlags - Voice assistant feature flags (field 17).
  * @property bluetoothMacAddress - The Bluetooth MAC address of the device (format: "AA:BB:CC:DD:EE:FF") (field 18).
  * @property apiEncryptionSupported - Whether the device supports API encryption (field 19).
+ * @property zwaveProxyFeatureFlags - Z-Wave-proxy feature-flags bitmask (field 23). Nonzero indicates the device firmware was compiled with `USE_ZWAVE_PROXY` and is
+ * advertising the Z-Wave Serial-API byte-pipe surface; absent or zero indicates Z-Wave proxy is unavailable on this device. See {@link ZWaveProxyApi}.
+ * @property zwaveHomeId - Z-Wave home id reported by the device's Z-Wave radio (field 24). Zero indicates no Z-Wave network is currently joined; absent indicates the
+ * device firmware does not include the Z-Wave proxy component. The value is updated over the wire via `HOME_ID_CHANGE` request pushes and re-surfaced via
+ * {@link ZWaveProxyApi.homeId}.
+ * @property serialProxies - Per-instance metadata for every serial-proxy port advertised by the device (field 25). Empty (or absent) when the device firmware was not
+ * compiled with `USE_SERIAL_PROXY`; otherwise the array index is the `instance` number used in every subsequent serial-proxy wire message.
  */
 export interface DeviceInfo {
 
@@ -690,6 +307,9 @@ export interface DeviceInfo {
   voiceAssistantFeatureFlags?: number;
   bluetoothMacAddress?: string;
   apiEncryptionSupported?: boolean;
+  zwaveProxyFeatureFlags?: number;
+  zwaveHomeId?: number;
+  serialProxies?: readonly SerialProxyInfo[];
 }
 
 /**
@@ -701,317 +321,94 @@ export interface MessageEventData {
   payload: Buffer;
 }
 
-/**
- * Telemetry data emitted by the client. This is the base structure for all telemetry events from entities.
- */
-interface TelemetryData {
+// Per-entity event shapes (LightEvent, ClimateEvent, etc.) and the TelemetryEvent union are derived from ENTITY_SCHEMAS via the schema-driven mapped types in
+// src/schemas/derived.ts. The decoder produces those shapes directly; the type system traces every per-message payload back to the single schema source of truth.
+//
+// The TelemetryEventType tag is identical to EntityType at the type level; consumers should reference EntityType from schemas directly.
 
-  deviceId?: number;
-  entity: string;
-  type: string;
-  value: number | string | undefined;
-}
+// Per-event interfaces are exposed via src/schemas/entity-types.ts as derived StateEventFor<...> aliases. The re-export below preserves the import surface so
+// consumer code that wrote `import { LightEvent } from "esphome-client"` continues to resolve.
+export type {
 
-/**
- * Cover state telemetry data with additional fields. Cover entities have more complex state than simple on/off entities.
- */
-interface CoverTelemetryData extends Omit<TelemetryData, "value"> {
+  AlarmControlPanelEvent,
+  BinarySensorEvent,
+  ButtonEvent,
+  CameraEvent,
+  ClimateEvent,
+  CoverEvent,
+  DateEvent,
+  DateTimeEvent,
+  EventEntityEvent,
+  FanEvent,
+  LightEvent,
+  LockEvent,
+  MediaPlayerEvent,
+  NumberEvent,
+  SelectEvent,
+  SensorEvent,
+  SirenEvent,
+  SwitchEvent,
+  TelemetryEventType,
+  TextEvent,
+  TextSensorEvent,
+  TimeEvent,
+  UpdateEvent,
+  ValveEvent,
+  WaterHeaterEvent
+} from "./schemas/entity-types.ts";
 
-  currentOperation?: number;
-  position?: number;
-  tilt?: number;
-}
-
-/**
- * Climate state telemetry data with comprehensive HVAC state information. Climate entities have the most complex state of all entity types.
- */
-interface ClimateTelemetryData extends Omit<TelemetryData, "value"> {
-
-  mode?: number;
-  currentTemperature?: number | string;
-  targetTemperature?: number | string;
-  targetTemperatureLow?: number | string;
-  targetTemperatureHigh?: number | string;
-  awayConfig?: boolean;
-  fanMode?: number;
-  swingMode?: number;
-  customFanMode?: string;
-  preset?: number;
-  customPreset?: string;
-  currentHumidity?: number | string;
-  targetHumidity?: number | string;
-  action?: number;
-  value?: number | string | undefined;
-}
+// TelemetryEvent is the schema-derived discriminated union of every state-event variant. Re-exported here so the public import surface stays at the package root.
+export type { TelemetryEvent } from "./schemas/derived.ts";
 
 /**
- * Valve state telemetry data with position and operation status.
+ * Schema-derived map of every entity-keyed event. One entry per key in {@link ENTITY_SCHEMAS}; the value is the consumer-facing
+ * {@link StateEventFor} shape (wire base plus the {@link EventOverrides} entry, if any). Adding a new entity type to the schema registry extends
+ * this map automatically - there is no parallel declaration to maintain. {@link ClientEventsMap} inherits these entries and adds only the non-entity event channels
+ * alongside.
  */
-interface ValveTelemetryData extends Omit<TelemetryData, "value"> {
-
-  position?: number | string;
-  currentOperation?: number;
-  value?: number | string | undefined;
-}
+type SchemaEvents = { [K in EntityType]: StateEventFor<typeof ENTITY_SCHEMAS[K]> };
 
 /**
- * Light state telemetry data with comprehensive lighting information.
+ * The complete set of events this client emits. Entity-keyed events are inherited from the module-private `SchemaEvents` map so the entry list tracks the schema
+ * registry as the single source of truth. Non-entity events are listed explicitly below. This interface enables strongly typed `.on()`, `.once()`, and `.stream()`
+ * overloads without resorting to `any`, and a typo in an entity event name surfaces as a compile error at the subscription site.
  */
-interface LightTelemetryData extends Omit<TelemetryData, "value"> {
+export interface ClientEventsMap extends SchemaEvents {
 
-  state?: boolean;
-  brightness?: number;
-  colorMode?: number;
-  colorBrightness?: number;
-  red?: number;
-  green?: number;
-  blue?: number;
-  white?: number;
-  colorTemperature?: number;
-  coldWhite?: number;
-  warmWhite?: number;
-  effect?: string;
-  value?: number | string | undefined;
-}
-
-/**
- * Event telemetry data for event entities. Events are discrete occurrences that can be monitored.
- */
-interface EventTelemetryData extends Omit<TelemetryData, "value"> {
-
-  eventType?: string;
-}
-
-/**
- * This union enumerates every telemetry family we currently support. We use these literal strings as the discriminant on the `type` property in every telemetry payload.
- * Doing so allows consumers to narrow by `type` and receive precise typing.
- */
-export type TelemetryEventType = "alarm_control_panel" | "binary_sensor" | "button" | "climate" | "cover" | "date" | "datetime" | "event" | "fan" | "light" | "lock" |
-  "media_player" | "number" | "select" | "sensor" | "siren" | "switch" | "text" | "text_sensor" | "time" | "update" | "valve";
-
-/**
- * This base interface captures the fields that are common to every telemetry payload we emit. We intentionally keep the shape minimal and predictable. Consumers can rely
- * on `type` to discriminate, `key` for wire identity, and `entity` for human-readable labeling. We include `deviceId` when a state message provides it on the wire.
- */
-export interface TelemetryBaseEvent {
-
-  deviceId?: number;
-  entity: string;
-  key: number;
-  type: TelemetryEventType;
-}
-
-/**
- * These simple value-like families provide a single primary state. We expose an optional `missingState` flag when the protocol indicates the state is absent, so
- * consumers can distinguish between "present but falsy" and "not present".
- */
-export interface BinarySensorEvent extends TelemetryBaseEvent {
-
-  missingState?: boolean;
-  state?: boolean;
-  type: "binary_sensor";
-}
-
-export interface DateEvent extends TelemetryBaseEvent {
-
-  day?: number;
-  missingState?: boolean;
-  month?: number;
-  type: "date";
-  year?: number;
-}
-
-export interface DateTimeEvent extends TelemetryBaseEvent {
-
-  epochSeconds?: number;
-  missingState?: boolean;
-  type: "datetime";
-}
-
-export interface NumberEvent extends TelemetryBaseEvent {
-
-  missingState?: boolean;
-  state?: number;
-  type: "number";
-}
-
-export interface SelectEvent extends TelemetryBaseEvent {
-
-  missingState?: boolean;
-  state?: string;
-  type: "select";
-}
-
-export interface SensorEvent extends TelemetryBaseEvent {
-
-  state?: number;
-  missingState?: boolean;
-  type: "sensor";
-}
-
-export interface SwitchEvent extends TelemetryBaseEvent {
-
-  state?: boolean;
-  type: "switch";
-}
-
-export interface TextEvent extends TelemetryBaseEvent {
-
-  missingState?: boolean;
-  state?: string;
-  type: "text";
-}
-
-export interface TextSensorEvent extends TelemetryBaseEvent {
-
-  missingState?: boolean;
-  state?: string;
-  type: "text_sensor";
-}
-
-export interface TimeEvent extends TelemetryBaseEvent {
-
-  hour?: number;
-  minute?: number;
-  missingState?: boolean;
-  second?: number;
-  type: "time";
-}
-
-/**
- * These families are already decoded into richer shapes elsewhere in the module. We intersect the decoded shapes with the base event and add the `type` discriminant and
- * the canonical `key`. We omit any `type` field from the decoded shapes to avoid conflicts with our discriminant.
- */
-export interface ClimateEvent extends TelemetryBaseEvent, Omit<ClimateTelemetryData, "type"> { type: "climate" }
-export interface CoverEvent extends TelemetryBaseEvent, Omit<CoverTelemetryData, "type"> { type: "cover" }
-export interface EventEntityEvent extends TelemetryBaseEvent, Omit<EventTelemetryData, "type"> { type: "event" }
-export interface LightEvent extends TelemetryBaseEvent, Omit<LightTelemetryData, "type"> { type: "light" }
-export interface ValveEvent extends TelemetryBaseEvent, Omit<ValveTelemetryData, "type"> { type: "valve" }
-
-/**
- * These multi-field families are represented with a compact shape at this layer. We can extend them as needed while preserving the discriminant. When the protocol
- * provides supplemental flags or modes, we carry them through verbatim.
- */
-export interface AlarmControlPanelEvent extends TelemetryBaseEvent {
-
-  state?: number;
-  type: "alarm_control_panel";
-}
-
-export interface ButtonEvent extends TelemetryBaseEvent {
-
-  pressed?: boolean;
-  type: "button";
-}
-
-export interface FanEvent extends TelemetryBaseEvent {
-
-  deviceId?: number;
-  direction?: number;
-  oscillating?: boolean;
-  presetMode?: string;
-  speedLevel?: number;
-  state?: boolean;
-  type: "fan";
-}
-
-export interface LockEvent extends TelemetryBaseEvent {
-
-  deviceId?: number;
-  state?: number;
-  type: "lock";
-}
-
-export interface MediaPlayerEvent extends TelemetryBaseEvent {
-
-  deviceId?: number;
-  muted?: boolean;
-  state?: number;
-  type: "media_player";
-  volume?: number;
-}
-
-export interface SirenEvent extends TelemetryBaseEvent {
-
-  deviceId?: number;
-  state?: boolean;
-  type: "siren";
-}
-
-export interface UpdateEvent extends TelemetryBaseEvent {
-
-  currentVersion?: string;
-  deviceId?: number;
-  hasProgress?: boolean;
-  inProgress?: boolean;
-  latestVersion?: string;
-  missingState?: boolean;
-  progress?: number;
-  releaseSummary?: string;
-  releaseUrl?: string;
-  title?: string;
-  type: "update";
-}
-
-/**
- * This exported union type represents every telemetry payload we emit. Consumers should narrow on `type` to receive the appropriate interface. This provides strong
- * typing for both the generic "telemetry" channel and per-kind channels.
- */
-export type TelemetryEvent = AlarmControlPanelEvent | BinarySensorEvent | ButtonEvent | ClimateEvent | CoverEvent | DateEvent | DateTimeEvent | EventEntityEvent |
-  FanEvent | LightEvent | LockEvent | MediaPlayerEvent | NumberEvent | SelectEvent | SensorEvent | SirenEvent | SwitchEvent | TextEvent | TextSensorEvent | TimeEvent |
-  UpdateEvent | ValveEvent;
-
-/**
- * This interface defines the complete set of events that this client emits. Each key is an event name and each value is the payload type that will be provided to
- * listeners for that event. This map serves as the single source of truth for typed subscriptions and enables strongly typed `.on()` and `.once()` overloads without
- * resorting to `any`.
- */
-export interface ClientEventsMap {
-
-  alarm_control_panel: AlarmControlPanelEvent;
-  binary_sensor: BinarySensorEvent;
-  button: ButtonEvent;
-  camera: { buffer: Buffer; entity: string; key: number };
-  climate: ClimateEvent;
-  connect: { encrypted: boolean };
-  cover: CoverEvent;
-  date: DateEvent;
-  datetime: DateTimeEvent;
+  bluetoothAdvertisement: BluetoothLERawAdvertisement;
+  bluetoothConnectionsFree: BluetoothConnectionsFreeData;
+  bluetoothConnectionState: BluetoothConnectionStateData;
+  bluetoothNotifyData: BluetoothNotifyDataChunk;
+  bluetoothScannerState: BluetoothScannerStateData;
+  connect: boolean;
   deviceInfo: DeviceInfo;
   disconnect: string | undefined;
   entities: Entity[];
-  event: EventEntityEvent;
-  fan: FanEvent;
-  heartbeat: { uptime?: number };
-  light: LightEvent;
-  lock: LockEvent;
-  log: { level: number; message: string };
-  media_player: MediaPlayerEvent;
+  healthChange: ConnectionHealth;
+  heartbeat: undefined;
+  homeassistantService: HomeAssistantServiceEvent;
+  homeassistantStateRequest: HomeAssistantStateRequest;
+  lifecycle: LifecycleEvent;
+  log: LogEventData;
   message: MessageEventData;
   noiseKeySet: boolean;
-  number: NumberEvent;
-  select: SelectEvent;
-  sensor: SensorEvent;
-  serviceDiscovered: Record<string, unknown>;
-  services: Record<string, unknown>;
-  siren: SirenEvent;
-  switch: SwitchEvent;
+  serialData: SerialDataChunk;
+  serviceCallResult: ServiceCallResult;
+  serviceDiscovered: ServiceEntity;
+  services: ServiceEntity[];
   telemetry: TelemetryEvent;
-  text: TextEvent;
-  text_sensor: TextSensorEvent;
-  time: TimeEvent;
 
   /**
    * This event communicates a server-provided epoch time that is intended for time synchronization. It is deliberately separate from the telemetry "time" channel to
    * avoid event-name collision with a "time" entity update.
    */
   timeSync: number;
-  update: UpdateEvent;
-  valve: ValveEvent;
   voiceAssistantAnnounceFinished: boolean;
   voiceAssistantAudio: VoiceAssistantAudioData;
   voiceAssistantConfiguration: VoiceAssistantConfiguration;
   voiceAssistantRequest: VoiceAssistantRequest;
+  zwaveFrame: Buffer;
+  zwaveHomeIdChange: number;
 }
 
 /**
@@ -1029,249 +426,303 @@ export interface LogEventData {
 }
 
 /**
- * Camera image event emitted when camera images are received from the ESPHome device. These contain the actual image data and name.
+ * Result of a user-defined service execution. Emitted via the `serviceCallResult` event when the device reports back via `EXECUTE_SERVICE_RESPONSE` (only sent by
+ * firmwares that opt into `USE_API_USER_DEFINED_ACTION_RESPONSES`; older firmwares treat `executeService` as fire-and-forget and never produce this event).
  *
- * @property image - The raw image data as a Buffer.
- * @property name - The entity name of the camera.
+ * Consumers correlate results to their `executeService` calls via {@link callId}; the call id is supplied by the device-side service definition.
+ *
+ * @property callId - The numeric call id, matching the `call_id` carried on the originating `EXECUTE_SERVICE_REQUEST`.
+ * @property success - Whether the device-side service handler ran successfully.
+ * @property errorMessage - Human-readable error string when `success` is `false`. Absent on success.
+ * @property responseData - Optional opaque response bytes (typically JSON-encoded) when the device-side service was defined with
+ *   `USE_API_USER_DEFINED_ACTION_RESPONSES_JSON`.
  */
-export interface CameraEventData {
+export interface ServiceCallResult {
 
-  image: Buffer;
-  name: string;
+  callId: number;
+  errorMessage?: string;
+  responseData?: Buffer;
+  success: boolean;
 }
 
 /**
  * Configuration options for creating an ESPHome client instance. These options control how the client connects to and communicates with ESPHome devices.
  *
+ * @typeParam Extras - Optional {@link ExtraSchemaSet} threaded through the client's type-system surface. Defaults to `{}` (no extras) so existing call sites continue
+ * to type-check unchanged. When supplied, the public surface (`command`, `commandAndAwait`, `latest`, `snapshotFor`, `telemetryFor`, `telemetryForId`) widens to
+ * accept the extras-keyed entity types alongside the built-in {@link EntityType} union.
+ *
  * @property clientId - Optional client identifier to announce when connecting (default: "esphome-client").
+ * @property extraSchemas - Optional registry of additional entity schemas registered for this client instance only. See {@link ExtraSchemaSet} for the contract.
  * @property host - The hostname or IP address of the ESPHome device.
  * @property logger - Optional logging interface for debug and error messages.
  * @property port - The port number for the ESPHome API (default: 6053).
  * @property psk - Optional base64 encoded pre-shared key for Noise encryption.
  * @property serverName - Optional expected server name for validation during encrypted connections.
+ *
  */
-export interface EspHomeClientOptions {
+// eslint-disable-next-line @typescript-eslint/no-empty-object-type -- `{}` default is required; see infrared-rf.types.test.ts.
+export interface EspHomeClientOptions<Extras extends ExtraSchemaSet = {}> {
 
   clientId?: Nullable<string>;
+
+  /**
+   * Injectable wall-clock seam. Defaults to `Date.now`. The client reads every elapsed-time and connection-uptime measurement through this function - the heartbeat
+   * supervisor's idle/stall/RTT timing and the connect-timing/health-epoch stamps - so a deterministic test can advance time without real timers. Real consumers should
+   * leave this field unset and let the client use the system clock; test code injects a controllable clock. Note: the `connectTimeoutMs` bound is an
+   * `AbortSignal.timeout` and is NOT governed by this clock.
+   */
+  clock?: ClockFn;
+
+  /**
+   * Overall connect timeout in milliseconds. Bounds the entire {@link EspHomeClient.connect} flow when the consumer does not pass their own AbortSignal. Composed with
+   * the user signal via `AbortSignal.any` so either trigger aborts the in-flight connect. Default 30000.
+   */
+  connectTimeoutMs?: number;
+
+  /**
+   * Graceful disconnect timeout in milliseconds. {@link EspHomeClient.disconnectAsync} sends DISCONNECT_REQUEST and waits this long for the matching response before
+   * falling through to immediate teardown. Default 1000. Sync {@link EspHomeClient.disconnect} ignores this option entirely.
+   */
+  gracefulDisconnectTimeoutMs?: number;
+
+  /**
+   * Per-step handshake timeout in milliseconds. Bounds each individual handshake-message wait (server-hello, server-handshake, hello-response, list-entities done).
+   * Default 5000. Tune up for very slow devices, down for tighter test harnesses.
+   */
+  handshakeTimeoutMs?: number;
+
+  /**
+   * Optional registry of additional entity schemas. Registered for this client instance only - the module-level {@link ENTITY_SCHEMAS} is
+   * left unchanged so two clients with disjoint extras never cross-pollinate. The merged registry is consulted by every downstream subsystem (run-phase dispatch,
+   * command encoder,
+   * discovery decoder, telemetry decoder) so extras-registered entity types route through the same schema-driven machinery as built-ins.
+   *
+   * @remarks Built-in entity-type keys are the floor and cannot be silently shadowed. Supplying an `extraSchemas` key that collides with a built-in throws a
+   * {@link ConfigurationError} with code `EXTRA_SCHEMA_OVERRIDES_BUILTIN` at construction time. Use {@link aliasOf} for the common case
+   * (custom type that mirrors an upstream type with a different name) or {@link extending} to add fields beyond the upstream shape.
+   *
+   */
+  extraSchemas?: Extras;
+
   host: string;
+
+  /**
+   * Lazy heartbeat configuration. When enabled (the default), the client sends `PING_REQUEST` after `intervalMs` of inbound silence and emits
+   * {@link HeartbeatStalledError} if no inbound activity follows within `stallTimeoutMs`. Pass `false` to disable heartbeat entirely (useful for tests and short-lived
+   * scripts). Default `{ intervalMs: 30000, stallTimeoutMs: 60000 }`.
+   */
+  keepAlive?: { intervalMs: number; stallTimeoutMs: number } | false;
+
   logger?: EspHomeLogging;
+
+  /**
+   * Optional metrics interface. When supplied, the library emits structured counters, timings, and gauges per the {@link ClientMetrics} contract. Default `undefined`
+   * short-circuits to no overhead at all.
+   */
+  metrics?: ClientMetrics;
+
+  /**
+   * Maximum protobuf field count permitted in a single decoded message. The decoder allocates one record entry per field number; this caps that allocation to defend
+   * against malformed or hostile devices that might emit a message claiming an unbounded number of fields. Default 1024 - far above any realistic ESPHome message
+   * (typical: 5-50 fields). Exceeding triggers a `MessageTooManyFieldsError` and disconnects the client.
+   */
+  maxFieldsPerMessage?: number;
+
+  /**
+   * Maximum byte size for a single decoded protocol frame. Hard cap on how large any one inbound message may be; protects against malformed length-prefixes that would
+   * otherwise drive an unbounded slice. Default 1 MiB - comfortably above camera image payloads (typically 50-200 KiB) and far below DoS-class allocations. Exceeding
+   * triggers a `FrameTooLargeError` and disconnects the client.
+   */
+  maxFrameBytes?: number;
+
+  /**
+   * Maximum byte size of a single reassembled multi-packet camera image. ESPHome streams a camera image across multiple `CameraImageResponse` frames; the camera
+   * sub-API accumulates them until the `done` flag, then concatenates. This bounds that above-transport accumulator - which `maxRecvBufferBytes` does not cover - so a
+   * device that never sets `done`, or a `done` frame lost mid-image, cannot grow it without limit or silently corrupt the next image. Default 8 MiB, far above any
+   * realistic ESPHome camera frame. Unlike the wire-boundary caps, exceeding this drops the in-flight image and emits a warning rather than disconnecting: a single
+   * malformed image is a per-image fault, not a connection fault.
+   */
+  maxImageBytes?: number;
+
+  /**
+   * Maximum bytes allowed to accumulate in the receive buffer before declaring the device is sending garbage. Set higher than `maxFrameBytes` to allow legitimate burst
+   * traffic during entity discovery on devices with hundreds of entities. Default 4 MiB. Exceeding triggers a `BufferOverflowError` and disconnects the client.
+   */
+  maxRecvBufferBytes?: number;
+
   port?: number;
   psk?: Nullable<string>;
+
+  /**
+   * Auto-reconnect configuration. When enabled (the default), a non-permanent disconnect triggers a backoff-scheduled reconnect; consumer-held subscriptions survive
+   * the cycle. Pass `false` to disable entirely. Default `{}` (defaults applied internally).
+   */
+  reconnect?: ReconnectConfig | false;
+
   serverName?: Nullable<string>;
+
+  /**
+   * Transport factory injection point. When provided, {@link EspHomeClient.connect} invokes this factory to construct a fresh `TransportLike` for
+   * each handshake attempt instead of the default `Transport.open` path. The host owns and disposes whatever the factory returns.
+   *
+   * **Lifetime contract.** A `TransportLike` is single-shot: open, use, dispose. The factory is therefore called more than once per
+   * {@link EspHomeClient.connect} invocation when the noise -> plaintext fallback fires (the failed transport is disposed and a fresh one constructed for the
+   * plaintext retry). The factory MUST return a brand-new transport on each call.
+   *
+   * The factory receives the fully-resolved `TransportOpenOptions` the host would otherwise hand to `Transport.open` - host, port,
+   * log, frame and buffer limits, optional metrics, and the composed connect signal. A factory that wraps the real transport (e.g. a recording tee) constructs it via
+   * `Transport.open(options)` with no need to re-derive any of that configuration; a factory that returns an in-memory test transport may ignore the argument entirely.
+   * The `options.signal` field composes the user-supplied connect signal with the host's overall connect timeout, so I/O-bearing factories should honour it.
+   *
+   * Real consumers should leave this field unset and let the host construct its own `Transport`. Test code uses this to inject a `MockTransport`
+   * from the `esphome-client/testing` subpath - see the testing docs for the canonical wiring patterns.
+   */
+  transportFactory?: (options: TransportOpenOptions) => TransportLike | Promise<TransportLike>;
 }
 
 /**
- * The main ESPHome native API client class for communicating with ESP8266/ESP32 devices running ESPHome firmware. This class provides a complete implementation of the
- * ESPHome native API protocol, handling all the complexity of binary message encoding/decoding, connection management, entity discovery, and state synchronization.
+ * Backoff configuration for the {@link openEspHomeClient} factory's bounded construction-retry loop.
  *
- * The client operates as an event-driven state machine that manages the entire connection lifecycle. It automatically handles encryption negotiation, falls back to
- * plaintext when needed, discovers all available entities, and maintains real-time state synchronization through the subscription system. The design prioritizes
- * reliability with automatic reconnection, comprehensive error handling, and detailed logging for debugging.
- *
- * ## Connection Management
- *
- * The client intelligently manages connections based on the provided configuration. When an encryption key is provided, it attempts a Noise-encrypted connection first,
- * falling back to plaintext if the device doesn't support encryption. This adaptive approach ensures maximum compatibility while preferring security when available.
- *
- * ## Entity Discovery and Control
- *
- * Upon connection, the client automatically discovers all entities configured on the ESPHome device. Each entity is assigned a unique identifier following the pattern
- * `{type}-{object_id}`, making it easy to reference entities in your code. The client provides type-safe methods for controlling each entity type, from simple switches
- * to complex climate systems.
- *
- * ## Real-time State Synchronization
- *
- * The client maintains a real-time view of all entity states through its subscription system. State changes are immediately pushed from the device and emitted as typed
- * events, allowing your application to react instantly to changes in the physical world.
- *
- * @extends EventEmitter
- *
- * @event connect - Emitted when successfully connected to the device. Provides encryption status.
- * @event disconnect - Emitted when disconnected from the device. Includes optional reason string.
- * @event error - Emitted when an error occurs. Provides error details for debugging.
- * @event deviceInfo - Emitted when device information is received. Includes full DeviceInfo object.
- * @event entities - Emitted when entity discovery completes. Provides array of all discovered entities.
- * @event services - Emitted when user-defined services are discovered. Provides service definitions.
- * @event telemetry - Emitted for all state updates. Provides generic TelemetryEvent for any entity type.
- * @event log - Emitted when device logs are received. Includes log level and message.
- * @event heartbeat - Emitted on ping/pong exchange. Useful for connection monitoring.
- * @event timeSync - Emitted when time synchronization occurs. Provides epoch seconds.
- * @event camera - Emitted when camera images are received. Includes image buffer and metadata.
- * @event voiceAssistantRequest - Emitted when voice assistant requests are received from device.
- * @event voiceAssistantAnnounceFinished - Emitted when voice assistant announcement completes.
- * @event voiceAssistantConfiguration - Emitted when voice assistant configuration is received.
- * @event voiceAssistantAudio - Emitted when voice assistant audio data is received.
- * @event noiseKeySet - Emitted when encryption key update completes. Indicates success/failure.
- *
- * Entity-specific events are also emitted for each entity type:
- * @event switch - Switch state changes
- * @event binary_sensor - Binary sensor state changes
- * @event sensor - Sensor value updates
- * @event text_sensor - Text sensor value updates
- * @event light - Light state changes
- * @event fan - Fan state changes
- * @event cover - Cover position/operation changes
- * @event climate - Climate state changes
- * @event number - Number value changes
- * @event select - Select option changes
- * @event text - Text value changes
- * @event date - Date value changes
- * @event time - Time value changes
- * @event datetime - DateTime value changes
- * @event button - Button press events
- * @event lock - Lock state changes
- * @event valve - Valve position/operation changes
- * @event siren - Siren state changes
- * @event media_player - Media player state changes
- * @event alarm_control_panel - Alarm panel state changes
- * @event event - Event entity triggers
- * @event update - Update availability notifications
- *
- * @example Comprehensive Setup with Error Handling
- * ```typescript
- * import { EspHomeClient, LogLevel } from "./esphome-client";
- *
- * // Create a robust client with full error handling and reconnection.
- * const client = new EspHomeClient({
- *   host: "192.168.1.100",
- *   port: 6053,
- *   encryptionKey: process.env.ESPHOME_KEY, // Store keys securely
- *   clientId: "home-automation-hub",
- *   reconnect: true,
- *   reconnectInterval: 15000,
- *   connectionTimeout: 30000,
- *   logger: {
- *     debug: (msg) => console.log(`[DEBUG] ${msg}`),
- *     info: (msg) => console.log(`[INFO] ${msg}`),
- *     warn: (msg) => console.warn(`[WARN] ${msg}`),
- *     error: (msg) => console.error(`[ERROR] ${msg}`)
- *   }
- * });
- *
- * // Set up comprehensive event handling.
- * client.on("connect", ({ encrypted }) => {
- *   console.log(`✓ Connected to ESPHome device (encrypted: ${encrypted})`);
- *
- *   // Subscribe to logs for debugging.
- *   client.subscribeToLogs(LogLevel.INFO);
- *
- *   // Log all available entities.
- *   client.logAllEntityIds();
- * });
- *
- * client.on("disconnect", (reason) => {
- *   console.log(`✗ Disconnected: ${reason || "Connection lost"}`);
- * });
- *
- * client.on("error", (error) => {
- *   console.error("Client error:", error);
- *   // Implement your error recovery logic here.
- * });
- *
- * client.on("deviceInfo", (info) => {
- *   console.log(`Device: ${info.name} v${info.esphomeVersion}`);
- *   console.log(`Model: ${info.model}, MAC: ${info.macAddress}`);
- * });
- *
- * // Connect with error handling.
- * try {
- *   await client.connect();
- * } catch (error) {
- *   console.error("Failed to connect:", error);
- *   process.exit(1);
- * }
- *
- * // Graceful shutdown.
- * process.on("SIGINT", () => {
- *   console.log("\\nShutting down...");
- *   client.disconnect();
- *   process.exit(0);
- * });
- * ```
- *
- * @example Smart Home Automation Logic
- * ```typescript
- * // Build a motion-activated lighting system with time-based rules.
- * const client = new EspHomeClient({ host: "hallway-controller.local" });
- *
- * // Track motion and light states.
- * let motionDetected = false;
- * let lightsOn = false;
- * let lastMotion = Date.now();
- *
- * client.on("binary_sensor", (data) => {
- *   if (data.entity === "binary_sensor-hallway_motion") {
- *     motionDetected = data.state;
- *     lastMotion = Date.now();
- *
- *     if (motionDetected && !lightsOn) {
- *       // Check time of day for brightness.
- *       const hour = new Date().getHours();
- *       const brightness = ((hour >= 22) || (hour < 6)) ? 0.1 : 0.8;
- *
- *       client.sendLightCommand("light-hallway", {
- *         state: true,
- *         brightness,
- *         transition: 1.0
- *       });
- *     }
- *   }
- * });
- *
- * client.on("light", (data) => {
- *   if (data.entity === "light-hallway") {
- *     lightsOn = data.state;
- *   }
- * });
- *
- * // Auto-off timer.
- * setInterval(() => {
- *   if (lightsOn && !motionDetected && (Date.now() - lastMotion) > 300000) {
- *     client.sendLightCommand("light-hallway", {
- *       state: false,
- *       transition: 3.0
- *     });
- *   }
- * }, 10000);
- * ```
- *
- * @example Voice Assistant Integration
- * ```typescript
- * // Integrate with voice assistant capabilities.
- * const client = new EspHomeClient({ host: "voice-device.local" });
- *
- * // Subscribe to voice assistant with audio streaming.
- * client.subscribeVoiceAssistant(VoiceAssistantSubscribeFlag.API_AUDIO);
- *
- * // Handle wake word detection.
- * client.on("voiceAssistantRequest", async (data) => {
- *   if (data.start && data.flags & VoiceAssistantRequestFlag.USE_WAKE_WORD) {
- *     console.log(`Wake word detected: "${data.wakeWordPhrase}"`);
- *
- *     // Start your audio streaming server.
- *     const audioPort = await startAudioServer();
- *     client.sendVoiceAssistantResponse(audioPort, false);
- *   }
- * });
- *
- * // Process voice assistant events.
- * client.sendVoiceAssistantEvent(VoiceAssistantEvent.STT_START);
- * // ... perform speech recognition ...
- * client.sendVoiceAssistantEvent(VoiceAssistantEvent.STT_END, [
- *   { name: "text", value: "Turn on the living room lights" }
- * ]);
- * ```
+ * @remarks Construction retry is separate from runtime auto-reconnect by design: construction retry is bounded (default 3 retries after the initial attempt) so
+ * misconfigurations surface quickly; runtime reconnect is unbounded so transient drops recover invisibly once the consumer has a working client.
  */
-export class EspHomeClient extends EventEmitter {
+export interface ConstructionRetryConfig {
+
+  /**
+   * Multiplier applied to each successive delay. Default 2 (doubling backoff).
+   */
+  backoffMultiplier?: number;
+
+  /**
+   * Initial backoff in milliseconds before the first retry. Default 500.
+   */
+  initialDelayMs?: number;
+
+  /**
+   * Random jitter factor in [0, 1] applied to each delay. Default 0.2 (+/-20%). Prevents thundering-herd reconnects across multiple clients.
+   */
+  jitter?: number;
+
+  /**
+   * Upper bound on a single delay in milliseconds. Default 5000.
+   */
+  maxDelayMs?: number;
+}
+
+/**
+ * Options accepted by {@link openEspHomeClient}. Inherits every {@link EspHomeClientOptions} field and adds the construction-retry knobs.
+ */
+// eslint-disable-next-line @typescript-eslint/no-empty-object-type -- `{}` default is required; see infrared-rf.types.test.ts.
+export interface EspHomeClientOpenOptions<Extras extends ExtraSchemaSet = {}> extends EspHomeClientOptions<Extras> {
+
+  /**
+   * Backoff configuration for construction retries. Defaults: `initialDelayMs: 500`, `maxDelayMs: 5000`, `backoffMultiplier: 2`, `jitter: 0.2`.
+   */
+  constructionRetry?: ConstructionRetryConfig;
+
+  /**
+   * Maximum number of retries on transient connection failures. Permanent errors ({@link PermanentError} subclasses) reject immediately regardless. Default 3.
+   */
+  maxConstructionRetries?: number;
+
+  /**
+   * Cancellation signal applied to the entire factory call - both the initial attempt and any retries. Aborting rejects with the signal's reason.
+   */
+  signal?: AbortSignal;
+}
+
+/**
+ * Internal bundle returned by {@link EspHomeClient.openHandshakeContext} - the per-attempt setup-phase resources (transport, receiver, two interleave-handler
+ * disposers). Bundled so the connect flow can dispose every resource together on noise -> plaintext fallback or fatal failure, and so the success path can hand off
+ * the transport and receiver to the run phase as a unit.
+ */
+interface HandshakeContext {
+
+  readonly discHandler: Disposable;
+  readonly pingHandler: Disposable;
+  readonly receiver: MessageReceiver;
+  readonly transport: TransportLike;
+}
+
+/**
+ * The ESPHome native-API client. The single high-level entry point for ESP8266/ESP32 devices running ESPHome firmware.
+ *
+ * The host class composes - never inherits - the carved subsystems that own the client surface end-to-end: a `Transport` for the wire (framing, cipher install,
+ * socket lifetime); a run-phase `MessageReceiver` for the inbound dispatch pump; an `EventBus` for typed event delivery; a typed {@link EspHomeError}
+ * hierarchy for failures; the schema-derived encode/decode pipeline for entity payloads; an `EntityRegistry` and a
+ * `ServiceRegistry` as the single sources of truth for entity and service identity; a `LogSubscriptionManager` for
+ * refcounted device-log subscriptions; a {@link HomeAssistantApi} for the
+ * ESPHome `homeassistant.*` action / state-import surface; the run-phase handler table built by `buildRunPhaseHandlers`; the command
+ * runners exported from `command-runner.ts` for {@link EspHomeClient.command} and {@link EspHomeClient.commandAndAwait}; a `HeartbeatScheduler` for keepalive
+ * and stall detection; a `LatestStateCache` for synchronous latest-state reads; and a {@link ClientCapabilities} record built from the negotiated session.
+ *
+ * The client is event-driven via composition - it does **not** extend `EventEmitter`. Subscribe with {@link EspHomeClient.on} (returns `Disposable`),
+ * {@link EspHomeClient.once} (returns `Promise<payload>`), or {@link EspHomeClient.stream} (returns `AsyncIterable<payload>` with backpressure). Subscriptions survive
+ * reconnects: a handle issued before `connect()` keeps firing across disconnect/reconnect cycles unless the consumer disposes or aborts.
+ *
+ * ## Construction
+ *
+ * Two construction paths:
+ *
+ * - **{@link openEspHomeClient}** (preferred) - async factory with bounded retry on transient errors and an `AbortSignal`-aware open. Resolves with a connected client.
+ * - **`new EspHomeClient(options)`** then `await client.connect()` - explicit two-step construction when the consumer needs to attach subscriptions before connect.
+ *
+ * ## Connection lifecycle
+ *
+ * `connect()` runs the linear handshake: TCP connect, `HelloRequest`/`HelloResponse`, optional Noise NNpsk0 handshake (with plaintext fallback when the peer closes
+ * mid-noise or returns a plaintext frame), `ConnectRequest`/`ConnectResponse`, `DeviceInfoRequest`, `ListEntitiesRequest`, `SubscribeStatesRequest`. Failures surface
+ * as typed errors from {@link EspHomeError} subclasses. Auto-reconnect is on by default with `PermanentError`-filtered retry; pass `reconnect: false` to opt out. Lazy
+ * heartbeat (30s idle / 60s stall) is on by default; pass `keepAlive: false` to opt out. Live state is observable via {@link EspHomeClient.health},
+ * {@link EspHomeClient.onHealthChange}, {@link EspHomeClient.healthStream}, and the typed {@link EspHomeClient.lifecycle} stream.
+ *
+ * ## Entity model
+ *
+ * Entities are identified by branded {@link EntityId}<T> values shaped `${type}-${objectId}`. Mint with {@link entityId}, narrow untrusted input with
+ * {@link parseEntityId} or {@link isEntityId}. Send commands with {@link EspHomeClient.command}<T>(id, options) or
+ * {@link EspHomeClient.commandAndAwait}<T>(id, options, awaitOptions); read latest cached state with {@link EspHomeClient.latest}<T>; enumerate snapshots with
+ * {@link EspHomeClient.snapshot} / {@link EspHomeClient.snapshotFor}. Multi-device parents enumerate sub-devices via {@link EspHomeClient.subDevices} and filter the
+ * entity list with {@link EspHomeClient.entitiesByDevice}.
+ *
+ * ## Sub-APIs
+ *
+ * - **{@link EspHomeClient.voiceAssistant}** - lazy single-instance voice-assistant API ({@link VoiceAssistantApi}).
+ * - **{@link EspHomeClient.camera}**(id) - per-id camera API ({@link CameraApi}) with image buffering owned by the sub-API.
+ *
+ * The Home-Assistant integration surface lives under {@link EspHomeClient.homeAssistant} as a sub-API matching the pattern used by camera, voice-assistant,
+ * bluetooth, serial, and zwave. The sub-API owns the outbound subscribe-and-respond surface (`subscribeServices`, `subscribeStates`, `sendState`,
+ * `respondToAction`) and the memoized inbound-dispatcher context the run-phase dispatcher consumes for HA-bridge frames.
+ *
+ * ## Disposal
+ *
+ * Both `Symbol.dispose` and `Symbol.asyncDispose` are implemented. `using client = await openEspHomeClient(...)` binds sync disposal (immediate teardown);
+ * `await using client = await openEspHomeClient(...)` binds async disposal (graceful path - sends `DISCONNECT_REQUEST` and awaits the response within the configured
+ * timeout, then falls through to immediate teardown).
+ *
+ * Usage examples are kept exclusively in `src/examples/showcase.ts` so this docstring stays a single source of truth on **what the class is** and the showcase file
+ * stays the single source of truth on **how to use it**. Regions in the showcase are type-checked against the live public API, so renames or signature changes break
+ * the build before they ship.
+ *
+ * Usage:
+ *
+ * {@includeCode ./examples/showcase.ts#connect-then-construct}
+ *
+ * @see {@link openEspHomeClient}
+ * @see {@link entityId}
+ * @see {@link VoiceAssistantApi}
+ * @see {@link CameraApi}
+ * @see {@link ConnectionHealth}
+ * @see {@link LifecycleEvent}
+ */
+// eslint-disable-next-line @typescript-eslint/no-empty-object-type -- `{}` default is required; see infrared-rf.types.test.ts.
+export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
 
   // The client information string to announce when we connect to an ESPHome device.
   private clientId: string;
 
-  // The TCP socket connection to the ESPHome device.
-  private clientSocket: Nullable<Socket>;
-
-  // The data event listener function reference for cleanup.
-  private dataListener: Nullable<(chunk: Buffer) => void>;
+  // Typed event bus. Composes node:events.EventEmitter internally; consumers see a curated `on`/`once`/`stream` facade with `Disposable` callback handles,
+  // `Promise`-shaped one-shots, and `AsyncIterable` streams with backpressure policy.
+  private readonly bus: EventBus<ClientEventsMap>;
 
   // The hostname or IP address of the ESPHome device.
   private host: string;
@@ -1282,1247 +733,1292 @@ export class EspHomeClient extends EventEmitter {
   // The port number for the ESPHome API connection.
   private port: number;
 
-  // Buffer for accumulating incoming data until complete messages are received.
-  private recvBuffer: Buffer;
+  // Wire-level transport. Owns the socket, framing, and cipher install. Null between disconnect and the next connect; non-null during an active session. Typed as
+  // `TransportLike` to accept either the real `Transport` or a `MockTransport` produced by an injected {@link EspHomeClientOptions.transportFactory}.
+  private transport: Nullable<TransportLike> = null;
+
+  // Optional transport factory handed in via {@link EspHomeClientOptions.transportFactory}. When set, {@link connect} calls this in place of `Transport.open`
+  // for every handshake attempt - including the noise -> plaintext fallback retry. The host owns and disposes whatever the factory returns. Each invocation must
+  // produce a fresh transport (the `TransportLike` contract is single-shot). The composed connect signal is forwarded to the factory so I/O-bound
+  // implementations can honour cancellation.
+  private readonly transportFactory: Nullable<(options: TransportOpenOptions) => TransportLike | Promise<TransportLike>>;
+
+  // Run-phase message receiver. Created per connect(); owns the dispatch pump that routes inbound messages to the run-phase handlers via startDrain.
+  private runReceiver: Nullable<MessageReceiver> = null;
 
   // Device information received from the ESPHome device.
   private remoteDeviceInfo: Nullable<DeviceInfo>;
 
-  // Array storing all discovered entities from the device.
-  private discoveredEntities: Entity[];
+  // Single source of truth for entity identity. Holds the branded-id <-> protocol-key bijection, the per-key entity record, the device-id overlay
+  // populated by state messages, and the discovery-ordered entity list. Composed via a single private field; every entity-related public method on the host is a one-
+  // line delegate to this object. The registry has no host-specific state and depends only on the host's logger via
+  // {@link EntityRegistryHost}.
+  private readonly registry: EntityRegistry;
 
-  // Map from entity identifier strings to their numeric keys.
-  private entityKeys: Map<string, number>;
+  // Single source of truth for user-defined-service identity. Holds the discovery-ordered service list and the by-key index used by the execute
+  // pipeline. Composed via a single private field; every service-related lookup on the host is a one-line delegate to this object. The registry has no host-specific
+  // state and depends only on the host's logger via {@link ServiceRegistryHost}. Service execution and event coordination stay on the host (transport / event-bus
+  // concerns).
+  private readonly serviceRegistry: ServiceRegistry;
 
-  // Map from entity keys to their human-readable names.
-  private entityNames: Map<number, string>;
+  // Per-image reassembly state for multi-packet camera images lives inside each {@link CameraApi} instance, keyed by branded camera id. The host's run-phase dispatcher
+  // resolves the inbound entity-key to a `CameraApi` (constructing one lazily on first chunk so consumers that only subscribe to the bus event - never calling
+  // `client.camera(id)` - still observe assembled images) and delegates the chunk.
 
-  // Map from entity keys to their object IDs.
-  private entityObjectIds: Map<number, string>;
+  // Latest-state cache. One {@link TelemetryEvent} per branded entity id, updated synchronously inside the run-phase state-message handler. Cleared on
+  // every connect() so a fresh session starts with no inherited state. Read via the public `latest`, `snapshot`, and `snapshotFor` surfaces.
+  private readonly latestCache: LatestStateCache;
 
-  // Map from entity keys to their device IDs (when devices are supported).
-  private entityDeviceIds: Map<number, number>;
+  // Structured capability record. Built from the negotiated API minor version, the encrypted-transport flag, and the {@link DeviceInfo} response. Initialized
+  // to the {@link disconnectedCapabilities} placeholder; rebuilt at the end of every successful connect() and reset on every connect-attempt teardown.
+  private capabilitiesCache: ClientCapabilities;
 
-  // Map from entity keys to their type labels.
-  private entityTypes: Map<number, EntityType>;
+  // Sub-device records reported by the parent ESP in `DeviceInfoResponse.devices`. Empty for the typical single-device configuration; populated when the
+  // parent declares one or more sub-devices addressable via the protocol's `device_id` field.
+  private subDeviceList: SubDevice[];
 
-  // Array storing all discovered user-defined services from the device.
-  private discoveredServices: ServiceEntity[];
+  // Refcounted log-subscription coordinator. Owns the per-iterator subscriber map, the cached device-side level, and the encoding/sending of
+  // `SUBSCRIBE_LOGS_REQUEST` frames. The host composes this manager via a single field; every log-subscription public method on the host becomes a one-line delegate
+  // to it. The manager has no host-specific state and depends only on the host's bus, logger, and frame-send hook via `LogSubscriptionManagerHost`.
+  private readonly logManager: LogSubscriptionManager;
 
-  // Map from service keys to their service entities.
-  private services: Map<number, ServiceEntity>;
+  // Voice-assistant sub-API. Lazy-instantiated on first access via the {@link voiceAssistant} getter; one instance per client for the lifetime of the client. Holds
+  // its own connection-scoped state (subscription flag, cached configuration); reset on every connect.
+  private voiceAssistantApi: Nullable<VoiceAssistantApi> = null;
 
-  // Voice assistant subscription state.
-  private voiceAssistantSubscribed: boolean;
+  // User-defined services sub-API, lazily constructed on first access via the {@link EspHomeClient.services} getter. Stateless aside from the seam reference; the
+  // service registry, encoder, and frame-send hook flow through the seam from this host.
+  private userServicesApi: Nullable<UserServicesApi> = null;
 
-  // Voice assistant configuration.
-  private voiceAssistantConfig: Nullable<VoiceAssistantConfiguration>;
+  // Serial-proxy sub-API. Lazy-instantiated on first access via the {@link serial} getter; one instance per client for the lifetime of the client. Owns its own
+  // connection-scoped state (two Correlator instances keyed by instance, plus a refcounted per-instance subscriber map); reset on every connect.
+  private serialProxyApi: Nullable<SerialProxyApi> = null;
 
-  // Camera image buffers for reassembling multi-packet images.
-  private cameraImageBuffers: Map<number, Buffer[]>;
+  // Bluetooth-proxy sub-API. Lazy-instantiated on first access via the {@link bluetooth} getter; one instance per client for the lifetime of the client. Owns its own
+  // connection-scoped state (the global advertisement-subscription refcount, the cached scanner-state push); reset on every connect.
+  private bluetoothProxyApi: Nullable<BluetoothProxyApi> = null;
+
+  // Z-Wave-proxy sub-API. Lazy-instantiated on first access via the {@link zwave} getter; one instance per client for the lifetime of the client. Owns its own
+  // connection-scoped state (the global frame-subscription refcount, the cached home id); reset on every connect.
+  private zwaveProxyApi: Nullable<ZWaveProxyApi> = null;
+
+  // Camera sub-API instances, keyed by branded camera id. Per-id cache so repeated `client.camera(id)` calls return the same object; instances survive reconnects, and
+  // the host resets each instance's reassembly buffer at both session boundaries. The Map itself is never cleared: a camera id maps to one stable instance for the
+  // lifetime of the client.
+  private readonly cameraInstances = new Map<EntityId<"camera">, CameraApi>();
+
+  // Cached decode-and-emit context for the voice-assistant inbound dispatchers. Built once in the constructor so the per-message dispatch in the run-phase dispatch
+  // table doesn't allocate a new context object for every inbound voice-assistant frame. The context closes over `this`'s bus/log/decoder.
+  private readonly voiceAssistantInboundContext: VoiceAssistantInboundContext;
+
+  // The Home-Assistant sub-API SSOT. Owns the outbound subscribe-and-respond surface (`subscribeServices`, `subscribeStates`, `sendState`, `respondToAction`) plus
+  // the memoized inbound-dispatcher context the run-phase dispatcher consumes for `HOMEASSISTANT_SERVICE_RESPONSE` and `SUBSCRIBE_HOME_ASSISTANT_STATE_RESPONSE`
+  // frames. Exposed publicly via the {@link EspHomeClient.homeAssistant} getter; the field is intentionally non-lazy because the dispatcher reads the inbound
+  // context at construction time.
+  private readonly homeAssistantApi: HomeAssistantApi;
+
+  // Pre-built run-phase dispatcher seam. The host composes the `RunPhaseHost` surface once at construction time so every connect() reuses
+  // the same seam object; the dispatcher's per-{@link MessageType} handlers route through this seam (read fields plus host-side coordination methods) without ever
+  // touching host private state directly. `buildRunPhaseHandlers` consumes it; the heartbeat-stamp wrap stays on the host where it belongs.
+  private readonly runPhaseHost: RunPhaseHost;
+
+  // Pre-built command-runner seam. The host composes the `CommandHost` surface once at construction time so every {@link command} and
+  // {@link commandAndAwait} call reuses the same object; {@link runCommand} and {@link runCommandAndAwait} consume it. Narrow seam (bus, log, metrics, registry's
+  // keyForId / deviceIdForKey, the schemas table's resolveSchema, frameAndSend hook); the runner owns the encode pipeline and the bus pre-subscription.
+  private readonly commandHost: CommandHost;
+
+  // The client's single elapsed-time/uptime clock, defaulting to `Date.now`. Every facade elapsed-time and connection-uptime read (connect-start, connect-duration,
+  // health-epoch) goes through this, and it is threaded to the heartbeat scheduler so the supervisor's idle/stall/RTT math shares the same time base. Tests inject a
+  // controllable function (via {@link EspHomeClientOptions.clock}) to drive deterministic timing without real timers.
+  private readonly clock: ClockFn;
+
+  // Heartbeat scheduler. Owns the supervisory timer, last-activity timestamp, and in-flight ping marker. `null` config (constructor seam) means heartbeat
+  // is disabled (`keepAlive: false`); otherwise it ticks the configured interval and surfaces stalls through the host seam.
+  private readonly heartbeat: HeartbeatScheduler;
+
+  // Live connection-health record. Updated synchronously on every transition; emitted via the `healthChange` event for streaming consumers.
+  private healthRecord: ConnectionHealth = disconnectedHealth();
+
+  // Resolved auto-reconnect config. `null` when reconnect is disabled (`reconnect: false`).
+  private readonly reconnectConfig: Nullable<ResolvedReconnectConfig>;
+
+  // The active reconnect attempt's abort controller and counter. Reset to a fresh controller after each successful connect.
+  private reconnectController: Nullable<AbortController> = null;
+  private reconnectAttempts = 0;
+  private reconnectInProgress = false;
+  private explicitlyClosed = false;
+
+  // The in-flight reconnect supervisor loop's promise, tracked so a manual `connect()` can cancel the loop AND await its current attempt fully settling before taking
+  // over the connection state - guaranteeing the loop and a superseding manual connect never mutate `transport`/registries/health concurrently. `null` when no loop runs.
+  private reconnectLoopPromise: Nullable<Promise<void>> = null;
 
   // The pre-shared key for Noise encryption (base64 encoded).
-  private encryptionKey: Nullable<string>;
+  private psk: Nullable<string>;
 
   // The expected server name for validation (optional).
   private expectedServerName: Nullable<string>;
 
-  // Noise handshake client instance.
-  private noiseClient: Nullable<HandshakeState>;
-
-  // Current handshake state.
-  private handshakeState: number;
-
-  // Connection state for adaptive encryption detection.
-  private connectionState: number;
-
-  // Timer for connection timeout.
-  private connectionTimer: Nullable<NodeJS.Timeout>;
-
-  // Flag to track if we're using encryption for this connection.
-  private usingEncryption: boolean;
-
-  // Promise resolver for noise key set operations.
-  private noiseKeySetResolver: Nullable<(success: boolean) => void>;
+  // Correlator for the {@link EspHomeClient.setNoiseEncryptionKey} request/response pair. The single in-flight slot keys on `"default"`; the request response carries no
+  // correlation id, so concurrent invocations are forbidden via the correlator's in-flight guard (surfaced as {@link ConnectionError} with code `KEY_SET_IN_FLIGHT`).
+  private readonly noiseKeyCorrelator: Correlator<boolean>;
 
   // Device API minor version for protocol compatibility checks.
   private deviceApiMinorVersion: number;
 
-  /**
-   * Creates a new ESPHome client instance. The client can be configured for both encrypted and unencrypted connections depending on the provided options. When a PSK
-   * is provided, the client will automatically attempt encryption first and fall back to plaintext if the device doesn't support it.
-   *
-   * @param options - Configuration options for the client connection.
-   * @param options.clientId - Optional client identifier to announce when connecting (default: "esphome-client").
-   * @param options.host - The hostname or IP address of the ESPHome device.
-   * @param options.logger - Optional logging interface for debug and error messages. If not provided, defaults to console methods.
-   * @param options.port - The port number for the ESPHome API (default: 6053).
-   * @param options.psk - Optional base64 encoded pre-shared key for Noise encryption. Must be exactly 32 bytes when decoded.
-   * @param options.serverName - Optional expected server name for validation during encrypted connections.
-   *
-   * @example
-   * ```typescript
-   * // Minimal configuration for unencrypted connection.
-   * const client = new EspHomeClient({ host: "192.168.1.100" });
-   *
-   * // Full configuration with all options except serverName.
-   * const client = new EspHomeClient({
-   *   host: "192.168.1.100",
-   *   port: 6053,
-   *   clientId: "homebridge-ratgdo",
-   *   psk: "base64encodedkey",
-   *   logger: myLogger
-   * });
-   * ```
-   */
-  constructor(options: EspHomeClientOptions) {
+  // Resource bounds applied at the wire boundary to defend against malformed or hostile devices. See EspHomeClientOptions for the per-field rationale and defaults.
+  private readonly maxFrameBytes: number;
+  private readonly maxFieldsPerMessage: number;
+  private readonly maxRecvBufferBytes: number;
+  private readonly maxImageBytes: number;
 
-    super();
+  // Per-step handshake timeout in milliseconds. Bounds each individual handshake-message wait (server-hello, server-handshake, hello-response, etc.) declaratively
+  // via AbortSignal.timeout composition at each waitFor call.
+  private readonly handshakeTimeoutMs: number;
+
+  // Overall connect timeout in milliseconds. Bounds the entire connect() flow when the consumer does not pass their own AbortSignal. Composed with the user signal via
+  // AbortSignal.any so either trigger aborts the in-flight connect.
+  private readonly connectTimeoutMs: number;
+
+  // Graceful-disconnect timeout. {@link EspHomeClient.disconnectAsync} sends DISCONNECT_REQUEST and waits up to this many milliseconds for a matching
+  // response; on timeout the teardown proceeds anyway. Sync {@link EspHomeClient.disconnect} skips the handshake entirely.
+  private readonly gracefulDisconnectTimeoutMs: number;
+
+  // Correlator for the graceful-disconnect handshake. {@link EspHomeClient.disconnectAsync} awaits the `"graceful"` slot; the run-phase DISCONNECT_RESPONSE handler
+  // resolves it. The single in-flight slot suffices because the device only acknowledges one disconnect at a time.
+  private readonly disconnectCorrelator: Correlator<void>;
+
+  // Per-instance schemas table. Built once at construction by merging the canonical {@link ENTITY_SCHEMAS} floor with the optional
+  // {@link EspHomeClientOptions.extraSchemas}.
+  // Every downstream consumer (run-phase dispatcher, command encoder, discovery decoder, telemetry decoder) consults this table - never the module-level constant
+  // directly - so an extras-registered entity type's wire-message-types route through the same code paths as a built-in. Two clients with disjoint extras have disjoint
+  // tables and do not see each other's registrations.
+  private readonly schemasTable: SchemasTable;
+
+  // Per-instance set of inbound state-message wire-message-types. Derived once from {@link schemasTable} via {@link buildStateMessageTypes}; threaded into the run-phase
+  // dispatcher seam so the default-handler's telemetry routing branch sees extras-registered state types.
+  private readonly stateMessageTypes: ReadonlySet<number>;
+
+  // Per-instance set of inbound list-entities wire-message-types. Derived once from {@link schemasTable} via {@link buildListEntitiesMessageTypes}; threaded into
+  // both the
+  // setup-phase discovery awaiter and the run-phase dispatcher seam so an extras-registered `LIST_ENTITIES_*_RESPONSE` is awaited during discovery and routed via the
+  // default-handler's late-discovery branch during run phase.
+  private readonly listEntitiesMessageTypes: ReadonlySet<number>;
+
+  // Optional metrics sink. Undefined when the consumer hasn't supplied one; every emit site uses optional chaining (`this.metrics?.increment(...)`) so the no-metrics
+  // path is a single property lookup.
+  private readonly metrics: ClientMetrics | undefined;
+
+  // Tracks the connect-attempt start timestamp for the connect.duration_ms timing. Reset on every connect() call.
+  private connectStartMs = 0;
+
+  /**
+   * Construct a client without connecting. Prefer {@link openEspHomeClient}, the async factory that constructs, connects with bounded retry, and resolves with a
+   * ready-to-use instance; reach for `new EspHomeClient(options)` only when the consumer must attach subscriptions before the first `connect()` so events fired during
+   * the handshake are not missed.
+   *
+   * @remarks Every option is optional except `host`. When `psk` is supplied the client attempts the Noise NNpsk0 handshake first and falls back to plaintext ONLY when
+   * the device demonstrably does not speak encryption - it responded in plaintext or closed the socket during the noise exchange. A bad encryption key (a rejected PSK or
+   * a malformed/low-order peer key) fails closed with a permanent {@link EncryptionKeyInvalidError} rather than silently downgrading to plaintext. The full
+   * options surface (transport injection, metrics sink, keep-alive, reconnect, frame/buffer/field caps, handshake and connect timeouts) is documented on
+   * {@link EspHomeClientOptions}; consult that type rather than this docstring for a complete listing.
+   *
+   * Usage:
+   *
+   * {@includeCode ./examples/showcase.ts#manual-construction}
+   *
+   * @param options - Configuration options. See {@link EspHomeClientOptions} for the full surface.
+   *
+   */
+  constructor(options: EspHomeClientOptions<Extras>) {
+
+    this.bus = new EventBus<ClientEventsMap>();
 
     options.logger ??= {
 
       /* eslint-disable no-console */
       debug: (): void => { /* No debug logging by default. */ },
-      error: (message: string, ...parameters: unknown[]): void => console.error(message, ...parameters),
-      info: (message: string, ...parameters: unknown[]): void => console.log(message, ...parameters),
-      warn: (message: string, ...parameters: unknown[]): void => console.log(message, ...parameters)
+      error: (message: string, ...parameters: unknown[]): void => { console.error(message, ...parameters); },
+      info: (message: string, ...parameters: unknown[]): void => { console.log(message, ...parameters); },
+      warn: (message: string, ...parameters: unknown[]): void => { console.warn(message, ...parameters); }
       /* eslint-enable no-console */
     };
 
     this.clientId = options.clientId ?? "esphome-client";
-    this.clientSocket = null;
-    this.dataListener = null;
-    this.discoveredEntities = [];
-    this.discoveredServices = [];
-    this.entityKeys = new Map<string, number>();
-    this.entityNames = new Map<number, string>();
-    this.entityObjectIds = new Map<number, string>();
-    this.entityDeviceIds = new Map<number, number>();
-    this.entityTypes = new Map<number, EntityType>();
-    this.services = new Map<number, ServiceEntity>();
-    this.voiceAssistantSubscribed = false;
-    this.voiceAssistantConfig = null;
-    this.cameraImageBuffers = new Map<number, Buffer[]>();
+    this.registry = new EntityRegistry({ log: options.logger });
+    this.serviceRegistry = new ServiceRegistry({ log: options.logger });
+
+    const logManagerHost: LogSubscriptionManagerHost = {
+
+      bus: this.bus,
+      log: options.logger,
+      send: (type, payload): void => { this.frameAndSend(type, payload); }
+    };
+
+    this.logManager = new LogSubscriptionManager(logManagerHost);
+    this.latestCache = new LatestStateCache();
+    this.capabilitiesCache = disconnectedCapabilities();
+    this.subDeviceList = [];
     this.host = options.host;
+    this.transportFactory = options.transportFactory ?? null;
+    this.clock = options.clock ?? Date.now;
     this.log = options.logger;
     this.port = options.port ?? 6053;
-    this.recvBuffer = Buffer.alloc(0);
+
+    // Build the voice-assistant decode-and-emit context once. It closes over `this.bus`, `this.log`, and `this.decodeProtobuf`; the closure stays valid for the
+    // client's full lifetime since none of those members are reassigned after construction (`bus` is `readonly`; `log` and the decode limits are stable). The dispatch
+    // sites in `runPhaseHandlers` reference this by direct property read, avoiding per-message allocation.
+    this.voiceAssistantInboundContext = {
+
+      bus: this.bus,
+      decode: (buffer): Record<number, FieldValue[]> => this.decodeProtobuf(buffer),
+      log: this.log
+    };
+
+    // Build the Home-Assistant sub-API SSOT. Owns the outbound subscribe-and-respond surface and exposes a memoized inbound-dispatcher context
+    // (`api.inboundContext`) that the run-phase dispatcher consumes for `HOMEASSISTANT_SERVICE_RESPONSE` / `SUBSCRIBE_HOME_ASSISTANT_STATE_RESPONSE` frames. The seam
+    // closes over `this.bus`, `this.log`, the bounded protobuf decoder, and the host's `frameAndSend` so the sub-API never reaches into host private state.
+    const homeAssistantApiHost: HomeAssistantApiHost = {
+
+      bus: this.bus,
+      decode: (buffer: Buffer): Record<number, FieldValue[]> => this.decodeProtobuf(buffer),
+      log: this.log,
+      send: (type: number, payload: Buffer): void => { this.frameAndSend(type, payload); }
+    };
+
+    this.homeAssistantApi = new HomeAssistantApi(homeAssistantApiHost);
+
     this.remoteDeviceInfo = null;
-    this.encryptionKey = options.psk ?? null;
+    this.psk = options.psk ?? null;
     this.expectedServerName = options.serverName ?? null;
-    this.noiseClient = null;
-    this.handshakeState = Handshake.CLOSED;
-    this.connectionState = ConnectionState.INITIAL;
-    this.connectionTimer = null;
-    this.usingEncryption = false;
-    this.noiseKeySetResolver = null;
+    this.disconnectCorrelator = new Correlator<void>();
+    this.noiseKeyCorrelator = new Correlator<boolean>();
     this.deviceApiMinorVersion = 0;
 
-    // Validate the encryption key format if provided.
-    if(this.encryptionKey) {
+    // Apply resource bounds: each option falls back to its default when omitted. Stored as readonly so the contract is fixed for the lifetime of the client.
+    this.maxFrameBytes = options.maxFrameBytes ?? DEFAULT_MAX_FRAME_BYTES;
+    this.maxFieldsPerMessage = options.maxFieldsPerMessage ?? DEFAULT_MAX_FIELDS_PER_MESSAGE;
+    this.maxRecvBufferBytes = options.maxRecvBufferBytes ?? DEFAULT_MAX_RECV_BUFFER_BYTES;
+    this.maxImageBytes = options.maxImageBytes ?? DEFAULT_MAX_IMAGE_BYTES;
 
-      const keyBuffer = Buffer.from(this.encryptionKey, "base64");
+    // Build the per-instance schemas table once, here at the boundary. The merge step throws ConfigurationError("EXTRA_SCHEMA_OVERRIDES_BUILTIN") when an extras key
+    // collides with a built-in entity-type key; surfacing it from the constructor means callers see the failure synchronously rather than at first-command. The two
+    // derived sets - state-message types and list-entities message types - are computed once from the table; downstream seams consume the per-instance copies so
+    // extras-registered wire-message-types route through the same code paths as built-ins.
+    this.schemasTable = buildSchemasTable(ENTITY_SCHEMAS, options.extraSchemas);
+    this.stateMessageTypes = buildStateMessageTypes(this.schemasTable);
+    this.listEntitiesMessageTypes = buildListEntitiesMessageTypes(this.schemasTable);
+
+    // Connect-flow timeouts. Both fall back to compile-time defaults when omitted; both are then composed with the user signal at connect() time via AbortSignal.any.
+    this.handshakeTimeoutMs = options.handshakeTimeoutMs ?? DEFAULT_HANDSHAKE_TIMEOUT_MS;
+    this.connectTimeoutMs = options.connectTimeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS;
+    this.gracefulDisconnectTimeoutMs = options.gracefulDisconnectTimeoutMs ?? DEFAULT_GRACEFUL_DISCONNECT_TIMEOUT_MS;
+
+    // Heartbeat. Defaults to 30s idle / 60s stall; pass `keepAlive: false` to disable. The scheduler is constructed up front so its lifetime matches the host's;
+    // transitions are surfaced through the seam below.
+    const heartbeatConfig: Nullable<HeartbeatConfig> = (options.keepAlive === false) ? null : {
+
+      intervalMs: options.keepAlive?.intervalMs ?? 30000,
+      stallTimeoutMs: options.keepAlive?.stallTimeoutMs ?? 60000
+    };
+
+    const heartbeatHost: HeartbeatHost = {
+
+      log: this.log,
+      onSendPing: (): void => { this.frameAndSend(MessageType.PING_REQUEST, Buffer.alloc(0)); },
+      onStall: (cause: HeartbeatStalledError, idleMs: number): void => {
+
+        // Stall budget exhausted. A stall only fires while the socket is up, so the record is live; narrowing to the live variant lets the spread into STALLED retain
+        // `connectedAtMs` (both connected and stalled are "socket up" states) so uptime stays live through the stall. Bump the consecutive-stall counter, broadcast the
+        // new health record, and tear down so auto-reconnect (when enabled) can pick up.
+        if(isConnectionLive(this.healthRecord)) {
+
+          const stalls = this.healthRecord.consecutiveStalls + 1;
+
+          this.healthRecord = { ...this.healthRecord, consecutiveStalls: stalls, state: HealthState.STALLED };
+          this.emit("healthChange", this.healthRecord);
+        }
+
+        this.metrics?.increment("heartbeat.stalled");
+        void idleMs;
+        this.disconnectInternal("heartbeat stalled", cause);
+      }
+    };
+
+    this.heartbeat = new HeartbeatScheduler(heartbeatHost, heartbeatConfig, this.clock);
+
+    // Auto-reconnect. Defaults to on with battle-tested values (500ms initial delay, 2x backoff, 30s cap, 20% jitter); pass `reconnect: false` to disable.
+    this.reconnectConfig = (options.reconnect === false) ? null : resolveReconnectConfig(options.reconnect);
+
+    // Optional metrics sink. Stored as-is so emit sites can use optional chaining; absence means zero-cost emit.
+    this.metrics = options.metrics;
+
+    // Build the run-phase dispatcher seam once. The seam exposes a small read surface (bus/log/metrics/decode contexts/maxFieldsPerMessage), the frame-and-send hook, the
+    // bounded protobuf decoder, and a handful of host-side coordination methods that the dispatch table delegates into for multi-step bodies (acknowledge*) plus the
+    // pre-existing decoder methods (handleLogResponse / handleCameraImageResponse / handleNoiseKeySetResponse / handleListEntity / handleListServiceEntity /
+    // handleTelemetry). Reused unchanged across every connect()/disconnect cycle.
+    this.runPhaseHost = {
+
+      acknowledgeDisconnectRequest: (): void => { this.acknowledgeDisconnectRequest(); },
+      acknowledgeDisconnectResponse: (): void => { this.acknowledgeDisconnectResponse(); },
+      acknowledgePingResponse: (): void => { this.acknowledgePingResponse(); },
+      bus: this.bus,
+      decodeProtobuf: (buffer: Buffer): Record<number, FieldValue[]> => this.decodeProtobuf(buffer),
+      handleBluetoothAdvertisementsBatch: (payload: Buffer): void => { this.bluetoothProxyApi?.acceptAdvertisementsBatch(payload); },
+      handleBluetoothConnectionsFreeResponse: (payload: Buffer): void => { this.bluetoothProxyApi?.acceptConnectionsFreeResponse(payload); },
+      handleBluetoothDeviceClearCacheResponse: (payload: Buffer): void => { this.bluetoothProxyApi?.acceptClearCacheResponse(payload); },
+      handleBluetoothDeviceConnectionResponse: (payload: Buffer): void => { this.bluetoothProxyApi?.acceptDeviceConnectionResponse(payload); },
+      handleBluetoothDevicePairingResponse: (payload: Buffer): void => { this.bluetoothProxyApi?.acceptPairingResponse(payload); },
+      handleBluetoothDeviceUnpairingResponse: (payload: Buffer): void => { this.bluetoothProxyApi?.acceptUnpairingResponse(payload); },
+      handleBluetoothGattErrorResponse: (payload: Buffer): void => { this.bluetoothProxyApi?.acceptGattErrorResponse(payload); },
+      handleBluetoothGattGetServicesDoneResponse: (payload: Buffer): void => { this.bluetoothProxyApi?.acceptGetServicesDoneResponse(payload); },
+      handleBluetoothGattGetServicesResponse: (payload: Buffer): void => { this.bluetoothProxyApi?.acceptGetServicesResponse(payload); },
+      handleBluetoothGattNotifyDataResponse: (payload: Buffer): void => { this.bluetoothProxyApi?.acceptGattNotifyDataResponse(payload); },
+      handleBluetoothGattNotifyResponse: (payload: Buffer): void => { this.bluetoothProxyApi?.acceptGattNotifyResponse(payload); },
+      handleBluetoothGattReadResponse: (payload: Buffer): void => { this.bluetoothProxyApi?.acceptGattReadResponse(payload); },
+      handleBluetoothGattWriteResponse: (payload: Buffer): void => { this.bluetoothProxyApi?.acceptGattWriteResponse(payload); },
+      handleBluetoothScannerState: (payload: Buffer): void => { this.bluetoothProxyApi?.acceptScannerStateResponse(payload); },
+      handleBluetoothSetConnectionParamsResponse: (payload: Buffer): void => { this.bluetoothProxyApi?.acceptSetConnectionParamsResponse(payload); },
+      handleCameraImageResponse: (payload: Buffer): void => { this.handleCameraImageResponse(payload); },
+      handleDeviceInfoResponse: (payload: Buffer): void => {
+
+        this.handleDeviceInfoResponse(payload);
+
+        this.capabilitiesCache = parseCapabilities({
+
+          apiMinor: this.deviceApiMinorVersion,
+          deviceInfo: this.remoteDeviceInfo,
+          encrypted: this.transport?.isEncrypted ?? false
+        });
+
+        if(this.remoteDeviceInfo) {
+
+          this.emit("deviceInfo", this.remoteDeviceInfo);
+        }
+      },
+      handleExecuteServiceResponse: (payload: Buffer): void => { this.handleExecuteServiceResponse(payload); },
+      handleListEntitiesDoneResponse: (): void => {
+
+        // Mid-session re-discovery commit. Each registry's snapshotChanges returns `{ changed, ... }`; emit only when the corresponding registry actually changed since
+        // the last snapshot. The dirty flag was set as a side effect of host.handleListEntity / host.handleListServiceEntity (the run-phase late-discovery branch in
+        // defaultRunPhaseHandler routes any LIST_ENTITIES_*_RESPONSE arriving in run phase through those host methods, which delegate to registry.register). When the
+        // device pushes a stale DONE with no preceding entity messages, both snapshots return `changed: false` and the handler is a no-op. The `services` length check
+        // mirrors the connect-time emitServices callback so the "do not emit `services` when empty" public-API contract holds at both call sites.
+        const entitySnapshot = this.registry.snapshotChanges();
+
+        if(entitySnapshot.changed) {
+
+          this.emit("entities", entitySnapshot.entities);
+        }
+
+        const serviceSnapshot = this.serviceRegistry.snapshotChanges();
+
+        if(serviceSnapshot.changed && (serviceSnapshot.services.length > 0)) {
+
+          this.emit("services", serviceSnapshot.services);
+        }
+      },
+      handleListEntity: (type: number, payload: Buffer): void => { this.handleListEntity(type, payload); },
+      handleListServiceEntity: (payload: Buffer): void => { this.handleListServiceEntity(payload); },
+      handleLogResponse: (payload: Buffer): void => { this.handleLogResponse(payload); },
+      handleNoiseKeySetResponse: (payload: Buffer): void => { this.handleNoiseKeySetResponse(payload); },
+      handleSerialProxyData: (payload: Buffer): void => { this.serialProxyApi?.acceptDataMessage(payload); },
+      handleSerialProxyModemPinsResponse: (payload: Buffer): void => { this.serialProxyApi?.acceptModemPinsResponse(payload); },
+      handleSerialProxyRequestResponse: (payload: Buffer): void => { this.serialProxyApi?.acceptRequestResponse(payload); },
+      handleTelemetry: (type: number, payload: Buffer): void => { this.handleTelemetry(type, payload); },
+      handleZWaveProxyFrame: (payload: Buffer): void => { this.zwaveProxyApi?.acceptFrame(payload); },
+      handleZWaveProxyRequest: (payload: Buffer): void => { this.zwaveProxyApi?.acceptRequest(payload); },
+      homeAssistantInboundContext: this.homeAssistantApi.inboundContext,
+      listEntitiesMessageTypes: this.listEntitiesMessageTypes,
+      log: this.log,
+      metrics: this.metrics,
+      send: (type: number, payload: Buffer): void => { this.frameAndSend(type, payload); },
+      stateMessageTypes: this.stateMessageTypes,
+      voiceAssistantInboundContext: this.voiceAssistantInboundContext
+    };
+
+    // Build the command-runner seam once. Same composition pattern as runPhaseHost: small read surface (bus / log / metrics) plus four method seams that delegate into
+    // the registry (keyForId, deviceIdForKey), the schemas table (resolveSchema), and the transport (frameAndSend). {@link runCommand} and {@link runCommandAndAwait}
+    // consume this surface; the encode pipeline and adapter table are pure-function imports inside the runner.
+    this.commandHost = {
+
+      bus: this.bus,
+      deviceIdForKey: (key: number): number | undefined => this.registry.deviceIdForKey(key),
+      keyForId: (id: EntityId): Nullable<number> => this.registry.keyForId(id),
+      log: this.log,
+      metrics: this.metrics,
+      resolveSchema: (entityType: string): EntitySchema | undefined => getSchemaIn(this.schemasTable, entityType),
+      send: (type: number, payload: Buffer): void => { this.frameAndSend(type, payload); }
+    };
+
+    // Validate the encryption key format if provided.
+    if(this.psk) {
+
+      const keyBuffer = Buffer.from(this.psk, "base64");
 
       if(keyBuffer.length !== 32) {
 
         this.log.error("Invalid encryption key provided.");
-        this.encryptionKey = null;
+        this.psk = null;
       }
     }
   }
 
   /**
-   * Connect to the ESPHome device and start communication. This method initializes a new connection. If an encryption key is provided, it will attempt an encrypted
-   * connection first and fall back to plaintext if the device doesn't support encryption. Without an encryption key, only plaintext connections are attempted.
+   * Single source of truth for which managers participate in the `SubscriptionLifecycle` reset/reissue cycle. The eagerly-constructed log manager and
+   * Home-Assistant bridge are always present; the lazily-instantiated sub-APIs (voice-assistant, serial, Bluetooth, Z-Wave, and any future addition) are included only
+   * once a consumer has accessed them, so the `null` entries are filtered out. The host loops over this list at three points: the disconnect boundary and connect-top
+   * both call `SubscriptionLifecycle.clearConnectionState` on each (disconnect is the primary reset; connect-top is a repeatable safety net for a `connect()` issued
+   * over a still-active connection), and connect-bottom calls `SubscriptionLifecycle.reissueOnReconnect` on each, so adding a future streaming sub-API to the lifecycle
+   * is a one-line edit here rather than scattered per-manager call sites.
+   *
+   * @returns The live subscription-lifecycle participants, with un-instantiated lazy sub-APIs omitted.
    */
-  public connect(): void {
+  private subscriptionLifecycles(): SubscriptionLifecycle[] {
 
-    // Clean up any existing connections and resources before starting fresh.
-    if(this.clientSocket) {
+    // The eager log manager and Home-Assistant bridge plus each lazily-instantiated streaming sub-API. We narrow out the `null` entries with a type predicate over the
+    // non-null member union (rather than the bare `SubscriptionLifecycle` interface) so the predicate's narrowed type stays assignable to the array's element type; each
+    // concrete class implements `SubscriptionLifecycle`, so the filtered result satisfies the declared return type.
+    const participants = [ this.logManager, this.homeAssistantApi, this.voiceAssistantApi, this.serialProxyApi, this.bluetoothProxyApi, this.zwaveProxyApi ];
 
-      this.clientSocket.destroy();
-      this.clientSocket = null;
+    return participants.filter((manager): manager is NonNullable<(typeof participants)[number]> => manager !== null);
+  }
+
+  /**
+   * Connect to the ESPHome device and start communication. If an encryption key was provided, this attempts an encrypted connection first and falls back to plaintext if
+   * the device doesn't support encryption. Without an encryption key, only plaintext connections are attempted.
+   *
+   * Usage:
+   *
+   * {@includeCode ./examples/showcase.ts#manual-construction}
+   *
+   * @param options - Optional configuration.
+   * @param options.signal - Optional AbortSignal to cancel the connect attempt. Aborting tears down any in-progress handshake and rejects the returned promise.
+   * @returns A promise that resolves when the connection is established and ready, or rejects with a typed {@link EspHomeError} subclass.
+   *
+   */
+  public async connect(options?: { signal?: AbortSignal }): Promise<void> {
+
+    // A manual connect supersedes any in-flight auto-reconnect supervisor: abort the loop, then await its current connect attempt fully settling so two connect flows
+    // never mutate the connection state (`transport`, registries, health) concurrently. `cancelReconnect` is repeatable, so this is a no-op on a first connect with no
+    // loop running. The reconnect loop itself calls `connectInternal` (below), NOT this method, so it never aborts its own controller or awaits its own promise.
+    this.cancelReconnect();
+
+    const supersededLoop = this.reconnectLoopPromise;
+
+    if(supersededLoop) {
+
+      // The loop never rejects - it handles every attempt error internally and breaks - so this await resolves once the superseded loop has fully torn down its current
+      // attempt. The `.catch` is belt-and-suspenders: a superseded loop's failure must never surface as this manual connect's rejection.
+      await supersededLoop.catch((): void => undefined);
     }
 
-    this.cleanupNoiseResources();
-    this.cleanupDataListener();
-    this.clearConnectionTimer();
+    return this.connectInternal(options);
+  }
 
-    // Reset buffer state to ensure clean message processing.
-    this.recvBuffer = Buffer.alloc(0);
+  /**
+   * The actual connect flow: tear down any prior transport, reset per-connection state, run the handshake/discovery, and hand off to the run-phase drain. Private because
+   * every caller must first decide supersede policy: the public {@link connect} cancels and drains any in-flight reconnect loop before invoking this; the reconnect
+   * supervisor loop ({@link runReconnectLoop}) invokes this directly so it neither aborts its own controller nor deadlocks awaiting its own promise.
+   */
+  private async connectInternal(options?: { signal?: AbortSignal }): Promise<void> {
 
-    // Reset entity discovery state for the new connection.
-    this.discoveredEntities = [];
-    this.discoveredServices = [];
-    this.entityKeys.clear();
-    this.entityNames.clear();
-    this.entityTypes.clear();
-    this.services.clear();
-    this.voiceAssistantSubscribed = false;
-    this.voiceAssistantConfig = null;
-    this.cameraImageBuffers.clear();
+    options?.signal?.throwIfAborted();
+
+    // Tear down any in-flight transport from a previous connect attempt. We constructed it (every transport comes from {@link openTransport}), so we always dispose it.
+    if(this.transport) {
+
+      await this.transport[Symbol.asyncDispose]();
+    }
+
+    this.transport = null;
+    this.runReceiver?.[Symbol.dispose]();
+    this.runReceiver = null;
+
+    // Reset entity and service discovery state for the new connection. The `EntityRegistry` owns the entity-identity indexes;
+    // the `ServiceRegistry` owns the user-defined-service identity indexes; the latest-state cache holds the last telemetry per
+    // branded id. All three reset in lock-step at connect time so a fresh session starts with no inherited state.
+    this.registry.clear();
+    this.serviceRegistry.clear();
+    this.latestCache.clear();
+
+    // Drop any in-flight multi-packet camera reassembly so partial images that arrived just before the previous session ended don't bleed into the new session.
+    for(const cameraApi of this.cameraInstances.values()) {
+
+      cameraApi.resetReassembly();
+    }
+
+    this.capabilitiesCache = disconnectedCapabilities();
+    this.subDeviceList = [];
     this.remoteDeviceInfo = null;
 
-    // Reset the handshake state for a fresh connection.
-    this.handshakeState = Handshake.CLOSED;
-    this.noiseClient = null;
-    this.connectionState = ConnectionState.INITIAL;
-    this.usingEncryption = false;
-    this.noiseKeySetResolver = null;
+    // Reject any correlators inherited from a previous epoch. A `disconnectAsync` or `setNoiseEncryptionKey` left in flight when the consumer re-invokes `connect()`
+    // would otherwise hang forever; the typed `AbortError` rejection settles those inherited promises so callers do not wait on a response that never arrives.
+    this.disconnectCorrelator.rejectAll(new DOMException("Client reconnected before the prior request completed.", "AbortError"));
+    this.noiseKeyCorrelator.rejectAll(new DOMException("Client reconnected before the prior request completed.", "AbortError"));
     this.deviceApiMinorVersion = 0;
 
-    // Create the initial connection.
-    this.createConnection();
-  }
+    // Every streaming sub-API implements the uniform `SubscriptionLifecycle` contract. The same reset runs at the disconnect boundary (see
+    // {@link disconnectInternal}); this connect-top loop is the repeatable safety net for a `connect()` issued over a still-active connection that never went through
+    // `disconnect`. Either way the host clears each participant's connection-scoped wire/cache state - a fresh ESPHome connection starts with no subscription, so the
+    // wire-side caches must be invalidated - while each manager preserves its own consumer subscriber ledgers / desired intent so parked iterators survive the reconnect.
+    // The matching {@link reissueOnReconnect} loop after the transport is up replays the surviving subscriptions. Per-manager specifics (which Correlators reject, which
+    // caches clear, which ledgers are preserved) live in each manager's own `clearConnectionState` documentation; the host does not duplicate them here.
+    for(const lifecycle of this.subscriptionLifecycles()) {
 
-  /**
-   * Create a new TCP connection to the ESPHome device. This is a separate method to allow reconnection with different protocols when falling back from encrypted to
-   * plaintext connections.
-   */
-  private createConnection(): void {
-
-    // Create a new TCP connection to the ESPHome device.
-    this.clientSocket = createConnection({ host: this.host, port: this.port });
-
-    // Handle successful connection by initiating the handshake process.
-    this.clientSocket.on("connect", () => this.handleConnect());
-
-    // Set up the data handler for incoming messages.
-    this.dataListener = (chunk: Buffer): void => this.handleData(chunk);
-    this.clientSocket.on("data", this.dataListener);
-
-    // Handle socket errors by logging and disconnecting.
-    this.clientSocket.once("error", (err: Error) => this.handleSocketError(err as NodeJS.ErrnoException));
-
-    // Handle socket closure by checking if we need to retry with encryption.
-    this.clientSocket.once("close", () => this.handleSocketClose());
-  }
-
-  /**
-   * Internal disconnect method that cleans up resources and emits the disconnect event.
-   *
-   * @param reason - Optional reason for the disconnection.
-   */
-  private _disconnect(reason?: string): void {
-
-    // Clean up the data listener.
-    this.cleanupDataListener();
-
-    // Clean up Noise resources.
-    this.cleanupNoiseResources();
-
-    // Clear connection timer.
-    this.clearConnectionTimer();
-
-    // Clear any pending camera image buffers.
-    this.cameraImageBuffers.clear();
-
-    // Destroy the socket connection.
-    if(this.clientSocket) {
-
-      this.clientSocket.destroy();
-      this.clientSocket = null;
+      lifecycle.clearConnectionState();
     }
 
-    this.connectionState = ConnectionState.FAILED;
+    this.connectStartMs = this.clock();
+
+    // Compose the user signal with our overall connect timeout. Either trigger aborts the in-flight connect.
+    const overallSignal = this.combineSignals(options?.signal, this.connectTimeoutMs);
+
+    // Tracked in `let` because the noise -> plaintext fallback constructs a brand-new context (Transport is single-shot) and reassigns this binding.
+    let context = await this.openHandshakeContext(overallSignal);
+
+    try {
+
+      try {
+
+        // Try the noise handshake first if a PSK was supplied.
+        if(this.psk) {
+
+          try {
+
+            await performNoiseHandshake({
+
+              expectedServerName: this.expectedServerName,
+              log: this.log,
+              metrics: this.metrics,
+              psk: this.psk,
+              signal: this.combineSignals(overallSignal, this.handshakeTimeoutMs),
+              transport: context.transport
+            });
+
+          } catch(err) {
+
+            // We fall back to plaintext ONLY on the genuine no-encryption signal: the peer demonstrably does not speak the encrypted protocol because it responded in
+            // plaintext (PEER_PLAINTEXT_DURING_NOISE) or closed during the noise exchange (PEER_CLOSED_NOISE). Both are carried by {@link PeerClosedDuringNoiseError}, so
+            // the single instanceof check covers exactly those two wire-level triggers with no code keying. Everything else - a bad key (EncryptionKeyInvalidError), a
+            // garbled/truncated reply, a server-name mismatch, AND a noise timeout/abort - is NOT evidence the device wants plaintext, so it fails closed and re-throws.
+            if(!(err instanceof PeerClosedDuringNoiseError)) {
+
+              throw err;
+            }
+
+            this.log.debug("Noise handshake failed (" + err.message + "); falling back to plaintext.");
+
+            // Single-shot transport contract: dispose the failed context (transport + receiver) and construct a fresh pair for the plaintext retry.
+            await this.disposeHandshakeContext(context);
+            context = await this.openHandshakeContext(overallSignal);
+          }
+        }
+
+        // Plaintext handshake: send HELLO_REQUEST and await HELLO_RESPONSE. Protocol-version negotiation lands inside this helper.
+        await performPlaintextHandshake({
+
+          clientApiVersion: CLIENT_API_VERSION,
+          clientId: this.clientId,
+          log: this.log,
+          maxFieldsPerMessage: this.maxFieldsPerMessage,
+          psk: this.psk,
+          receiver: context.receiver,
+          setApiMinorVersion: (minor: number): void => { this.deviceApiMinorVersion = minor; },
+          signal: this.combineSignals(overallSignal, this.handshakeTimeoutMs),
+          supportedApiMajors: SUPPORTED_API_MAJORS,
+          transport: context.transport
+        });
+
+        // Authenticate (CONNECT_REQUEST) for legacy API < 1.11.
+        await authenticateIfNeeded({
+
+          apiMinorVersion: this.deviceApiMinorVersion,
+          log: this.log,
+          receiver: context.receiver,
+          signal: this.combineSignals(overallSignal, this.handshakeTimeoutMs),
+          transport: context.transport
+        });
+
+        // Run entity discovery in the setup phase. Each discovery message is awaited explicitly until LIST_ENTITIES_DONE_RESPONSE arrives.
+        await performDiscovery({
+
+          applyDeviceInfo: (payload: Buffer): void => { this.handleDeviceInfoResponse(payload); },
+          applyListEntity: (type: number, payload: Buffer): void => { this.handleListEntity(type, payload); },
+          applyListServiceEntity: (payload: Buffer): void => { this.handleListServiceEntity(payload); },
+          countEntities: (): number => this.registry.size,
+          countServices: (): number => this.serviceRegistry.size,
+          emitDeviceInfo: (): void => { if(this.remoteDeviceInfo) { this.emit("deviceInfo", this.remoteDeviceInfo); } },
+          // snapshotChanges is the SSOT primitive: same call shape used by the run-phase LIST_ENTITIES_DONE_RESPONSE handler. Connect-time emits `entities`
+          // unconditionally because discovery completion is always a consumer-meaningful transition (even with zero entities); calling snapshotChanges here also clears
+          // the registry's dirty bit so a stale mid-session DONE correctly no-ops instead of re-emitting the initial discovery set.
+          emitEntities: (): void => { this.emit("entities", this.registry.snapshotChanges().entities); },
+          // The `services` event preserves its existing semantic: fires only when there are services to report. We always call snapshotChanges to clear the dirty bit
+          // (so a stale mid-session DONE on a service-less device does not later emit `services` with an empty list); the conditional emit honours the consumer-visible
+          // contract.
+          emitServices: (): void => {
+
+            const snapshot = this.serviceRegistry.snapshotChanges();
+
+            if(snapshot.services.length > 0) {
+
+              this.emit("services", snapshot.services);
+            }
+          },
+          // Use the per-instance, extras-aware set (the same one the run-phase handler builder consumes), NOT the module-level no-extras constant - so a directly-
+          // constructed extras schema declaring a novel list-entities message id is awaited and applied during the connect-time discovery sweep, exactly as it is in the
+          // run phase. Both phases source which list-entities wire types to accept from this single per-instance set, so connect-time discovery and the run phase agree.
+          listEntitiesMessageTypes: this.listEntitiesMessageTypes,
+          metrics: this.metrics,
+          receiver: context.receiver,
+          signal: this.combineSignals(overallSignal, this.handshakeTimeoutMs),
+          transport: context.transport
+        });
+
+      } finally {
+
+        // Setup-phase interleave handlers are always torn down before drain handoff. The transport and receiver hand off to the run phase below on success, or are
+        // disposed by the catch block on failure.
+        context.pingHandler[Symbol.dispose]();
+        context.discHandler[Symbol.dispose]();
+      }
+
+      // Hand off to the run-phase drain. From this point on, every inbound message routes through the dispatch table built by
+      // `buildRunPhaseHandlers`, wrapped via {@link tapInboundActivity} so every dispatched frame stamps the heartbeat scheduler. The second
+      // argument is the terminal-completion seam: the receiver escalates a passive run-phase transport death (peer RST/FIN, device reboot, mid-session decrypt failure,
+      // oversized frame) back to the host via this callback. `disconnectInternal` is repeatable and gates `maybeScheduleReconnect` behind the `transport || receiver`
+      // guard, so this collapses with a racing heartbeat-stall or `DISCONNECT_REQUEST` to a single teardown.
+      context.receiver.startDrain(this.tapInboundActivity(buildRunPhaseHandlers(this.runPhaseHost)),
+        (cause) => this.disconnectInternal("transport terminated", cause));
+
+      this.transport = context.transport;
+      this.runReceiver = context.receiver;
+
+      this.metrics?.timing("connect.duration_ms", this.clock() - this.connectStartMs, { encrypted: context.transport.isEncrypted ? "true" : "false" });
+      this.metrics?.increment("connect.attempts", 1, { result: "success" });
+
+      // Rebuild the structured capability record now that DeviceInfo is populated and the API minor version has been negotiated. Cached for the lifetime of the
+      // session and read synchronously via `client.capabilities()`.
+      this.capabilitiesCache = parseCapabilities({
+
+        apiMinor: this.deviceApiMinorVersion,
+        deviceInfo: this.remoteDeviceInfo,
+        encrypted: context.transport.isEncrypted
+      });
+
+      // Stamp the connect epoch once and build the live health record atomically from it - the epoch is a property of the connected state, not a separate field, so it
+      // cannot drift from `state` and is gone the moment the record becomes a down variant. Heartbeat seeds its initial activity from the same local.
+      const connectedAtMs = this.clock();
+
+      this.heartbeat.start(connectedAtMs);
+      this.healthRecord = {
+
+        connectedAtMs,
+        consecutiveStalls: 0,
+        encrypted: context.transport.isEncrypted,
+        lastInboundActivityAt: this.heartbeat.lastActivityAt,
+        state: HealthState.CONNECTED
+      };
+      this.reconnectAttempts = 0;
+      this.explicitlyClosed = false;
+
+      // Re-issue protocol-level subscriptions across reconnects via the uniform `SubscriptionLifecycle` contract. Each participant owns its own re-subscribe path
+      // (the multiset sub-APIs replay every surviving consumer's desired wire-state; the voice-assistant replays its preserved desired intent with the originally-
+      // requested flags); the host invokes them all after every successful connect so consumer-held iterators see the same wire-level subscription state they had before
+      // the disconnect, without any per-manager special-casing.
+      for(const lifecycle of this.subscriptionLifecycles()) {
+
+        lifecycle.reissueOnReconnect();
+      }
+
+      this.emit("connect", context.transport.isEncrypted);
+      this.emit("healthChange", this.healthRecord);
+      this.emit("lifecycle", { encrypted: context.transport.isEncrypted, kind: "connect" });
+
+    } catch(err) {
+
+      // Partial cleanup of the failed context. The receiver dispose settles every parked awaiter; the transport asyncDispose tears down the socket. Both are repeatable
+      // so calling them after the inner finally already disposed the interleave handlers is safe.
+      await this.disposeHandshakeContext(context);
+
+      this.transport = null;
+      this.runReceiver = null;
+
+      const isAbort = (err instanceof DOMException) && ((err.name === "AbortError") || (err.name === "TimeoutError"));
+
+      this.metrics?.increment("connect.attempts", 1, { result: isAbort ? "timeout" : "failure" });
+
+      // Translate the failure into a typed EspHomeError if it is not already one. The cause chain preserves the underlying error for diagnostics.
+      const wrapped = (err instanceof EspHomeError) ? err : new ConnectionError("Connect failed: " + (err instanceof Error ? err.message : String(err)), "CONNECT_FAILED",
+        { cause: err });
+
+      // Surface the disconnect to bus consumers. The payload is the human-readable reason; the typed cause is logged at debug level for diagnostics.
+      this.log.debug("Connect failed: " + wrapped.name + ": " + wrapped.message);
+      this.emit("disconnect", wrapped.message);
+
+      throw wrapped;
+    }
+  }
+
+  // Connect-flow handshake/negotiation/discovery is implemented in `lifecycle/handshake.ts`. The host owns the orchestration above; each phase is a pure function the
+  // module exports for direct testing.
+
+  /**
+   * Open one handshake context: a fresh transport, a fresh `MessageReceiver`, and the two setup-phase interleave handlers. Returned as a single bundle so the
+   * connect flow can dispose all four resources together on noise -> plaintext fallback or fatal failure.
+   *
+   * @remarks Each call constructs a brand-new transport (via {@link openTransport}, which honours the optional {@link EspHomeClientOptions.transportFactory}) and a
+   * brand-new receiver. This is the foundation of the noise -> plaintext fallback path: the failed context is disposed in full and a fresh one is constructed for
+   * the plaintext retry, so no stale state from the noise attempt can leak into the plaintext session.
+   *
+   * @param signal - Composed signal that aborts the transport open if the user signal or overall connect timeout fires.
+   * @returns A bundle holding the live transport, receiver, and the two interleave-handler disposers.
+   */
+  private async openHandshakeContext(signal: AbortSignal): Promise<HandshakeContext> {
+
+    const transport = await this.openTransport(signal);
+    const receiver = new MessageReceiver(transport, this.log);
+
+    // Setup-phase interleave handlers. Both auto-tear-down when the receiver enters drain phase via startDrain(); the connect-flow finally also disposes them
+    // explicitly to handle the failure path.
+    const pingHandler = receiver.onInterleave(MessageType.PING_REQUEST, () => {
+
+      // Fire-and-forget; if the send fails the transport's iterator will throw separately and our awaiters will surface it.
+      void transport.send(MessageType.PING_RESPONSE, Buffer.alloc(0)).catch((): void => { /* drained by next iterator step */ });
+    });
+    const discHandler = receiver.onInterleave(MessageType.DISCONNECT_REQUEST, () => {
+
+      throw new ConnectionClosedByPeerError("Device requested disconnect during handshake.", "PEER_DISCONNECT_DURING_HANDSHAKE");
+    });
+
+    return { discHandler, pingHandler, receiver, transport };
+  }
+
+  /**
+   * Symmetric teardown for {@link openHandshakeContext}. Disposes the interleave handlers, the receiver, and the transport, in that order. Repeatable - every
+   * underlying dispose is a no-op when already torn down.
+   *
+   * @param context - The bundle returned by a prior {@link openHandshakeContext} call.
+   */
+  private async disposeHandshakeContext(context: HandshakeContext): Promise<void> {
+
+    context.pingHandler[Symbol.dispose]();
+    context.discHandler[Symbol.dispose]();
+    context.receiver[Symbol.dispose]();
+
+    await context.transport[Symbol.asyncDispose]();
+  }
+
+  /**
+   * Construct one transport: either via the injected {@link EspHomeClientOptions.transportFactory} when present, or via the default `Transport.open` path. The
+   * caller owns the returned transport and is responsible for its dispose.
+   *
+   * @param signal - Composed signal that aborts the open if the user signal or overall connect timeout fires. Threaded into both code paths: the default factory
+   * passes it to `Transport.open`; injected factories receive it as their first argument. Factories that don't perform I/O may ignore the parameter.
+   * @returns A live transport in `plaintext` phase.
+   */
+  private async openTransport(signal: AbortSignal): Promise<TransportLike> {
+
+    // The fully-resolved open options are the single source of transport configuration. We build them once and hand them either to an injected factory (which can wrap
+    // `Transport.open(options)` without re-deriving anything) or to the default open path. `metrics` is conditionally spread so undefined is omission, not an explicit
+    // `undefined` value (which exactOptional would reject as semantically distinct from absence).
+    const options: TransportOpenOptions = {
+
+      host: this.host,
+      log: this.log,
+      maxFrameBytes: this.maxFrameBytes,
+      maxRecvBufferBytes: this.maxRecvBufferBytes,
+      ...(this.metrics !== undefined ? { metrics: this.metrics } : {}),
+      port: this.port,
+      signal
+    };
+
+    if(this.transportFactory) {
+
+      return this.transportFactory(options);
+    }
+
+    return Transport.open(options);
+  }
+
+  /**
+   * Acknowledge an inbound `PING_RESPONSE` from the device. Consumes the heartbeat scheduler's pending RTT (recorded when the supervisor sent the matching
+   * `PING_REQUEST`), updates {@link ConnectionHealth.lastPingRttMs} on the cached record, and emits `healthChange` only when the consumption produced a value - the
+   * heartbeat may have already cleared its in-flight marker on a stall, in which case there is nothing useful to record. Bundled here so the dispatcher's
+   * {@link handlePingResponse} stays a one-line delegate.
+   *
+   * @internal Dispatcher seam method; not part of the consumer surface. Invoked exclusively by the run-phase handler table.
+   */
+  public acknowledgePingResponse(): void {
+
+    const rttMs = this.heartbeat.consumePingRtt();
+
+    if(rttMs !== undefined) {
+
+      this.healthRecord = { ...this.healthRecord, lastPingRttMs: rttMs };
+      this.emit("healthChange", this.healthRecord);
+      this.metrics?.timing("heartbeat.rtt_ms", rttMs);
+    }
+  }
+
+  /**
+   * Acknowledge an inbound `DISCONNECT_REQUEST` from the device. Sends `DISCONNECT_RESPONSE` to confirm the request, then runs `disconnectInternal("device disconnected",
+   * undefined)` so the disconnect event fans out and auto-reconnect (when enabled) can pick up. Bundled here so the dispatcher's
+   * {@link handleDisconnectRequest} stays a one-line delegate.
+   *
+   * @internal Dispatcher seam method; not part of the consumer surface. Invoked exclusively by the run-phase handler table.
+   */
+  public acknowledgeDisconnectRequest(): void {
+
+    this.frameAndSend(MessageType.DISCONNECT_RESPONSE, Buffer.alloc(0));
+    this.disconnectInternal("device disconnected", undefined);
+  }
+
+  /**
+   * Acknowledge an inbound `DISCONNECT_RESPONSE` from the device. Resolves the pending graceful-disconnect awaiter set by {@link EspHomeClient.disconnectAsync} when one
+   * is registered (the resolver itself performs the teardown via `disconnectInternal`); otherwise falls back to `disconnectInternal(undefined, undefined)` so a stray
+   * `DISCONNECT_RESPONSE` (e.g., arrived after the graceful timeout already fired) still tears the connection down cleanly. Bundled here so the dispatcher's
+   * {@link handleDisconnectResponse} stays a one-line delegate.
+   *
+   * @internal Dispatcher seam method; not part of the consumer surface. Invoked exclusively by the run-phase handler table.
+   */
+  public acknowledgeDisconnectResponse(): void {
+
+    // The correlator returns true when a pending graceful-disconnect await was settled; that path will run `disconnectInternal` from `disconnectAsync` itself.
+    // A false return means the response is stray (e.g., arrived after the graceful timeout already fired) - tear down here so the connection still closes cleanly.
+    if(!this.disconnectCorrelator.resolve("graceful", undefined)) {
+
+      this.disconnectInternal(undefined, undefined);
+    }
+  }
+
+  /**
+   * Wrap a {@link MessageHandlers} dispatch table so every inbound message stamps the heartbeat supervisor's activity timestamp before delegating to the original
+   * handler. This is the single boundary where idle detection sees inbound traffic.
+   */
+  private tapInboundActivity(handlers: MessageHandlers): MessageHandlers {
+
+    const tapped: MessageHandlers = {};
+
+    if(handlers.default) {
+
+      const original = handlers.default;
+
+      tapped.default = (msg: InboundMessage): void => { this.stampInboundActivity(); original(msg); };
+    }
+
+    for(const key of Object.keys(handlers)) {
+
+      if(key === "default") {
+
+        continue;
+      }
+
+      const numericKey = Number(key);
+      const original = handlers[numericKey];
+
+      if(original) {
+
+        tapped[numericKey] = (msg: InboundMessage): void => { this.stampInboundActivity(); original(msg); };
+      }
+    }
+
+    return tapped;
+  }
+
+  /**
+   * Stamp the most recent inbound activity timestamp. Called from every dispatched run-phase handler via {@link tapInboundActivity}. Transitions a `stalled` health
+   * state back to `connected` because any inbound message proves liveness.
+   */
+  private stampInboundActivity(): void {
+
+    this.heartbeat.stamp();
+
+    const lastActivityAt = this.heartbeat.lastActivityAt;
+
+    if(this.healthRecord.state === HealthState.STALLED) {
+
+      this.healthRecord = { ...this.healthRecord, consecutiveStalls: 0, lastInboundActivityAt: lastActivityAt, state: HealthState.CONNECTED };
+      this.emit("healthChange", this.healthRecord);
+    } else if(this.healthRecord.lastInboundActivityAt !== lastActivityAt) {
+
+      // Cheap snapshot update without re-emitting healthChange (consumers don't need a tick on every inbound message; transitions are the meaningful signal).
+      this.healthRecord = { ...this.healthRecord, lastInboundActivityAt: lastActivityAt };
+    }
+  }
+
+  /**
+   * Internal disconnect path. Tears down the transport and receiver, fires the disconnect event with the supplied reason. Safe to call more than once.
+   */
+  private disconnectInternal(reason: string | undefined, cause: Error | undefined): void {
+
+    const transport = this.transport;
+    const receiver = this.runReceiver;
+
+    this.transport = null;
+    this.runReceiver = null;
+
+    receiver?.[Symbol.dispose]();
+
+    // Every transport we hold came from {@link openTransport} (default path) or the injected {@link EspHomeClientOptions.transportFactory}. Either way, the host owns
+    // it for this session - the factory contract requires a fresh transport per call. Dispose unconditionally.
+    if(transport) {
+
+      transport[Symbol.dispose]();
+    }
+
+    for(const cameraApi of this.cameraInstances.values()) {
+
+      cameraApi.resetReassembly();
+    }
+
+    this.heartbeat.stop();
+
+    // Reject any in-flight correlators so awaiting consumers see a typed `AbortError` immediately rather than waiting for their per-await timeout to fire. The reason
+    // is purely diagnostic; consumers branch on the standard `AbortError` name in their own catch blocks (the documented `false` return for `setNoiseEncryptionKey`,
+    // the timeout fall-through for `disconnectAsync`). On the happy path the correlators are already empty and this is a no-op.
+    const teardownReason = new DOMException("Connection torn down before the prior request completed.", "AbortError");
+
+    this.disconnectCorrelator.rejectAll(teardownReason);
+    this.noiseKeyCorrelator.rejectAll(teardownReason);
+
+    // Tear down every instantiated streaming sub-API's connection-scoped state at the disconnect boundary, the same reset the host runs at connect-top. Each
+    // participant's `clearConnectionState` rejects its in-flight per-key Correlators (BLE GATT, serial) with an `AbortError` and clears its connection-scoped
+    // wire/cache state, while preserving the consumer subscriber ledgers so the next `reissueOnReconnect` can replay them. Doing it here - not deferring to the
+    // next connect-top - means a parked GATT/serial await fails fast on disconnect instead of lingering to its per-await timeout, and connection-scoped reads
+    // (e.g. Bluetooth `isConnected`) report the disconnected truth at once. The connect-top loop remains as a repeatable safety net for a `connect()` issued
+    // over a still-active connection.
+    for(const lifecycle of this.subscriptionLifecycles()) {
+
+      lifecycle.clearConnectionState();
+    }
+
+    if(cause) {
+
+      this.log.debug("Disconnect cause: " + cause.name + ": " + cause.message);
+    }
+
+    if(transport || receiver) {
+
+      // Narrow the disconnect cause to the typed hierarchy once and thread the same value to both the disconnect surface and the reconnect supervisor: the typed cause is
+      // what consumers pattern-match on, and what the shouldRetry predicate filters permanent errors by. A non-EspHomeError cause is dropped to undefined here so neither
+      // consumer sees an off-hierarchy error.
+      const espCause = (cause instanceof EspHomeError) ? cause : undefined;
+
+      this.emitDisconnected(reason, espCause);
+
+      // Auto-reconnect runs unless the consumer explicitly closed or reconnect is disabled. The supervisor itself filters on the typed cause via the configured
+      // shouldRetry predicate; permanent errors stop the loop without consuming the retry budget.
+      this.maybeScheduleReconnect(espCause);
+    }
+  }
+
+  /**
+   * Emit the canonical terminal-disconnect surface: transition {@link ConnectionHealth} to disconnected (carrying the last RTT forward as a diagnostic) and broadcast
+   * via `healthChange`, emit the typed `lifecycle` event (with the cause when present), and emit the legacy string-payload `disconnect` event. This is the single source
+   * of truth for the disconnect surface, shared by {@link EspHomeClient.disconnectInternal} (the run-phase teardown) and {@link EspHomeClient.runReconnectLoop} (the
+   * auto-reconnect give-up). The caller has already narrowed `cause` to the typed hierarchy, so this method does not re-narrow.
+   *
+   * @param reason - The human-readable disconnect reason carried on the legacy string `disconnect` event.
+   * @param cause - The typed cause, already narrowed by the caller, or undefined for a causeless disconnect.
+   */
+  private emitDisconnected(reason: string | undefined, cause: EspHomeError | undefined): void {
+
+    // Emit both the typed lifecycle event (canonical) and the legacy string-payload `disconnect` bus event. ConnectionHealth transitions to disconnected and is
+    // broadcast via healthChange.
+    const previousRtt = this.healthRecord.lastPingRttMs;
+
+    this.healthRecord = {
+
+      ...disconnectedHealth(),
+      ...((previousRtt !== undefined) && { lastPingRttMs: previousRtt })
+    };
+    this.emit("healthChange", this.healthRecord);
+    this.emit("lifecycle", cause ? { cause, kind: "disconnect" } : { kind: "disconnect" });
     this.emit("disconnect", reason);
   }
 
   /**
-   * Disconnect from the ESPHome device and cleanup resources. This method should be called when you're done communicating with the device.
+   * Synchronous disconnect: tear down the transport immediately so the device observes a TCP close. Cancels any in-flight reconnect loop and marks the client as
+   * explicitly closed so auto-reconnect does not pick the connection up again. Safe to call more than once. Use {@link EspHomeClient.disconnectAsync} when a graceful
+   * `DISCONNECT_REQUEST`/`DISCONNECT_RESPONSE` handshake is preferable.
+   *
+   * Usage:
+   *
+   * {@includeCode ./examples/showcase.ts#disconnect-and-cleanup}
+   *
    */
   public disconnect(): void {
 
-    this._disconnect();
+    this.explicitlyClosed = true;
+    this.cancelReconnect();
+    this.disconnectInternal(undefined, undefined);
   }
 
   /**
-   * Clean up Noise encryption resources.
-   */
-  private cleanupNoiseResources(): void {
-
-    this.noiseClient?.destroy();
-    this.noiseClient = null;
-
-    // After all resources have been cleaned up, we reset the handshake state.
-    this.handshakeState = Handshake.CLOSED;
-  }
-
-  /**
-   * Clear the connection timer if it exists. This prevents timeout callbacks from firing after they're no longer needed.
-   */
-  private clearConnectionTimer(): void {
-
-    if(this.connectionTimer) {
-
-      clearTimeout(this.connectionTimer);
-      this.connectionTimer = null;
-    }
-  }
-
-  /**
-   * Fall back to plaintext connection after an encrypted connection attempt fails. This resets connection state, cleans up encryption resources, and initiates a new
-   * plaintext connection attempt. Called when Noise handshake times out, socket closes during encryption, or handshake fails with an error.
+   * Graceful asynchronous disconnect. Sends DISCONNECT_REQUEST and awaits DISCONNECT_RESPONSE up to {@link EspHomeClientOptions.gracefulDisconnectTimeoutMs} (default
+   * 1000ms), then tears down the transport. On timeout, falls through to immediate teardown - the consumer is never blocked indefinitely. Marks the client explicitly
+   * closed and cancels any in-flight reconnect loop (mirroring {@link EspHomeClient.disconnect}), so a graceful disconnect stays disconnected rather than
+   * auto-reconnecting.
    *
-   * @param destroySocket - Whether to destroy the existing socket. Set to false when the socket is already closed (e.g., in the socket close handler).
-   */
-  private fallbackToPlaintext(destroySocket: boolean): void {
-
-    this.cleanupDataListener();
-    this.cleanupNoiseResources();
-
-    if(destroySocket && this.clientSocket) {
-
-      this.clientSocket.destroy();
-      this.clientSocket = null;
-    }
-
-    this.recvBuffer = Buffer.alloc(0);
-    this.connectionState = ConnectionState.TRYING_PLAINTEXT;
-    this.usingEncryption = false;
-    this.createConnection();
-  }
-
-  /**
-   * Set a connection timer for timeout detection. This helps detect when a connection attempt has stalled.
+   * Usage:
    *
-   * @param timeout - Timeout duration in milliseconds (default: 5000).
-   */
-  private setConnectionTimer(timeout: number = 5000): void {
-
-    this.clearConnectionTimer();
-
-    this.connectionTimer = setTimeout(() => this.handleConnectionTimeout, timeout);
-  }
-
-  /**
-   * Handle connection timeout based on the current connection state. This method determines what to do when a connection attempt times out.
-   */
-  private handleConnectionTimeout(): void {
-
-    this.log.debug("Connection attempt timed out in state: " + this.connectionState);
-
-    switch(this.connectionState) {
-
-      case ConnectionState.TRYING_NOISE:
-
-        // Noise encryption handshake timed out. This could mean the device doesn't support encryption, so we try plaintext as a fallback.
-        this.log.debug("Noise encryption handshake timed out. The device may not support encryption. Trying plaintext connection.");
-        this.fallbackToPlaintext(true);
-
-        break;
-
-      case ConnectionState.TRYING_PLAINTEXT:
-
-        // Plaintext connection attempt timed out. If we started with encryption and fell back to plaintext, this means the device is not responding. If we started with
-        // plaintext because no PSK was provided, the device might still require encryption.
-        if(this.encryptionKey && this.noiseClient) {
-
-          // We have an encryption key but haven't tried it yet (only possible if we started without PSK).
-          this.log.error("Connection failed. The device is not responding to connection attempts.");
-
-        } else {
-
-          // No encryption key is available, and plaintext failed.
-          this.log.error("Connection failed. The device is not responding or may require encryption.");
-        }
-
-        this._disconnect("connection timeout");
-
-        break;
-
-      default:
-
-        // Unexpected timeout in an unknown state.
-        this.log.error("Connection timeout in unexpected state: " + this.connectionState + ".");
-        this.disconnect();
-
-        break;
-    }
-  }
-
-  /**
-   * Handle a newly connected socket. This method is called when the TCP connection is established.
-   */
-  private handleConnect(): void {
-
-    this.log.debug("Connected to " + this.host + ":" + this.port + ".");
-
-    // Defines a helper to start a plaintext connection by setting the state, initializing the connection timer, and sending the hello message.
-    const startPlaintext = (): void => {
-
-      this.connectionState = ConnectionState.TRYING_PLAINTEXT;
-      this.setConnectionTimer();
-      this.sendHello();
-    };
-
-    // Determine which protocol to use based on the current connection state.
-    switch(this.connectionState) {
-
-      case ConnectionState.TRYING_PLAINTEXT:
-
-        // If we are already trying plaintext, continue the plaintext workflow.
-        startPlaintext();
-
-        break;
-
-      case ConnectionState.TRYING_NOISE:
-
-        // If we are already trying Noise, continue with the Noise handshake.
-        this.initializeNoiseHandshake();
-
-        break;
-
-      default:
-
-        // Otherwise, this is the initial attempt, so decide based on encryption availability. If an encryption key and Noise are available, attempt encrypted first.
-        if(this.encryptionKey) {
-
-          this.log.debug("Encryption key provided, attempting encrypted connection first.");
-          this.connectionState = ConnectionState.TRYING_NOISE;
-          this.initializeNoiseHandshake();
-
-          break;
-        }
-
-        // If no key is available, fall back to a plaintext connection.
-        startPlaintext();
-
-        break;
-    }
-  }
-
-  /**
-   * Initialize the Noise handshake for encrypted connections. This sets up the Noise protocol state and sends the initial handshake message.
-   */
-  private initializeNoiseHandshake(): void {
-
-    // Ensure we have the required dependencies before proceeding.
-    if(!this.encryptionKey) {
-
-      throw new Error("Missing encryption key");
-    }
-
-    // Create the Noise handshake state.
-    this.noiseClient = createESPHomeHandshake({ logger: this.log, psk: Buffer.from(this.encryptionKey, "base64")});
-
-    this.handshakeState = Handshake.HELLO;
-    this.usingEncryption = true;
-
-    // Send empty frame to start the handshake.
-    this.writeNoiseFrame(Buffer.alloc(0));
-    this.setConnectionTimer();
-  }
-
-  /**
-   * Send a hello request to let ESPHome know who we are. This is the initial message sent to establish communication when unencrypted. When encrypted, this is sent
-   * after we've established a secure connection.
-   */
-  private sendHello(): void {
-
-    // Prepare the client information string for the hello message.
-    const clientInfo = Buffer.from(this.clientId, "utf8");
-
-    // Build the hello payload fields according to HelloRequest specification.
-    // Field 1: client_info (string) - Description of the client for debugging purposes.
-    // Field 2: api_version_major (uint32) - Major version for protocol compatibility.
-    // Field 3: api_version_minor (uint32) - Minor version for message compatibility.
-    this.frameAndSend(MessageType.HELLO_REQUEST, this.encodeProtoFields([
-
-      { fieldNumber: 1, value: clientInfo, wireType: WireType.LENGTH_DELIMITED },
-      { fieldNumber: 2, value: ProtocolVersion.MAJOR, wireType: WireType.VARINT },
-      { fieldNumber: 3, value: ProtocolVersion.MINOR, wireType: WireType.VARINT }
-    ]));
-  }
-
-  /**
-   * Handle the hello response from the ESPHome device and check protocol version compatibility.
+   * {@includeCode ./examples/showcase.ts#disconnect-and-cleanup}
    *
-   * @param payload - The hello response payload containing version information.
+   * @returns A promise that resolves when teardown completes (either after the response handshake or after the timeout falls through).
+   *
    */
-  private handleHelloResponse(payload: Buffer): void {
+  public async disconnectAsync(): Promise<void> {
 
-    // Decode the protobuf fields from the payload according to HelloResponse specification.
-    const fields = this.decodeProtobuf(payload);
+    // Mark the client explicitly closed and cancel any in-flight reconnect loop BEFORE tearing down, mirroring the synchronous {@link EspHomeClient.disconnect}. Without
+    // this, the `disconnectInternal` below calls `maybeScheduleReconnect`, and a non-permanent cause (the default `CONNECTION_DROPPED`) would silently reconnect about
+    // 500ms after the graceful teardown - defeating the consumer's intent. Setting it before the no-op fast-path return also cancels a reconnect loop that is
+    // mid-backoff (between attempts, with no active transport yet).
+    this.explicitlyClosed = true;
+    this.cancelReconnect();
 
-    // Extract the API version from the response.
-    // Field 1: api_version_major (uint32) - Major version for protocol compatibility.
-    // Field 2: api_version_minor (uint32) - Minor version for message compatibility.
-    const majorVersion = this.extractNumberField(fields, 1);
-    const minorVersion = this.extractNumberField(fields, 2);
+    const transport = this.transport;
 
-    // Extract optional fields from the response.
-    // Field 3: server_info (string) - Server description (since API 1.6).
-    // Field 4: name (string) - Device name (since API 1.7).
-    const serverInfo = this.extractStringField(fields, 3);
-    const deviceName = this.extractStringField(fields, 4);
+    if(!transport) {
 
-    // Log the device information if available.
-    if(serverInfo) {
-
-      this.log.debug("ESPHome server info: " + serverInfo);
+      // Nothing to disconnect; no-op fast path.
+      return;
     }
 
-    if(deviceName) {
+    // Fire the request. Send failures short-circuit the await via the catch handler below by resolving the correlator with the same `undefined` value the response
+    // path produces; the consumer is never blocked waiting for a response after a failed send.
+    void transport.send(MessageType.DISCONNECT_REQUEST, Buffer.alloc(0)).catch((err: unknown) => {
 
-      this.log.debug("ESPHome device name: " + deviceName);
-    }
+      this.log.debug("DISCONNECT_REQUEST send failed: " + (err instanceof Error ? err.message : String(err)) + "; falling through to immediate teardown.");
+      this.disconnectCorrelator.resolve("graceful", undefined);
+    });
 
-    // Check protocol version compatibility.
-    if((majorVersion !== undefined) && (minorVersion !== undefined)) {
+    try {
 
-      // Store the device API version for protocol compatibility checks.
-      this.deviceApiMinorVersion = minorVersion;
+      await this.disconnectCorrelator.await("graceful", { timeoutMs: this.gracefulDisconnectTimeoutMs });
 
-      this.log.debug("ESPHome API version: " + majorVersion + "." + minorVersion + " (client supports: " + ProtocolVersion.MAJOR + "." + ProtocolVersion.MINOR + ")");
+    } catch(err) {
 
-      // Check major version compatibility - mismatch causes immediate disconnect.
-      if(majorVersion !== ProtocolVersion.MAJOR) {
+      // The only expected rejection here is the timeout AbortError - any other rejection is a bug elsewhere and must surface.
+      if(!(err instanceof DOMException) || (err.name !== "AbortError")) {
 
-        this.log.error("Incompatible API major version. Device: " + majorVersion + ", Client: " + ProtocolVersion.MAJOR + ". Disconnecting.");
-        this._disconnect("Incompatible API version");
-
-        return;
+        throw err;
       }
 
-      // Check minor version compatibility - mismatch causes warning.
-      if(minorVersion !== ProtocolVersion.MINOR) {
-
-        // Server has newer minor version - some features may not be available.
-        if(minorVersion > ProtocolVersion.MINOR) {
-
-          this.log.debug("Device uses newer API minor version (" + minorVersion + " vs " + ProtocolVersion.MINOR + "). Some features may not be available.");
-
-        } else {
-
-          // Server has older minor version - we should be backwards compatible.
-          this.log.debug("Device uses older API minor version (" + minorVersion + " vs " + ProtocolVersion.MINOR + "). Using compatibility mode.");
-        }
-      }
-
-    } else {
-
-      this.log.warn("Device did not provide API version information.");
+      this.log.debug("Graceful disconnect timed out after " + String(this.gracefulDisconnectTimeoutMs) + " ms; tearing down anyway.");
     }
+
+    this.disconnectInternal(undefined, undefined);
   }
 
   /**
-   * Handle socket errors by logging appropriate messages and disconnecting.
+   * `Symbol.dispose` hook for `using` scopes. Aliased to {@link EspHomeClient.disconnect} - tears down synchronously, the device sees a TCP close, no
+   * `DISCONNECT_REQUEST` is sent. Suitable for crash paths and short-lived scripts.
    *
-   * @param err - The socket error that occurred.
+   * Usage:
+   *
+   * {@includeCode ./examples/showcase.ts#disconnect-and-cleanup}
+   *
    */
-  private handleSocketError(err: NodeJS.ErrnoException): void {
-
-    switch(err.code) {
-
-      case "ECONNREFUSED":
-
-        this.log.error("Connection refused.");
-
-        break;
-
-      case "ECONNRESET":
-
-        this.log.error("Connection reset.");
-
-        break;
-
-      case "EHOSTDOWN":
-      case "EHOSTUNREACH":
-
-        this.log.error("Device unreachable.");
-
-        break;
-
-      case "ETIMEDOUT":
-
-        this.log.error("Connection timed out.");
-
-        break;
-
-      default:
-
-        this.log.error("Socket error: " + err.code + " | " + err + ".");
-
-        break;
-    }
+  public [Symbol.dispose](): void {
 
     this.disconnect();
   }
 
   /**
-   * Handle socket closure. If we were trying encryption and the socket closed, it might be because the device doesn't support encryption.
-   */
-  private handleSocketClose(): void {
-
-    this.log.debug("Socket closed");
-    this.handshakeState = Handshake.CLOSED;
-
-    // Check if we need to fall back based on the connection state.
-    if(this.connectionState === ConnectionState.TRYING_NOISE) {
-
-      // We were trying encryption and the socket closed. This might mean the device doesn't support encryption, so let's try plaintext.
-      this.log.debug("Socket closed during encryption attempt. The device may not support encryption. Trying plaintext connection.");
-      this.fallbackToPlaintext(false);
-
-      return;
-    }
-
-    // Log an issue in our fallback to plaintext connectivity.
-    if((this.connectionState === ConnectionState.TRYING_PLAINTEXT) && this.encryptionKey && this.noiseClient) {
-
-      // We were trying plaintext and the socket closed. We're done.
-      this.log.debug("Socket closed during plaintext attempt after encryption fallback.");
-    }
-  }
-
-  /**
-   * Clean up the data listener if it exists.
-   */
-  private cleanupDataListener(): void {
-
-    if(this.dataListener && this.clientSocket) {
-
-      this.clientSocket.off("data", this.dataListener);
-      this.dataListener = null;
-    }
-  }
-
-  /**
-   * Handle incoming raw data, frame messages, and dispatch. This method accumulates data and processes complete frames.
+   * Symbol.asyncDispose hook for `await using` scopes. Performs the graceful disconnect handshake - sends DISCONNECT_REQUEST and awaits the matching response up to
+   * {@link EspHomeClientOptions.gracefulDisconnectTimeoutMs}, then tears down. Suitable for daemon-style consumers that want a clean shutdown.
    *
-   * @param chunk - The incoming data chunk from the socket.
+   * Usage:
+   *
+   * {@includeCode ./examples/showcase.ts#disconnect-and-cleanup}
+   *
    */
-  private handleData(chunk: Buffer): void {
+  public async [Symbol.asyncDispose](): Promise<void> {
 
-    // Append the new data chunk to our receive buffer.
-    this.recvBuffer = Buffer.concat([ this.recvBuffer, chunk ]);
-
-    // Check if we need to detect encryption based on the first byte. This only happens when no PSK was provided initially.
-    if((this.connectionState === ConnectionState.TRYING_PLAINTEXT) && (this.recvBuffer.length > 0) && !this.encryptionKey) {
-
-      // If the first byte is 0x01, indicating we have a Noise frame. This means the server requires encryption but no key was provided.
-      if(this.recvBuffer[0] === ProtocolType.NOISE) {
-
-        this.log.debug("Detected Noise frame indicator. The server requires encryption.");
-
-        // The server requires encryption but we don't have a key.
-        this._disconnect("encryption key missing");
-
-        return;
-      }
-    }
-
-    // Sanity check.
-    if(this.recvBuffer.length === 0) {
-
-      return;
-    }
-
-    // Process frames based on whether we're using encryption, based on our indicator byte.
-    const indicator = this.recvBuffer[0];
-
-    // If server requires Noise but we have no key, bail out early.
-    if((indicator === ProtocolType.NOISE) && !this.encryptionKey) {
-
-      this.log.debug("Detected Noise frame indicator. The server requires encryption.");
-      this._disconnect("encryption key missing");
-
-      return;
-    }
-
-    if(indicator === ProtocolType.NOISE) {
-
-      this.processNoiseFrames();
-
-      return;
-    }
-
-    if(indicator === ProtocolType.PLAINTEXT) {
-
-      this.processPlaintextFrames();
-
-      return;
-    }
-
-    // Unknown sentinel: drop buffer to resync.
-    this.log.error("Unknown frame indicator: 0x" + indicator.toString(16) + ".");
-    this.recvBuffer = Buffer.alloc(0);
+    // {@link EspHomeClient.disconnectAsync} owns the explicitly-closed marking and reconnect cancellation, so this hook is a thin delegate - one SSOT for the
+    // graceful-teardown path.
+    await this.disconnectAsync();
   }
 
   /**
-   * Process Noise protocol frames. This handles the Noise handshake and encrypted message processing.
+   * Evaluate the consumer-supplied retry predicate defensively. A predicate that throws is treated as "do not retry" (the conservative, fail-closed reading: a broken
+   * predicate is not a license to retry forever, and an unguarded throw would escape across the library's internal async boundaries - the reconnect loop or the receiver
+   * pump that drives disconnectInternal - as an unhandled rejection). Both consult sites (the scheduling decision and the loop) route through this single defensive call
+   * so the defense is one fact that cannot drift between them. Returns the predicate's verdict, or false if it threw or no reconnect config is present.
+   *
+   * @param error - The typed cause threaded to the predicate, identical to what the inline consult passed.
+   * @returns The predicate's verdict, or false when it threw or no reconnect config is present.
    */
-  private processNoiseFrames(): void {
-
-    let frame;
-    let message;
+  private safeShouldRetry(error: EspHomeError): boolean {
 
     try {
 
-      while((frame = this.extractNoiseFrame())) {
+      return this.reconnectConfig?.shouldRetry(error, this.reconnectAttempts) ?? false;
 
-        switch(this.handshakeState) {
+    } catch(predicateError) {
 
-          case Handshake.HELLO:
+      this.log.debug("Reconnect shouldRetry predicate threw; treating as a give-up. predicateError=" + (predicateError instanceof Error ? predicateError.message :
+        String(predicateError)));
 
-            this.handleNoiseHello(frame);
-
-            break;
-
-          case Handshake.HANDSHAKE:
-
-            this.handleNoiseHandshake(frame);
-
-            break;
-
-          case Handshake.READY:
-
-            // Ensure we have a decryptor before attempting to decrypt.
-            if(!this.noiseClient?.receiveCipher) {
-
-              throw new Error("Decryptor not available");
-            }
-
-            // Decrypt and process the message.
-            message = this.deserializeNoiseMessage(Buffer.from(this.noiseClient.receiveCipher.DecryptWithAd(Buffer.alloc(0), frame)));
-
-            if(message) {
-
-              this.handleMessage(message.type, message.payload);
-            }
-
-            break;
-        }
-      }
-    } catch(err) {
-
-      const isPlaintext = this.recvBuffer[0] === ProtocolType.PLAINTEXT;
-      const noiseFailed = (this.connectionState === ConnectionState.TRYING_NOISE) && (this.handshakeState !== Handshake.READY);
-
-      // If Noise was expected but failed and it's not plaintext, disconnect as encryption key is invalid.
-      if(!isPlaintext && noiseFailed) {
-
-        this._disconnect("encryption key invalid");
-
-        return;
-      }
-
-      // If it's not plaintext and another error occurred, just log and exit.
-      if(!isPlaintext) {
-
-        this.log.error("Error processing Noise frames: " + err + ".");
-
-        return;
-      }
-
-      // If Noise failed but plaintext is possible, fall back to plaintext connection.
-      if(noiseFailed) {
-
-        this.log.debug("Noise handshake failed. Attempting to fall back to plaintext connection.");
-        this.fallbackToPlaintext(true);
-
-        return;
-      }
-
-      // Otherwise, just disconnect.
-      this.disconnect();
+      return false;
     }
   }
 
   /**
-   * Extract a Noise frame from the receive buffer. Noise frames have a specific format: [0x01][size_high][size_low][data...].
+   * Schedule a reconnect attempt unless the consumer explicitly closed, reconnect is disabled, the cause is permanent, or the retry budget is exhausted.
    *
-   * @returns The frame data or null if incomplete.
+   * @param cause - The typed error from the most recent disconnect path, when known.
    */
-  private extractNoiseFrame(): Nullable<Buffer> {
+  private maybeScheduleReconnect(cause: EspHomeError | undefined): void {
 
-    if(this.recvBuffer.length < 3) {
-
-      return null;
-    }
-
-    const indicator = this.recvBuffer[0];
-
-    if(indicator !== ProtocolType.NOISE) {
-
-      throw new Error("Bad format. Expected 0x01 indicator, got 0x" + indicator.toString(16));
-    }
-
-    // Read frame size (big-endian).
-    const frameSize = (this.recvBuffer[1] << 8) | this.recvBuffer[2];
-    const frameEnd = 3 + frameSize;
-
-    if(this.recvBuffer.length < frameEnd) {
-
-      return null;
-    }
-
-    // Extract the frame.
-    const frame = this.recvBuffer.subarray(3, frameEnd);
-
-    // Remove the processed frame from the buffer.
-    this.recvBuffer = this.recvBuffer.subarray(frameEnd);
-
-    return frame;
-  }
-
-  /**
-   * Handle the Noise hello response. This processes the server's protocol selection and validates the server name if configured.
-   *
-   * @param serverHello - The server hello data.
-   */
-  private handleNoiseHello(serverHello: Buffer): void {
-
-    const chosenProto = serverHello[0];
-
-    if(chosenProto !== 1) {
-
-      throw new Error("Unknown protocol selected by server: " + chosenProto);
-    }
-
-    // Validate server name if expected.
-    if(this.expectedServerName) {
-
-      const serverNameEnd = serverHello.indexOf(0, 1);
-
-      if(serverNameEnd > 1) {
-
-        const serverName = serverHello.subarray(1, serverNameEnd).toString();
-
-        if(this.expectedServerName !== serverName) {
-
-          throw new Error("Server name mismatch, expected " + this.expectedServerName + ", got " + serverName + ".");
-        }
-      }
-    }
-
-    // Proceed to handshake phase.
-    this.handshakeState = Handshake.HANDSHAKE;
-
-    // Send the Noise handshake message.
-    if(!this.noiseClient) {
-
-      throw new Error("Noise client not initialized.");
-    }
-
-    const handshakeMessage = this.noiseClient.writeMessage();
-
-    this.writeNoiseFrame(Buffer.concat([ Buffer.from([0]), handshakeMessage ]));
-    this.setConnectionTimer();
-  }
-
-  /**
-   * Handle the Noise handshake response. This completes the Noise handshake and establishes the encrypted channel.
-   *
-   * @param serverHandshake - The server handshake data.
-   */
-  private handleNoiseHandshake(serverHandshake: Buffer): void {
-
-    const header = serverHandshake[0];
-    const message = serverHandshake.subarray(1);
-
-    if(header !== 0) {
-
-      throw new Error("Handshake failure: " + message.toString());
-    }
-
-    // Ensure we have a noise client before proceeding.
-    if(!this.noiseClient) {
-
-      throw new Error("Noise client not initialized");
-    }
-
-    // Process the handshake message.
-    this.noiseClient.readMessage(message);
-
-    // Update state to ready.
-    this.handshakeState = Handshake.READY;
-    this.connectionState = ConnectionState.CONNECTED;
-    this.clearConnectionTimer();
-
-    this.log.debug("Noise handshake complete, encryption enabled.");
-
-    // Continue with our hello.
-    this.sendHello();
-  }
-
-  /**
-   * Write a Noise protocol frame. Frames are sent with a specific header format for the Noise protocol.
-   *
-   * @param frame - The frame data to send.
-   */
-  private writeNoiseFrame(frame: Buffer): void {
-
-    if(!this.clientSocket || this.clientSocket.destroyed) {
-
-      this.log.debug("Attempted to write to a closed socket.");
+    if(!this.reconnectConfig || this.explicitlyClosed || this.reconnectInProgress) {
 
       return;
     }
 
-    const frameData = frame;
-    const frameLength = frameData.length;
+    const decisionError = cause ?? new ConnectionError("Connection dropped.", "CONNECTION_DROPPED");
 
-    // Create the header: [0x01][size_high][size_low].
-    const header = Buffer.from([ ProtocolType.NOISE, (frameLength >> 8) & 0xFF, frameLength & 0xFF ]);
+    if(!this.safeShouldRetry(decisionError)) {
 
-    // Send the complete frame.
-    this.clientSocket.write(Buffer.concat([ header, frameData ]));
-  }
+      this.log.debug("Reconnect skipped per shouldRetry predicate; cause=" + decisionError.name);
 
-  /**
-   * Serialize a message for Noise protocol. This creates the message format used within encrypted frames.
-   *
-   * @param type - The message type.
-   * @param payload - The message payload.
-   *
-   * @returns The serialized message buffer.
-   */
-  private serializeNoiseMessage(type: MessageType, payload: Buffer): Buffer {
-
-    const messageId = type;
-    const messageLength = payload.length;
-
-    // Create the message format: [id_high][id_low][len_high][len_low][payload].
-    const buffer = Buffer.concat([ Buffer.from([ (messageId >> 8) & 0xFF, messageId & 0xFF, (messageLength >> 8) & 0xFF, messageLength & 0xFF ]), payload ]);
-
-    return buffer;
-  }
-
-  /**
-   * Deserialize a Noise protocol message. This extracts the message type and payload from the decrypted data.
-   *
-   * @param buffer - The buffer to deserialize.
-   *
-   * @returns The message type and payload, or null if invalid.
-   */
-  private deserializeNoiseMessage(buffer: Buffer): Nullable<{ type: number; payload: Buffer }> {
-
-    if(buffer.length < 4) {
-
-      return null;
+      return;
     }
 
-    const messageId = (buffer[0] << 8) | buffer[1];
-    const messageLength = (buffer[2] << 8) | buffer[3];
+    this.reconnectInProgress = true;
+    this.reconnectController = new AbortController();
 
-    if(buffer.length < 4 + messageLength) {
-
-      return null;
-    }
-
-    const payload = buffer.subarray(4, 4 + messageLength);
-
-    return { payload, type: messageId };
+    this.reconnectLoopPromise = this.runReconnectLoop(this.reconnectController.signal);
   }
 
   /**
-   * Process plaintext frames during the handshake phase. This handles unencrypted message processing for devices that don't require encryption.
+   * Cancel any in-flight reconnect loop. Safe to call more than once.
    */
-  private processPlaintextFrames(): void {
+  private cancelReconnect(): void {
 
-    while(this.recvBuffer.length >= MIN_FRAME_SIZE) {
-
-      const indicator = this.recvBuffer[0];
-
-      // If a Noise frame shows up here, redirect instead of erroring.
-      if((indicator === ProtocolType.NOISE) && this.encryptionKey) {
-
-        this.log.debug("Plaintext parser saw Noise indicator; redirecting to Noise processing.");
-        this.processNoiseFrames();
-
-        return;
-      }
-
-      // Verify the frame starts with the expected sentinel byte.
-      if(indicator !== ProtocolType.PLAINTEXT) {
-
-        this.log.error("Framing error: missing 0x00.");
-        this.recvBuffer = Buffer.alloc(0);
-
-        return;
-      }
-
-      // Read the message length as a varint.
-      const [ length, lenBytes ] = this.readVarint(this.recvBuffer, 1);
-
-      // Read the message type as a varint.
-      const [ type, typeBytes ] = this.readVarint(this.recvBuffer, 1 + lenBytes);
-
-      // Calculate the total header size.
-      const headerSize = 1 + lenBytes + typeBytes;
-
-      // Check if we have received the complete message payload.
-      if(this.recvBuffer.length < (headerSize + length)) {
-
-        break;
-      }
-
-      // Extract the message payload.
-      const payload = this.recvBuffer.subarray(headerSize, headerSize + length);
-
-      // Process the complete message.
-      this.handleMessage(type, payload);
-
-      // Remove the processed message from the receive buffer.
-      this.recvBuffer = this.recvBuffer.subarray(headerSize + length);
-    }
+    this.reconnectController?.abort();
+    this.reconnectController = null;
+    this.reconnectInProgress = false;
   }
 
   /**
-   * Dispatch based on message type. This is the main message router that handles all protocol messages.
-   *
-   * @param type - The message type identifier.
-   * @param payload - The message payload data.
+   * Drive the reconnect loop until success, retry budget exhausted, or signal abort. Each iteration applies the configured backoff with jitter and calls `connect()`;
+   * success transitions health to `connected` and stops the loop, failure re-enters the loop after another backoff.
    */
-  private handleMessage(type: number, payload: Buffer): void {
+  private async runReconnectLoop(signal: AbortSignal): Promise<void> {
 
-    let epoch, nowBuf;
+    if(!this.reconnectConfig) {
 
-    // Emit a generic message event for all message types.
-    this.emit("message", { payload, type } as MessageEventData);
+      return;
+    }
 
-    // Handle specific message types.
-    switch(type) {
+    while(!signal.aborted && !this.explicitlyClosed) {
 
-      case MessageType.HELLO_RESPONSE:
+      this.reconnectAttempts++;
+      this.metrics?.increment("reconnect.attempts");
 
-        this.clearConnectionTimer();
+      const config = this.reconnectConfig;
+      const delayMs = nextBackoffDelay(this.reconnectAttempts, config);
 
-        // Process the hello response to check API version compatibility.
-        this.handleHelloResponse(payload);
+      // Construct the down "reconnecting" record explicitly, carrying only the base diagnostics forward. A down record drops the connect epoch by construction: spreading
+      // a live record's `connectedAtMs` onto a variant whose `connectedAtMs?: never` would not compile, which is the union's enforcement working. The explicit build also
+      // stays correct if the state machine later sets RECONNECTING from a live record.
+      this.healthRecord = {
 
-        // We got a plaintext hello response, indicate we are connected and we're done.
-        if(!this.usingEncryption) {
+        consecutiveStalls: this.healthRecord.consecutiveStalls,
+        encrypted: false,
+        lastInboundActivityAt: this.healthRecord.lastInboundActivityAt,
+        ...((this.healthRecord.lastPingRttMs !== undefined) && { lastPingRttMs: this.healthRecord.lastPingRttMs }),
+        state: HealthState.RECONNECTING
+      };
+      this.emit("healthChange", this.healthRecord);
 
-          this.connectionState = ConnectionState.CONNECTED;
-          this.usingEncryption = false;
+      try {
 
-          // Log if we have an encryption key but the device doesn't use it.
-          if(this.encryptionKey) {
+        config.onAttempt?.(this.reconnectAttempts, delayMs);
+        this.log.debug("Reconnect attempt " + String(this.reconnectAttempts) + " in " + String(delayMs) + " ms.");
 
-            this.log.debug("Device responded to plaintext hello. The device does not support encryption, using plaintext connection.");
-          }
-        }
+        // eslint-disable-next-line no-await-in-loop -- Reconnect loop is intrinsically sequential: wait the backoff, then try to connect, then maybe loop.
+        await reconnectDelay(delayMs, signal);
 
-        // ESPHome API 1.11 (introduced in ESPHome 2025.8.0) made the CONNECT_REQUEST optional for passwordless connections. For older versions, we must send
-        // CONNECT_REQUEST and wait for CONNECT_RESPONSE before proceeding to entity enumeration.
-        if(this.deviceApiMinorVersion < 11) {
-
-          // For API versions before 1.11, we must complete the legacy handshake by sending CONNECT_REQUEST.
-          this.log.debug("Using legacy handshake for API version 1." + this.deviceApiMinorVersion + ". Sending CONNECT_REQUEST.");
-          this.frameAndSend(MessageType.CONNECT_REQUEST, Buffer.alloc(0));
+        // Either field can flip async (signal abort, disconnect()) during the awaited delay above, so the recheck is required; TS's narrowing from the
+        // while-condition doesn't account for that.
+        // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
+        if(signal.aborted || this.explicitlyClosed) {
 
           break;
         }
 
-        // For API 1.11+, authentication messages are only used when password authentication is enabled. For unauthenticated connections, we skip directly to entity
-        // enumeration and device info after the HELLO handshake.
-        this.log.debug("Using modern handshake for API version 1." + this.deviceApiMinorVersion + ". Skipping CONNECT_REQUEST.");
-        this.emit("connect", this.usingEncryption);
+        // eslint-disable-next-line no-await-in-loop -- Connect attempt is sequenced after the backoff; parallelizing would defeat the purpose of the loop.
+        await this.connectInternal({ signal });
 
-        // Start entity enumeration immediately for unauthenticated connections.
-        this.frameAndSend(MessageType.LIST_ENTITIES_REQUEST, Buffer.alloc(0));
+        // Success path. The connect() flow itself stamped health/lifecycle; we just clear the loop state.
+        this.reconnectInProgress = false;
+        this.reconnectController = null;
+        this.reconnectLoopPromise = null;
 
-        // Query device information.
-        this.frameAndSend(MessageType.DEVICE_INFO_REQUEST, Buffer.alloc(0));
+        return;
 
-        break;
+      } catch(err) {
 
-      case MessageType.AUTHENTICATION_RESPONSE:
-      case MessageType.CONNECT_RESPONSE:
+        // Either field can flip async during the awaited operations above; TS's narrowing from the while-condition doesn't account for that.
+        // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
+        if(signal.aborted || this.explicitlyClosed) {
 
-        // Emit connect event for our clients to indicate we are ready.
-        this.emit("connect", this.usingEncryption);
-
-        // Start entity enumeration after successful connection.
-        this.frameAndSend(MessageType.LIST_ENTITIES_REQUEST, Buffer.alloc(0));
-
-        // Query device information once we're connected.
-        this.frameAndSend(MessageType.DEVICE_INFO_REQUEST, Buffer.alloc(0));
-
-        break;
-
-      case MessageType.DISCONNECT_REQUEST:
-
-        // Respond to disconnect request and then disconnect.
-        this.frameAndSend(MessageType.DISCONNECT_RESPONSE, Buffer.alloc(0));
-
-        this.disconnect();
-
-        break;
-
-      case MessageType.DISCONNECT_RESPONSE:
-
-        // The device has acknowledged our disconnect request.
-        this.disconnect();
-
-        break;
-
-      case MessageType.DEVICE_INFO_RESPONSE:
-
-        // Process the device information response.
-        this.handleDeviceInfoResponse(payload);
-
-        // Emit the device info event.
-        this.emit("deviceInfo", this.remoteDeviceInfo);
-
-        break;
-
-      case MessageType.LIST_ENTITIES_DONE_RESPONSE:
-
-        // Entity enumeration is complete.
-        // Emit the complete list of discovered entities.
-        this.emit("entities", this.discoveredEntities);
-
-        // Emit the complete list of discovered services.
-        if(this.discoveredServices.length > 0) {
-
-          this.emit("services", this.discoveredServices);
+          break;
         }
 
-        // Now that we know all the entities we have available, subscribe to state updates.
-        this.frameAndSend(MessageType.SUBSCRIBE_STATES_REQUEST, Buffer.alloc(0));
+        const espError = (err instanceof EspHomeError) ? err : new ConnectionError("Reconnect attempt failed.", "RECONNECT_FAILED",
+          { cause: err });
 
-        break;
+        // Evaluate the consumer-supplied retry predicate defensively via the shared safeShouldRetry helper. The call is the only remaining throw site inside the catch
+        // and there is no `finally`, so a predicate that throws would otherwise escape the loop entirely - skipping the loop-end cleanup, leaving `reconnectInProgress`
+        // true and health frozen at RECONNECTING, and leaving the floated loop promise rejecting unhandled. The helper treats a throwing predicate as a give-up (the
+        // conservative, fail-closed reading: a broken predicate is not a license to retry forever) and we route it through the same terminal disconnect as an explicit
+        // `false` return. With the helper's catch, no throw site remains here, so the loop always reaches its cleanup below.
+        const keepRetrying = this.safeShouldRetry(espError);
 
-      case MessageType.PING_REQUEST:
+        if(!keepRetrying) {
 
-        this.log.debug("Received PingRequest, replying");
+          this.log.debug("Reconnect loop terminated by shouldRetry predicate after " + String(this.reconnectAttempts) + " attempts; cause=" + espError.name);
 
-        // Respond to ping requests to keep the connection alive.
-        this.frameAndSend(MessageType.PING_RESPONSE, Buffer.alloc(0));
+          // The supervisor is giving up: surface the terminal disconnect with its typed cause and unfreeze health from RECONNECTING to disconnected. This is the same
+          // canonical surface the run-phase disconnect emits, shared via emitDisconnected.
+          this.emitDisconnected(espError.message, espError);
 
-        // Emit heartbeat event for connection monitoring.
-        this.emit("heartbeat");
-
-        break;
-
-      case MessageType.PING_RESPONSE:
-
-        // Emit heartbeat event for connection monitoring.
-        this.emit("heartbeat");
-
-        break;
-
-      case MessageType.GET_TIME_REQUEST:
-
-        // We got a time‐sync request from the device; reply with our current epoch.
-        this.log.debug("Received GetTimeRequest, replying with current epoch time");
-
-        // Prepare a four-byte little‐endian buffer.
-        nowBuf = Buffer.alloc(FIXED32_SIZE);
-
-        // Calculate our time in seconds and encode it in our buffer.
-        nowBuf.writeUInt32LE(Math.floor(Date.now() / 1000), 0);
-
-        // Build the protobuf field: field 1, fixed32 wire type, then encode and send the message.
-        this.frameAndSend(MessageType.GET_TIME_RESPONSE, this.encodeProtoFields([{ fieldNumber: 1, value: nowBuf, wireType: WireType.FIXED32 }]));
-
-        break;
-
-      case MessageType.GET_TIME_RESPONSE:
-
-        // Decode the fields in the GetTimeResponse payload and extract the epoch_seconds fixed32 field (field 1).
-        epoch = this.extractFixed32Field(this.decodeProtobuf(payload), 1);
-
-        if(epoch !== undefined) {
-
-          // Emit a `timeSync` event carrying the returned epoch seconds.
-          this.emit("timeSync", epoch);
-
-          this.log.debug("Received GetTimeResponse: epoch seconds", epoch);
+          break;
         }
 
-        break;
+        if((config.maxAttempts !== undefined) && (this.reconnectAttempts >= config.maxAttempts)) {
 
-      case MessageType.SUBSCRIBE_LOGS_RESPONSE:
+          this.log.debug("Reconnect loop exhausted maxAttempts (" + String(config.maxAttempts) + "); giving up.");
 
-        // Process the log message response from the device.
-        this.handleLogResponse(payload);
+          // The retry budget is exhausted: surface the terminal disconnect with the last attempt's typed cause and unfreeze health from RECONNECTING to disconnected.
+          this.emitDisconnected(espError.message, espError);
 
-        break;
-
-      case MessageType.CAMERA_IMAGE_RESPONSE:
-
-        // Process camera image response from the device. Camera images are sent as binary data with metadata.
-        this.handleCameraImageResponse(payload);
-
-        break;
-
-      case MessageType.VOICE_ASSISTANT_REQUEST:
-
-        // Handle voice assistant request from the device.
-        this.handleVoiceAssistantRequest(payload);
-
-        break;
-
-      case MessageType.VOICE_ASSISTANT_ANNOUNCE_FINISHED:
-
-        // Handle voice assistant announce finished response.
-        this.handleVoiceAssistantAnnounceFinished(payload);
-
-        break;
-
-      case MessageType.VOICE_ASSISTANT_CONFIGURATION_RESPONSE:
-
-        // Handle voice assistant configuration response.
-        this.handleVoiceAssistantConfigurationResponse(payload);
-
-        break;
-
-      case MessageType.VOICE_ASSISTANT_AUDIO:
-
-        // Handle voice assistant audio data.
-        this.handleVoiceAssistantAudio(payload);
-
-        break;
-
-      case MessageType.HOMEASSISTANT_SERVICE_RESPONSE:
-
-        // Handle Home Assistant service call from the device.
-        this.handleHomeassistantServiceResponse(payload);
-
-        break;
-
-      case MessageType.SUBSCRIBE_HOME_ASSISTANT_STATE_RESPONSE:
-
-        // Handle Home Assistant state request from the device.
-        this.handleSubscribeHomeAssistantStateResponse(payload);
-
-        break;
-
-      case MessageType.NOISE_ENCRYPTION_SET_KEY_RESPONSE:
-
-        // Process the noise encryption key set response.
-        this.handleNoiseKeySetResponse(payload);
-
-        break;
-
-      default:
-
-        // Check if this is a list entities response.
-        if(this.isListEntitiesResponse(type)) {
-
-          this.handleListEntity(type, payload);
-
-          return;
+          break;
         }
 
-        // Check if this is a state update.
-        if(this.isStateUpdate(type)) {
-
-          this.handleTelemetry(type, payload);
-
-          return;
-        }
-
-        // Unhandled message type.
-        this.log.warn("Unhandled message type: " + type + " | payload: " + payload.toString("hex") + ".");
-
-        break;
+        this.log.debug("Reconnect attempt " + String(this.reconnectAttempts) + " failed: " + espError.name + ": " + espError.message);
+      }
     }
+
+    this.reconnectInProgress = false;
+    this.reconnectController = null;
+    this.reconnectLoopPromise = null;
+  }
+
+  /**
+   * Compose a user signal with an internal timeout. Either trigger aborts the returned signal. When `userSignal` is undefined, only the timeout applies.
+   */
+  private combineSignals(userSignal: AbortSignal | undefined, timeoutMs: number): AbortSignal {
+
+    if(!userSignal) {
+
+      return AbortSignal.timeout(timeoutMs);
+    }
+
+    return AbortSignal.any([ userSignal, AbortSignal.timeout(timeoutMs) ]);
   }
 
   /**
@@ -2532,11 +2028,9 @@ export class EspHomeClient extends EventEmitter {
    */
   private handleLogResponse(payload: Buffer): void {
 
-    // Decode the protobuf fields from the payload.
+    // Field numbers below are dictated by api.proto's SubscribeLogsResponse: 1=level, 3=message, 4=send_failed.
     const fields = this.decodeProtobuf(payload);
-
-    // Extract the log level from field 1. This indicates the severity of the log message.
-    const level = this.extractNumberField(fields, 1);
+    const level = extractNumberField(fields, 1);
 
     if(level === undefined) {
 
@@ -2545,8 +2039,7 @@ export class EspHomeClient extends EventEmitter {
       return;
     }
 
-    // Extract the message content from field 3. This is the actual log text from the device.
-    const message = this.extractStringField(fields, 3);
+    const message = extractStringField(fields, 3);
 
     if(message === undefined) {
 
@@ -2555,36 +2048,33 @@ export class EspHomeClient extends EventEmitter {
       return;
     }
 
-    // Extract the optional send_failed flag from field 4. This indicates if there was an issue sending the log.
-    const sendFailed = this.extractNumberField(fields, 4) === 1;
+    const sendFailed = extractNumberField(fields, 4) === 1;
 
-    // Create the log event data structure with all the extracted information.
+    // Build the log event data via conditional spread so the optional sendFailed field is omitted entirely when false (rather than carrying an explicit `undefined`,
+    // which `exactOptionalPropertyTypes` correctly rejects as semantically distinct from absence).
     const logData: LogEventData = {
 
       level: level as LogLevel,
       message,
-      sendFailed: sendFailed || undefined
+      ...(sendFailed && { sendFailed: true as const })
     };
 
-    // Emit the log event for consumers to handle.
-    this.emit("log", logData);
-
-    // Also log it through our internal logger at the appropriate level for debugging.
-    this.log.debug("ESPHome Log [" + LogLevel[level] + "]: " + message);
+    // Hand off to the manager. Fans the event out to every active `client.on("log", ...)` listener, every open `client.logs(...)` iterator, and the diagnostic debug
+    // log line emitted alongside every received log frame.
+    this.logManager.dispatch(logData);
   }
 
   /**
-   * Handle camera image response from the ESPHome device. This processes incoming camera images and reassembles multi-packet images before emitting.
+   * Handle one inbound `CameraImageResponse` chunk. The host's job is now narrow: decode the entity-key, image bytes, and `done` flag, resolve the entity-key to the
+   * cached {@link CameraApi} instance (constructing one lazily if no consumer has called {@link camera} yet so backwards-compat bus subscribers still observe assembled
+   * images), then delegate to {@link CameraApi.acceptChunk}. The sub-API owns reassembly and emits the assembled `camera` event.
    *
-   * @param payload - The camera image response payload containing the image data and metadata.
+   * @param payload - The camera image response payload.
    */
   private handleCameraImageResponse(payload: Buffer): void {
 
-    // Decode the protobuf fields from the payload according to CameraImageResponse specification.
     const fields = this.decodeProtobuf(payload);
-
-    // Extract the entity key from field 1 (fixed32 key).
-    const key = this.extractEntityKey(fields, 1);
+    const key = extractEntityKey(fields, 1);
 
     if(key === undefined) {
 
@@ -2593,11 +2083,7 @@ export class EspHomeClient extends EventEmitter {
       return;
     }
 
-    // Look up the entity information using the key.
-    const name = this.entityNames.get(key) ?? ("unknown(" + key + ")");
-
-    // Extract the image data from field 2 (bytes data). This is a chunk of raw image bytes in the format configured on the device.
-    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
+    const name = this.registry.byKey(key)?.name ?? ("unknown(" + String(key) + ")");
     const imageData = fields[2]?.[0];
 
     if(!Buffer.isBuffer(imageData)) {
@@ -2607,43 +2093,70 @@ export class EspHomeClient extends EventEmitter {
       return;
     }
 
-    // Extract the done flag from field 3 (bool done).
-    // This indicates if this is the last packet for the current image.
-    const done = this.extractNumberField(fields, 3) === 1;
+    const done = extractNumberField(fields, 3) === 1;
+    const cameraApi = this.cameraApiForKey(key);
 
-    // Note: field 4 (device_id) is optional and not commonly used in single-device setups.
+    if(!cameraApi) {
 
-    // Get or create the buffer array for this camera.
-    let buffers = this.cameraImageBuffers.get(key);
+      // We received a CAMERA_IMAGE_RESPONSE for a key that is not registered as a camera entity. Drop the chunk; the run-phase decoder already logged the discovery
+      // skew when entity discovery completed.
+      this.log.warn("Received camera image for unknown entity key: " + String(key) + ".");
 
-    if(!buffers) {
-
-      buffers = [];
-      this.cameraImageBuffers.set(key, buffers);
+      return;
     }
 
-    // Add this packet's data to the buffer.
-    buffers.push(imageData);
+    cameraApi.acceptChunk(imageData, done, name, key);
+  }
 
-    // If this is the last packet, concatenate all buffers and emit the complete image.
-    if(done) {
+  /**
+   * Resolve an entity-key to its cached {@link CameraApi} instance, constructing one lazily on first chunk so consumers who only subscribe to the bus event (and
+   * never call `client.camera(id)` directly) still observe assembled images. Returns `null` when the key does not correspond to a discovered camera entity.
+   *
+   * @param key - The wire-side entity key from a `CameraImageResponse`.
+   * @returns The matching {@link CameraApi} instance, or `null` when no camera entity is registered under that key.
+   */
+  private cameraApiForKey(key: number): Nullable<CameraApi> {
 
-      // Concatenate all buffered packets into a single image.
-      const completeImage = Buffer.concat(buffers);
+    const entity = this.registry.byKey(key);
 
-      // Clear the buffer for this camera.
-      this.cameraImageBuffers.delete(key);
+    if(entity?.type !== "camera") {
 
-      // Emit the complete camera image event for consumers to handle.
-      this.emit("camera", { image: completeImage, name });
-
-      this.log.debug("Received complete camera image from " + name + " | size: " + completeImage.length + " bytes");
-
-    } else {
-
-      // Still receiving packets for this image.
-      this.log.debug("Buffering camera image packet from " + name + " | packet size: " + imageData.length + " bytes | total packets: " + buffers.length);
+      return null;
     }
+
+    return this.camera(mintEntityId("camera", entity.objectId));
+  }
+
+  /**
+   * Decode an inbound `EXECUTE_SERVICE_RESPONSE` and emit `serviceCallResult`. Devices opt into this acknowledgement by setting `USE_API_USER_DEFINED_ACTION_RESPONSES`
+   * in firmware; older devices treat `executeService` as fire-and-forget and never produce this message.
+   *
+   * @param payload - The response payload bytes.
+   */
+  private handleExecuteServiceResponse(payload: Buffer): void {
+
+    const fields = this.decodeProtobuf(payload);
+    const callId = extractNumberField(fields, 1);
+    const success = extractNumberField(fields, 2) === 1;
+    const errorMessage = extractStringField(fields, 3);
+    const responseData = fields[4]?.[0];
+
+    if(callId === undefined) {
+
+      this.log.warn("EXECUTE_SERVICE_RESPONSE missing required call_id field; dropping.");
+
+      return;
+    }
+
+    const result: ServiceCallResult = {
+
+      callId,
+      success,
+      ...((errorMessage !== undefined) && { errorMessage }),
+      ...(Buffer.isBuffer(responseData) && { responseData })
+    };
+
+    this.emit("serviceCallResult", result);
   }
 
   /**
@@ -2653,305 +2166,50 @@ export class EspHomeClient extends EventEmitter {
    */
   private handleNoiseKeySetResponse(payload: Buffer): void {
 
-    // Decode the protobuf fields from the payload.
+    // Field 1 is `success` per api.proto's NoiseEncryptionSetKeyResponse.
     const fields = this.decodeProtobuf(payload);
-
-    // Extract the success flag from field 1.
-    const success = this.extractNumberField(fields, 1) === 1;
+    const success = extractNumberField(fields, 1) === 1;
 
     this.log.debug("Noise encryption key set response: " + (success ? "success" : "failed"));
-
-    // Emit the noise key set event.
     this.emit("noiseKeySet", success);
 
-    // Resolve the promise if there's a pending resolver.
-    if(this.noiseKeySetResolver) {
-
-      this.noiseKeySetResolver(success);
-      this.noiseKeySetResolver = null;
-    }
-  }
-
-  /**
-   * Handle voice assistant request from the ESPHome device.
-   *
-   * @param payload - The request payload containing voice assistant settings.
-   */
-  private handleVoiceAssistantRequest(payload: Buffer): void {
-
-    // Decode the protobuf fields from the payload according to VoiceAssistantRequest specification.
-    const fields = this.decodeProtobuf(payload);
-
-    // Extract the start flag from field 1.
-    const start = this.extractNumberField(fields, 1) === 1;
-
-    // Extract the conversation ID from field 2.
-    const conversationId = this.extractStringField(fields, 2);
-
-    // Extract the flags from field 3.
-    const flags = this.extractNumberField(fields, 3) ?? 0;
-
-    // Extract audio settings from field 4 (nested message).
-    let audioSettings: VoiceAssistantAudioSettings | undefined;
-
-    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
-    const audioSettingsBuffer = fields[4]?.[0];
-
-    if(Buffer.isBuffer(audioSettingsBuffer)) {
-
-      const audioFields = this.decodeProtobuf(audioSettingsBuffer);
-
-      audioSettings = {
-
-        autoGain: this.extractNumberField(audioFields, 2) ?? 0,
-        noiseSuppressionLevel: this.extractNumberField(audioFields, 1) ?? 0,
-        volumeMultiplier: this.extractTelemetryValue(audioFields, 3) as number || 1.0
-      };
-    }
-
-    // Extract wake word phrase from field 5.
-    const wakeWordPhrase = this.extractStringField(fields, 5);
-
-    // Emit the voice assistant request event.
-    this.emit("voiceAssistantRequest", {
-
-      audioSettings,
-      conversationId,
-      flags,
-      start,
-      wakeWordPhrase
-    });
-
-    this.log.debug("Voice assistant request - start: " + start + " | conversation: " + conversationId + " | flags: " + flags);
-  }
-
-  /**
-   * Handle voice assistant announce finished response from the ESPHome device.
-   *
-   * @param payload - The response payload containing success status.
-   */
-  private handleVoiceAssistantAnnounceFinished(payload: Buffer): void {
-
-    // Decode the protobuf fields from the payload.
-    const fields = this.decodeProtobuf(payload);
-
-    // Extract the success flag from field 1.
-    const success = this.extractNumberField(fields, 1) === 1;
-
-    // Emit the announce finished event.
-    this.emit("voiceAssistantAnnounceFinished", success);
-
-    this.log.debug("Voice assistant announce finished - success: " + success);
-  }
-
-  /**
-   * Handle voice assistant configuration response from the ESPHome device.
-   *
-   * @param payload - The response payload containing configuration data.
-   */
-  private handleVoiceAssistantConfigurationResponse(payload: Buffer): void {
-
-    // Decode the protobuf fields from the payload according to VoiceAssistantConfigurationResponse.
-    const fields = this.decodeProtobuf(payload);
-
-    // Extract available wake words from field 1 (repeated VoiceAssistantWakeWord).
-    const availableWakeWords: VoiceAssistantWakeWord[] = [];
-    const wakeWordFields = fields[1];
-
-    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
-    if(wakeWordFields && Array.isArray(wakeWordFields)) {
-
-      for(const wakeWordBuffer of wakeWordFields) {
-
-        if(Buffer.isBuffer(wakeWordBuffer)) {
-
-          const wakeWordMsg = this.decodeProtobuf(wakeWordBuffer);
-
-          // Extract wake word fields.
-          const id = this.extractStringField(wakeWordMsg, 1);
-          const wakeWord = this.extractStringField(wakeWordMsg, 2);
-
-          // Extract trained languages from field 3 (repeated string).
-          const trainedLanguages: string[] = [];
-          const langFields = wakeWordMsg[3];
-
-          // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
-          if(langFields && Array.isArray(langFields)) {
-
-            for(const langBuffer of langFields) {
-
-              if(Buffer.isBuffer(langBuffer)) {
-
-                trainedLanguages.push(langBuffer.toString("utf8"));
-              }
-            }
-          }
-
-          if(id && wakeWord) {
-
-            availableWakeWords.push({ id, trainedLanguages, wakeWord });
-          }
-        }
-      }
-    }
-
-    // Extract active wake words from field 2 (repeated string).
-    const activeWakeWords: string[] = [];
-    const activeFields = fields[2];
-
-    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
-    if(activeFields && Array.isArray(activeFields)) {
-
-      for(const activeBuffer of activeFields) {
-
-        if(Buffer.isBuffer(activeBuffer)) {
-
-          activeWakeWords.push(activeBuffer.toString("utf8"));
-        }
-      }
-    }
-
-    // Extract max active wake words from field 3.
-    const maxActiveWakeWords = this.extractNumberField(fields, 3) ?? 0;
-
-    // Store the configuration.
-    this.voiceAssistantConfig = {
-
-      activeWakeWords,
-      availableWakeWords,
-      maxActiveWakeWords
-    };
-
-    // Emit the configuration event.
-    this.emit("voiceAssistantConfiguration", this.voiceAssistantConfig);
-
-    this.log.debug("Voice assistant configuration received - available: " + availableWakeWords.length +
-                  " | active: " + activeWakeWords.length + " | max: " + maxActiveWakeWords);
-  }
-
-  /**
-   * Handle voice assistant audio data from the ESPHome device.
-   *
-   * @param payload - The audio data payload.
-   */
-  private handleVoiceAssistantAudio(payload: Buffer): void {
-
-    // Decode the protobuf fields from the payload according to VoiceAssistantAudio.
-    const fields = this.decodeProtobuf(payload);
-
-    // Extract audio data from field 1.
-    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
-    const data = fields[1]?.[0];
-
-    if(!Buffer.isBuffer(data)) {
-
-      this.log.warn("Received voice assistant audio without valid data.");
-
-      return;
-    }
-
-    // Extract end flag from field 2.
-    const end = this.extractNumberField(fields, 2) === 1;
-
-    // Create the audio data event.
-    const audioData: VoiceAssistantAudioData = { data, end };
-
-    // Emit the audio data event.
-    this.emit("voiceAssistantAudio", audioData);
-
-    this.log.debug("Voice assistant audio received - size: " + data.length + " bytes | end: " + end);
-  }
-
-  /**
-   * Handle Home Assistant service call response from the ESPHome device. This is emitted when the device triggers a `homeassistant.action` or `homeassistant.service`
-   * call expecting a Home Assistant instance to execute the action.
-   *
-   * @param payload - The service call response payload.
-   */
-  private handleHomeassistantServiceResponse(payload: Buffer): void {
-
-    // Decode the protobuf fields from the payload according to HomeassistantServiceResponse.
-    const fields = this.decodeProtobuf(payload);
-
-    // Extract service name from field 1.
-    const service = this.extractStringField(fields, 1) ?? "";
-
-    // Extract data, data_template, and variables from repeated map fields.
-    const data = this.extractRepeatedServiceMap(fields, 2);
-    const dataTemplate = this.extractRepeatedServiceMap(fields, 3);
-    const variables = this.extractRepeatedServiceMap(fields, 4);
-
-    // Extract is_event flag from field 5.
-    const isEvent = this.extractNumberField(fields, 5) === 1;
-
-    // Create the service event.
-    const serviceEvent: HomeAssistantServiceEvent = {
-
-      data,
-      dataTemplate,
-      isEvent,
-      service,
-      variables
-    };
-
-    // Emit the homeassistantService event.
-    this.emit("homeassistantService", serviceEvent);
-
-    this.log.debug("Home Assistant service call received - service: " + service + " | isEvent: " + isEvent);
-  }
-
-  /**
-   * Handle Home Assistant state request from the ESPHome device. This is emitted when the device requests the state of a Home Assistant entity, typically used when
-   * ESPHome has an `on_value` trigger that references Home Assistant state.
-   *
-   * @param payload - The state request payload.
-   */
-  private handleSubscribeHomeAssistantStateResponse(payload: Buffer): void {
-
-    // Decode the protobuf fields from the payload according to SubscribeHomeAssistantStateResponse.
-    const fields = this.decodeProtobuf(payload);
-
-    // Extract entity_id from field 1.
-    const entityId = this.extractStringField(fields, 1) ?? "";
-
-    // Extract attribute from field 2.
-    const attribute = this.extractStringField(fields, 2) ?? "";
-
-    // Extract once flag from field 3.
-    const once = this.extractNumberField(fields, 3) === 1;
-
-    // Create the state request event.
-    const stateRequest: HomeAssistantStateRequest = {
-
-      attribute,
-      entityId,
-      once
-    };
-
-    // Emit the homeassistantStateRequest event.
-    this.emit("homeassistantStateRequest", stateRequest);
-
-    this.log.debug("Home Assistant state request received - entityId: " + entityId + " | attribute: " + attribute + " | once: " + once);
+    // The correlator's resolve returns false when no `setNoiseEncryptionKey` is in flight; the event was still emitted above so consumers see the asynchronous result.
+    this.noiseKeyCorrelator.resolve("default", success);
   }
 
   /**
    * Set a new Noise encryption key on the device. This allows changing the encryption key used for future connections.
    *
+   * **Concurrency:** this method is NOT safe to call concurrently. The protocol carries no correlation ID for the key-set request, so the response can only be matched
+   * to a single in-flight call. A second invocation while the first is still pending rejects rather than silently leaving the first promise hanging.
+   *
+   * Usage:
+   *
+   * {@includeCode ./examples/showcase.ts#connection-with-noise}
+   *
    * @param key - The new encryption key (base64 encoded, must decode to exactly 32 bytes).
+   * @param options - Optional configuration.
+   * @param options.signal - Optional AbortSignal to cancel the request. Aborting settles the returned promise to `false` immediately rather than waiting for the timeout.
+   * @param options.timeoutMs - Optional bound on the request/response round-trip; defaults to 5000 ms. On elapse the promise settles to `false`.
    *
-   * @returns A promise that resolves to true if the key was successfully set, false otherwise.
+   * @returns A promise that resolves to true if the key was successfully set, false otherwise (timeout, abort, or device-reported failure). The returned promise rejects
+   * when another invocation is already pending - see the `@throws` clause below for details.
    *
-   * @example
-   * ```typescript
-   * // Set a new encryption key
-   * const success = await client.setNoiseEncryptionKey("newBase64EncodedKey");
-   * if (success) {
-   *   console.log("Encryption key updated successfully");
-   *   // Note: You'll need to reconnect with the new key
-   * }
-   * ```
+   * @throws {ConnectionError} (`KEY_SET_IN_FLIGHT`) when another `setNoiseEncryptionKey` call is already pending - the protocol carries no correlation id and cannot
+   * multiplex concurrent requests.
+   *
    */
-  public async setNoiseEncryptionKey(key: string): Promise<boolean> {
+  public async setNoiseEncryptionKey(key: string, options?: { signal?: AbortSignal; timeoutMs?: number }): Promise<boolean> {
+
+    options?.signal?.throwIfAborted();
+
+    // Reject concurrent invocations explicitly. The protocol response carries no correlation, so a second call would steal the first call's response. The correlator's
+    // own in-flight error code is `CORRELATOR_KEY_IN_FLIGHT`; we surface our host-specific `KEY_SET_IN_FLIGHT` instead so existing consumers continue to pattern-match
+    // on the documented code.
+    if(this.noiseKeyCorrelator.pending("default")) {
+
+      throw new ConnectionError("setNoiseEncryptionKey is already in flight; await the previous call before issuing another.", "KEY_SET_IN_FLIGHT");
+    }
 
     // Validate the key format.
     const keyBuffer = Buffer.from(key, "base64");
@@ -2969,68 +2227,49 @@ export class EspHomeClient extends EventEmitter {
       { fieldNumber: 1, value: keyBuffer, wireType: WireType.LENGTH_DELIMITED }
     ];
 
-    // Create a promise to wait for the response.
-    const responsePromise = new Promise<boolean>((resolve) => {
+    // Encode and send the noise encryption key set request before parking on the correlator so the response handler always finds an awaiter.
+    this.frameAndSend(MessageType.NOISE_ENCRYPTION_SET_KEY_REQUEST, this.encodeProtoFields(fields));
 
-      this.noiseKeySetResolver = resolve;
+    try {
 
-      // Set a timeout in case we don't get a response.
-      setTimeout(() => {
+      return await this.noiseKeyCorrelator.await("default", {
 
-        if(this.noiseKeySetResolver === resolve) {
+        ...((options?.signal !== undefined) && { signal: options.signal }),
+        timeoutMs: options?.timeoutMs ?? DEFAULT_NOISE_KEY_SET_TIMEOUT_MS
+      });
 
-          this.noiseKeySetResolver = null;
-          resolve(false);
-        }
-      }, 5000);
-    });
+    } catch(err) {
 
-    // Encode and send the noise encryption key set request.
-    const payload = this.encodeProtoFields(fields);
+      // Documented contract: timeout, user-driven abort (default or custom reason), and rejectAll on transport reset all settle the promise to `false`. The
+      // user-signal check catches custom abort reasons; the AbortError DOMException check catches the timeout and the reset-driven rejectAll path. Anything else is
+      // a bug elsewhere and must propagate.
+      if(options?.signal?.aborted || ((err instanceof DOMException) && (err.name === "AbortError"))) {
 
-    this.frameAndSend(MessageType.NOISE_ENCRYPTION_SET_KEY_REQUEST, payload);
+        return false;
+      }
 
-    return responsePromise;
+      throw err;
+    }
   }
 
   /**
-   * Subscribe to log messages from the ESPHome device. This enables real-time log streaming from the device for monitoring and debugging purposes.
+   * Request the device-side log subscription at the supplied level. Pairs with `client.on("log", ...)` for callback-style consumption; for an `AsyncIterable` view with
+   * refcounted level upgrades, use {@link EspHomeClient.logs} instead.
    *
-   * @param level - The minimum log level to subscribe to (default: LogLevel.INFO). Messages at this level and higher severity will be received.
-   * @param dumpConfig - Whether to request a dump of the device configuration (default: false). This provides additional configuration details in the logs.
+   * @remarks ESPHome has no unsubscribe path on the wire, so subsequent calls at a more verbose level upgrade the device-side subscription but a less verbose call
+   * does not downgrade it for the lifetime of the connection. Reissued automatically on every reconnect.
    *
-   * @example
-   * ```typescript
-   * // Subscribe to INFO level logs and above
-   * await client.subscribeToLogs(LogLevel.INFO);
+   * Usage:
    *
-   * // Subscribe to all logs including VERY_VERBOSE
-   * await client.subscribeToLogs(LogLevel.VERY_VERBOSE);
+   * {@includeCode ./examples/showcase.ts#log-subscription}
    *
-   * // Subscribe to ERROR logs only with config dump
-   * await client.subscribeToLogs(LogLevel.ERROR, true);
+   * @param level - The minimum log level to subscribe to. Defaults to `LogLevel.INFO`.
+   * @param dumpConfig - When `true`, the device prepends a one-shot dump of its configuration to the log stream. Defaults to `false`.
    *
-   * // Listen for log events
-   * client.on("log", (data) => {
-   *   console.log(`[${LogLevel[data.level]}] ${data.message}`);
-   * });
-   * ```
    */
-  public subscribeToLogs(level: LogLevel = LogLevel.INFO, dumpConfig: boolean = false): void {
+  public subscribeToLogs(level: LogLevel = LogLevel.INFO, dumpConfig = false): void {
 
-    this.log.debug("Subscribing to logs at level: " + LogLevel[level] + ", dump config: " + dumpConfig);
-
-    // Build the protobuf fields for the subscription request.
-    const fields: ProtoField[] = [
-
-      { fieldNumber: 1, value: level, wireType: WireType.VARINT },
-      { fieldNumber: 2, value: dumpConfig ? 1 : 0, wireType: WireType.VARINT }
-    ];
-
-    // Encode the fields and send the subscribe logs request to the device.
-    const payload = this.encodeProtoFields(fields);
-
-    this.frameAndSend(MessageType.SUBSCRIBE_LOGS_REQUEST, payload);
+    this.logManager.requestDeviceLevel(level, dumpConfig);
   }
 
   /**
@@ -3045,83 +2284,69 @@ export class EspHomeClient extends EventEmitter {
     // Decode the protobuf fields from the payload.
     const fields = this.decodeProtobuf(payload);
 
-    // Build the device info object from the response with all protocol-defined fields.
-    const info: DeviceInfo = {};
+    // Pull every potentially-present field once. Each variable is `T | undefined`; we'll fold them into the DeviceInfo via conditional spread so absent fields stay
+    // omitted rather than carrying explicit `undefined` (which `exactOptionalPropertyTypes` rightly distinguishes from omission).
+    const usesPasswordValue = extractNumberField(fields, 1);
+    const hasDeepSleepValue = extractNumberField(fields, 7);
+    const apiEncryptionValue = extractNumberField(fields, 19);
 
-    // Extract uses_password (field 1) - bool.
-    const usesPasswordValue = this.extractNumberField(fields, 1);
+    const name = extractStringField(fields, 2);
+    const macAddress = extractStringField(fields, 3);
+    const esphomeVersion = extractStringField(fields, 4);
+    const compilationTime = extractStringField(fields, 5);
+    const model = extractStringField(fields, 6);
+    const projectName = extractStringField(fields, 8);
+    const projectVersion = extractStringField(fields, 9);
+    const webserverPort = extractNumberField(fields, 10);
+    const legacyBluetoothProxyVersion = extractNumberField(fields, 11);
+    const manufacturer = extractStringField(fields, 12);
+    const friendlyName = extractStringField(fields, 13);
+    const legacyVoiceAssistantVersion = extractNumberField(fields, 14);
+    const bluetoothProxyFeatureFlags = extractNumberField(fields, 15);
+    const suggestedArea = extractStringField(fields, 16);
+    const voiceAssistantFeatureFlags = extractNumberField(fields, 17);
+    const bluetoothMacAddress = extractStringField(fields, 18);
+    const zwaveProxyFeatureFlags = extractNumberField(fields, 23);
+    const zwaveHomeId = extractNumberField(fields, 24);
 
-    if(usesPasswordValue !== undefined) {
+    // Build the device info from a single object literal. Each conditional spread either contributes a property or contributes nothing - so absence is preserved.
+    const info: DeviceInfo = {
 
-      info.usesPassword = usesPasswordValue === 1;
+      ...((apiEncryptionValue !== undefined) && { apiEncryptionSupported: apiEncryptionValue === 1 }),
+      ...((bluetoothMacAddress !== undefined) && { bluetoothMacAddress }),
+      ...((bluetoothProxyFeatureFlags !== undefined) && { bluetoothProxyFeatureFlags }),
+      ...((compilationTime !== undefined) && { compilationTime }),
+      ...((esphomeVersion !== undefined) && { esphomeVersion }),
+      ...((friendlyName !== undefined) && { friendlyName }),
+      ...((hasDeepSleepValue !== undefined) && { hasDeepSleep: hasDeepSleepValue === 1 }),
+      ...((legacyBluetoothProxyVersion !== undefined) && { legacyBluetoothProxyVersion }),
+      ...((legacyVoiceAssistantVersion !== undefined) && { legacyVoiceAssistantVersion }),
+      ...((macAddress !== undefined) && { macAddress }),
+      ...((manufacturer !== undefined) && { manufacturer }),
+      ...((model !== undefined) && { model }),
+      ...((name !== undefined) && { name }),
+      ...((projectName !== undefined) && { projectName }),
+      ...((projectVersion !== undefined) && { projectVersion }),
+      ...((suggestedArea !== undefined) && { suggestedArea }),
+      ...((usesPasswordValue !== undefined) && { usesPassword: usesPasswordValue === 1 }),
+      ...((voiceAssistantFeatureFlags !== undefined) && { voiceAssistantFeatureFlags }),
+      ...((webserverPort !== undefined) && { webserverPort }),
+      ...((zwaveHomeId !== undefined) && { zwaveHomeId }),
+      ...((zwaveProxyFeatureFlags !== undefined) && { zwaveProxyFeatureFlags })
+    };
+
+    // Decode the repeated sub-device records at field 20. Each entry is a nested message with `device_id` (1), `name` (2), and `area_id` (3). Single-device
+    // configurations leave this empty; multi-device parents enumerate every sub-device addressable via the protocol's `device_id` field.
+    this.subDeviceList = extractSubDevices(fields, 20, (buffer) => this.decodeProtobuf(buffer));
+
+    // Decode the repeated serial-proxy advertisements at field 25. Each entry is a nested message with `name` (1) and `port_type` (2); the array index becomes the
+    // `instance` number used in every subsequent serial-proxy wire message. Empty (or absent) when the device firmware was not compiled with `USE_SERIAL_PROXY`.
+    const serialProxies = extractSerialProxies(fields, 25, (buffer) => this.decodeProtobuf(buffer));
+
+    if(serialProxies.length > 0) {
+
+      info.serialProxies = serialProxies;
     }
-
-    // Extract name (field 2) - string.
-    info.name = this.extractStringField(fields, 2);
-
-    // Extract mac_address (field 3) - string.
-    info.macAddress = this.extractStringField(fields, 3);
-
-    // Extract esphome_version (field 4) - string.
-    info.esphomeVersion = this.extractStringField(fields, 4);
-
-    // Extract compilation_time (field 5) - string.
-    info.compilationTime = this.extractStringField(fields, 5);
-
-    // Extract model (field 6) - string.
-    info.model = this.extractStringField(fields, 6);
-
-    // Extract has_deep_sleep (field 7) - bool.
-    const hasDeepSleepValue = this.extractNumberField(fields, 7);
-
-    if(hasDeepSleepValue !== undefined) {
-
-      info.hasDeepSleep = hasDeepSleepValue === 1;
-    }
-
-    // Extract project_name (field 8) - string.
-    info.projectName = this.extractStringField(fields, 8);
-
-    // Extract project_version (field 9) - string.
-    info.projectVersion = this.extractStringField(fields, 9);
-
-    // Extract webserver_port (field 10) - uint32.
-    info.webserverPort = this.extractNumberField(fields, 10);
-
-    // Extract legacy_bluetooth_proxy_version (field 11) - uint32, deprecated.
-    info.legacyBluetoothProxyVersion = this.extractNumberField(fields, 11);
-
-    // Extract manufacturer (field 12) - string.
-    info.manufacturer = this.extractStringField(fields, 12);
-
-    // Extract friendly_name (field 13) - string.
-    info.friendlyName = this.extractStringField(fields, 13);
-
-    // Extract legacy_voice_assistant_version (field 14) - uint32, deprecated.
-    info.legacyVoiceAssistantVersion = this.extractNumberField(fields, 14);
-
-    // Extract bluetooth_proxy_feature_flags (field 15) - uint32.
-    info.bluetoothProxyFeatureFlags = this.extractNumberField(fields, 15);
-
-    // Extract suggested_area (field 16) - string.
-    info.suggestedArea = this.extractStringField(fields, 16);
-
-    // Extract voice_assistant_feature_flags (field 17) - uint32.
-    info.voiceAssistantFeatureFlags = this.extractNumberField(fields, 17);
-
-    // Extract bluetooth_mac_address (field 18) - string.
-    info.bluetoothMacAddress = this.extractStringField(fields, 18);
-
-    // Extract api_encryption_supported (field 19) - bool.
-    const apiEncryptionValue = this.extractNumberField(fields, 19);
-
-    if(apiEncryptionValue !== undefined) {
-
-      info.apiEncryptionSupported = apiEncryptionValue === 1;
-    }
-
-    // Note: Fields 20-22 (devices, areas, area) are for more complex setups with multiple devices/areas.
-    // These are not commonly used in typical single-device scenarios and would require additional interfaces.
 
     // Store the remote device info.
     this.remoteDeviceInfo = info;
@@ -3130,137 +2355,31 @@ export class EspHomeClient extends EventEmitter {
   }
 
   /**
-   * Return the device information of the connected ESPHome device if available.
-   * Returns a copy of the device information to prevent external mutation.
+   * Return the device information of the connected ESPHome device if available. Returns a shallow copy so external code cannot mutate the cached record.
+   *
+   * Usage:
+   *
+   * {@includeCode ./examples/showcase.ts#device-info}
    *
    * @returns The device information if available, or `null` if not yet received.
+   *
    */
   public deviceInfo(): Nullable<DeviceInfo> {
 
-    // Ensure the device information can't be mutated by our caller by returning a shallow copy.
-    if(!this.remoteDeviceInfo) {
-
-      return null;
-    }
-
-    // Create a shallow copy of the device info to prevent external mutation.
-    const infoCopy: DeviceInfo = {
-
-      apiEncryptionSupported: this.remoteDeviceInfo.apiEncryptionSupported,
-      bluetoothMacAddress: this.remoteDeviceInfo.bluetoothMacAddress,
-      bluetoothProxyFeatureFlags: this.remoteDeviceInfo.bluetoothProxyFeatureFlags,
-      compilationTime: this.remoteDeviceInfo.compilationTime,
-      esphomeVersion: this.remoteDeviceInfo.esphomeVersion,
-      friendlyName: this.remoteDeviceInfo.friendlyName,
-      hasDeepSleep: this.remoteDeviceInfo.hasDeepSleep,
-      legacyBluetoothProxyVersion: this.remoteDeviceInfo.legacyBluetoothProxyVersion,
-      legacyVoiceAssistantVersion: this.remoteDeviceInfo.legacyVoiceAssistantVersion,
-      macAddress: this.remoteDeviceInfo.macAddress,
-      manufacturer: this.remoteDeviceInfo.manufacturer,
-      model: this.remoteDeviceInfo.model,
-      name: this.remoteDeviceInfo.name,
-      projectName: this.remoteDeviceInfo.projectName,
-      projectVersion: this.remoteDeviceInfo.projectVersion,
-      suggestedArea: this.remoteDeviceInfo.suggestedArea,
-      usesPassword: this.remoteDeviceInfo.usesPassword,
-      voiceAssistantFeatureFlags: this.remoteDeviceInfo.voiceAssistantFeatureFlags,
-      webserverPort: this.remoteDeviceInfo.webserverPort
-    };
-
-    return infoCopy;
+    // Return a shallow copy so callers cannot mutate our internal state. Spread is the right tool because DeviceInfo is a flat object of primitives - new fields added to
+    // the interface flow through automatically without touching this method.
+    return this.remoteDeviceInfo ? { ...this.remoteDeviceInfo } : null;
   }
 
   /**
-   * Check if a message type is a list entities response. These messages contain entity discovery information.
-   *
-   * @param type - The message type to check.
-   * @returns `true` if this is a list entities response, `false` otherwise.
-   */
-  private isListEntitiesResponse(type: number): boolean {
-
-    return ((type >= MessageType.LIST_ENTITIES_BINARY_SENSOR_RESPONSE) && (type <= MessageType.LIST_ENTITIES_TEXT_SENSOR_RESPONSE)) ||
-    [ MessageType.LIST_ENTITIES_SERVICES_RESPONSE, MessageType.LIST_ENTITIES_CAMERA_RESPONSE, MessageType.LIST_ENTITIES_CLIMATE_RESPONSE,
-      MessageType.LIST_ENTITIES_NUMBER_RESPONSE, MessageType.LIST_ENTITIES_SELECT_RESPONSE, MessageType.LIST_ENTITIES_SIREN_RESPONSE,
-      MessageType.LIST_ENTITIES_LOCK_RESPONSE, MessageType.LIST_ENTITIES_BUTTON_RESPONSE, MessageType.LIST_ENTITIES_MEDIA_PLAYER_RESPONSE,
-      MessageType.LIST_ENTITIES_ALARM_CONTROL_PANEL_RESPONSE, MessageType.LIST_ENTITIES_TEXT_RESPONSE, MessageType.LIST_ENTITIES_DATE_RESPONSE,
-      MessageType.LIST_ENTITIES_TIME_RESPONSE, MessageType.LIST_ENTITIES_EVENT_RESPONSE, MessageType.LIST_ENTITIES_VALVE_RESPONSE,
-      MessageType.LIST_ENTITIES_DATETIME_RESPONSE, MessageType.LIST_ENTITIES_UPDATE_RESPONSE ].includes(type);
-  }
-
-  /**
-   * Check if a message type is a state update. These messages contain current state information for entities.
-   *
-   * @param type - The message type to check.
-   * @returns `true` if this is a state update message, `false` otherwise.
-   */
-  private isStateUpdate(type: number): boolean {
-
-    return [ MessageType.BINARY_SENSOR_STATE_RESPONSE, MessageType.COVER_STATE_RESPONSE, MessageType.FAN_STATE_RESPONSE, MessageType.LIGHT_STATE_RESPONSE,
-      MessageType.SENSOR_STATE_RESPONSE, MessageType.SWITCH_STATE_RESPONSE, MessageType.TEXT_SENSOR_STATE_RESPONSE, MessageType.CLIMATE_STATE_RESPONSE,
-      MessageType.NUMBER_STATE_RESPONSE, MessageType.SELECT_STATE_RESPONSE, MessageType.SIREN_STATE_RESPONSE, MessageType.LOCK_STATE_RESPONSE,
-      MessageType.BUTTON_COMMAND_REQUEST, MessageType.MEDIA_PLAYER_STATE_RESPONSE, MessageType.ALARM_CONTROL_PANEL_STATE_RESPONSE, MessageType.TEXT_STATE_RESPONSE,
-      MessageType.DATE_STATE_RESPONSE, MessageType.TIME_STATE_RESPONSE, MessageType.EVENT_RESPONSE, MessageType.VALVE_STATE_RESPONSE, MessageType.DATETIME_STATE_RESPONSE,
-      MessageType.UPDATE_STATE_RESPONSE ].includes(type);
-  }
-
-  /**
-   * Extract entity type label from message type. This converts the message type enum to a lowercase string identifier matching the EntityType union.
-   *
-   * @param type - The message type enum value.
-   * @returns The entity type label.
-   */
-  private getEntityTypeLabel(type: MessageType): EntityType {
-
-    return MessageType[type].replace(/^LIST_ENTITIES_/, "").replace(/_RESPONSE$/, "").replace(/_STATE$/, "").toLowerCase() as EntityType;
-  }
-
-  /**
-   * Get the device_id field number for a given state response type. Some state responses include device_id which we should track.
-   *
-   * @param type - The message type enum value.
-   * @returns The field number for device_id, or undefined if not supported.
-   */
-  private getStateDeviceIdFieldNumber(type: MessageType): number | undefined {
-
-    // Map of state response types to their device_id field numbers.
-    const stateDeviceIdFields: Record<number, number> = {
-
-      [MessageType.ALARM_CONTROL_PANEL_STATE_RESPONSE]: 3,
-      [MessageType.BINARY_SENSOR_STATE_RESPONSE]: 4,
-      [MessageType.CAMERA_IMAGE_RESPONSE]: 4,
-      [MessageType.CLIMATE_STATE_RESPONSE]: 16,
-      [MessageType.COVER_STATE_RESPONSE]: 6,
-      [MessageType.DATE_STATE_RESPONSE]: 6,
-      [MessageType.DATETIME_STATE_RESPONSE]: 4,
-      [MessageType.EVENT_RESPONSE]: 3,
-      [MessageType.FAN_STATE_RESPONSE]: 8,
-      [MessageType.LIGHT_STATE_RESPONSE]: 14,
-      [MessageType.LOCK_STATE_RESPONSE]: 3,
-      [MessageType.MEDIA_PLAYER_STATE_RESPONSE]: 5,
-      [MessageType.NUMBER_STATE_RESPONSE]: 4,
-      [MessageType.SELECT_STATE_RESPONSE]: 4,
-      [MessageType.SENSOR_STATE_RESPONSE]: 4,
-      [MessageType.SIREN_STATE_RESPONSE]: 3,
-      [MessageType.SWITCH_STATE_RESPONSE]: 3,
-      [MessageType.TEXT_SENSOR_STATE_RESPONSE]: 4,
-      [MessageType.TEXT_STATE_RESPONSE]: 4,
-      [MessageType.TIME_STATE_RESPONSE]: 6,
-      [MessageType.UPDATE_STATE_RESPONSE]: 11,
-      [MessageType.VALVE_STATE_RESPONSE]: 4
-    };
-
-    return stateDeviceIdFields[type];
-  }
-
-  /**
-   * Parses a single ListEntities*Response, logs it, and stores it. This registers a discovered entity in our internal maps for later reference.
+   * Parse a single `LIST_ENTITIES_*_RESPONSE`, decode it, and register it in the internal discovery maps. The decoder lives in `discovery.ts`; this handler owns the
+   * state-mutation seam.
    *
    * @param type - The message type indicating the entity type.
    * @param payload - The entity description payload.
    */
   private handleListEntity(type: number, payload: Buffer): void {
 
-    // Handle user-defined services specially.
     if(type === MessageType.LIST_ENTITIES_SERVICES_RESPONSE) {
 
       this.handleListServiceEntity(payload);
@@ -3268,122 +2387,62 @@ export class EspHomeClient extends EventEmitter {
       return;
     }
 
-    // Look up the entity schema by message type.
-    const schema = findSchemaByListEntitiesMessageType(type);
+    const schema = findSchemaByListEntitiesMessageTypeIn(this.schemasTable, type);
 
     if(!schema) {
 
-      this.log.warn("Unknown list entities message type: " + type);
+      this.log.warn("Unknown list entities message type.", { type });
 
       return;
     }
 
-    // Decode the protobuf fields from the payload.
     const fields = this.decodeProtobuf(payload);
 
-    // Determine the entity type label from the message type enum.
-    const entityType = this.getEntityTypeLabel(type);
+    // Prefer the schema's own `type` tag over the wire-derived label. For built-ins the two are identical (e.g., LIST_ENTITIES_COVER_RESPONSE -> "cover" matches
+    // the cover schema's `type`); for extras-registered schemas that alias an upstream wire-message-type with a renamed tag ({@link aliasOf}'s
+    // `{ ...aliasOf("cover"), type: "door_cover" }` pattern), the schema's `type` is the consumer-facing identifier and the wire label would mis-name the entity.
+    const entityType = schema.type as EntityType;
+    const entity = decodeEntityFromSchema({
 
-    // Use schema-driven parsing to extract all entity fields.
-    const entity = this.decodeEntityFromSchema(fields, schema, entityType);
+      decodeNested: (buffer: Buffer): Record<number, FieldValue[]> => this.decodeProtobuf(buffer),
+      entityType,
+      fields,
+      log: this.log,
+      schema
+    });
 
     if(!entity) {
 
       return;
     }
 
-    // Store the entity information in our lookup maps.
-    // Use object_id instead of name to create the entity ID to avoid collisions.
-    const entityId = (entityType + "-" + entity.objectId).toLowerCase();
-
-    this.entityKeys.set(entityId, entity.key);
-    this.entityNames.set(entity.key, entity.name);
-    this.entityObjectIds.set(entity.key, entity.objectId);
-    this.entityTypes.set(entity.key, entityType);
-
-    // Store device_id if present.
-    if(entity.deviceId !== undefined) {
-
-      this.entityDeviceIds.set(entity.key, entity.deviceId);
-    }
-
-    // Add the fully populated entity to our discovered entities list.
-    this.discoveredEntities.push(entity);
-
-    // Log the entity registration for debugging.
-    this.log.debug("Registered entity: [" + entity.key + "] " + entity.objectId + " (" + entity.name + ") | type: " + entityType +
-                  (entity.deviceId !== undefined ? " | device: " + entity.deviceId : ""));
+    // Defer the canonical id mint, the lock-step index updates, and the per-entity debug log to the registry; the host's job here is to decode the wire payload into
+    // the {@link Entity} record and hand it off.
+    this.registry.register(entity);
   }
 
   /**
-   * Handle a ListEntitiesServicesResponse message for user-defined services. This processes service discovery messages and stores service information.
+   * Handle a `LIST_ENTITIES_SERVICES_RESPONSE` message. Decoding lives in `discovery.ts`; the `ServiceRegistry` owns the per-
+   * service debug log and the lock-step index updates; this handler emits the per-service discovery event after the registry has accepted the record.
    *
    * @param payload - The service entity description payload.
    */
   private handleListServiceEntity(payload: Buffer): void {
 
-    // Decode the protobuf fields from the payload according to ListEntitiesServicesResponse specification.
     const fields = this.decodeProtobuf(payload);
+    const service = decodeServiceEntity({
 
-    // Extract the service name from field 1.
-    const name = this.extractStringField(fields, 1);
+      decodeNested: (buffer): Record<number, FieldValue[]> => this.decodeProtobuf(buffer),
+      fields,
+      log: this.log
+    });
 
-    if(name === undefined) {
-
-      this.log.warn("Received service entity without a name.");
-
-      return;
-    }
-
-    // Extract the service key from field 2 (fixed32).
-    const key = this.extractFixed32Field(fields, 2);
-
-    if(key === undefined) {
-
-      this.log.warn("Received service entity without a key.");
+    if(!service) {
 
       return;
     }
 
-    // Extract the service arguments from field 3 (repeated ListEntitiesServicesArgument).
-    const args: ServiceArgument[] = [];
-    const argsFields = fields[3];
-
-    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
-    if(argsFields && Array.isArray(argsFields)) {
-
-      for(const argBuffer of argsFields) {
-
-        if(Buffer.isBuffer(argBuffer)) {
-
-          // Decode each argument as a nested protobuf message.
-          const argFields = this.decodeProtobuf(argBuffer);
-
-          // Extract argument name from field 1.
-          const argName = this.extractStringField(argFields, 1);
-
-          // Extract argument type from field 2.
-          const argType = this.extractNumberField(argFields, 2);
-
-          if((argName !== undefined) && (argType !== undefined)) {
-
-            args.push({ name: argName, type: argType as ServiceArgType });
-          }
-        }
-      }
-    }
-
-    // Create the service entity.
-    const service: ServiceEntity = { args, key, name };
-
-    // Store the service in our maps.
-    this.services.set(key, service);
-    this.discoveredServices.push(service);
-
-    // Log the service registration for debugging.
-    this.log.debug("Registered service: [" + key + "] " + name + " with " + args.length + " arguments");
-
-    // Emit a service discovered event.
+    this.serviceRegistry.register(service);
     this.emit("serviceDiscovered", service);
   }
 
@@ -3398,8 +2457,13 @@ export class EspHomeClient extends EventEmitter {
     // Decode the protobuf fields from the payload.
     const fields = this.decodeProtobuf(payload);
 
-    // Extract the entity key from field 1.
-    const key = this.extractEntityKey(fields, 1);
+    // Determine where the entity key lives. The original state-response messages all stamped the key at field 1, but newer wire messages (the shared IR/RF receive event
+    // at id 137) put it elsewhere because their proto layout reserves earlier field numbers for device_id. Consult the schema for the right slot; schemas that share a
+    // state.messageType (IR + RF) must declare the same keyFieldNumber because they describe the same wire bytes. Fall back to field 1 when no schema claims this
+    // messageType (the BUTTON_COMMAND_REQUEST re-emit path, where the inbound frame is the original command rather than a state response).
+    const probeSchema = findSchemaByStateMessageTypeIn(this.schemasTable, type);
+    const keyFieldNumber = probeSchema?.state.keyFieldNumber ?? 1;
+    const key = extractEntityKey(fields, keyFieldNumber);
 
     if(key === undefined) {
 
@@ -3407,21 +2471,24 @@ export class EspHomeClient extends EventEmitter {
     }
 
     // Look up the entity information using the key.
-    const name = this.entityNames.get(key) ?? ("unknown(" + key + ")");
-    const typeLabel = this.entityTypes.get(key) ?? this.getEntityTypeLabel(type);
+    const knownEntity = this.registry.byKey(key);
+    const name = knownEntity?.name ?? ("unknown(" + String(key) + ")");
+    const typeLabel = knownEntity?.type ?? getEntityTypeLabel(type);
     const eventType = typeLabel.toLowerCase();
 
-    // Check if this state response type includes device_id and store it if present.
-    const stateDeviceIdField = this.getStateDeviceIdFieldNumber(type);
+    // Read the device_id field number straight from the already-resolved (extras-aware) schema - the schema's `state.deviceIdFieldNumber` is the single source of truth,
+    // with `0` meaning "this state shape has no device_id slot" (the same sentinel telemetry.ts honors). Reading it from the resolved schema means a power-user extras
+    // schema declaring a novel state message with a device_id slot records that slot correctly.
+    const stateDeviceIdField = (probeSchema && (probeSchema.state.deviceIdFieldNumber > 0)) ? probeSchema.state.deviceIdFieldNumber : undefined;
 
     if(stateDeviceIdField !== undefined) {
 
-      const stateDeviceId = this.extractNumberField(fields, stateDeviceIdField);
+      const stateDeviceId = extractNumberField(fields, stateDeviceIdField);
 
       if(stateDeviceId !== undefined) {
 
         // Store or update the device_id for this entity.
-        this.entityDeviceIds.set(key, stateDeviceId);
+        this.registry.recordDeviceId(key, stateDeviceId);
       }
     }
 
@@ -3442,18 +2509,21 @@ export class EspHomeClient extends EventEmitter {
 
     } else {
 
-      // Try schema-driven decoding for standard state responses.
-      const schema = findSchemaByStateMessageType(type);
+      // Try schema-driven decoding for standard state responses. Prefer the entity's declared type when the entity is known: this disambiguates wire messages that are
+      // shared across entity types (the canonical case is `InfraredRFReceiveEvent` at id 137, which both `infrared` and `radio_frequency` schemas claim as their state
+      // message). Falling back to message-type lookup is correct when the entity is unknown - the wire message itself is the only signal we have, and the resulting
+      // event surfaces under the message-type-derived label rather than committing to an arbitrary "winner" of the shared message-type.
+      const schema = knownEntity ? getSchemaIn(this.schemasTable, knownEntity.type) : findSchemaByStateMessageTypeIn(this.schemasTable, type);
 
       if(schema) {
 
         // Use unified schema-driven decoding for all entity types with defined schemas.
-        data = this.decodeStateFromSchema(fields, schema.state, name, key, schema.type);
+        data = decodeStateFromSchema({ entityType: schema.type, fields, key, name, stateSchema: schema.state });
 
       } else {
 
         // Fall back to a best-effort payload for unknown message types.
-        const state = this.extractTelemetryValue(fields, 2);
+        const state = extractTelemetryValue(fields, 2);
 
         data = {
 
@@ -3465,826 +2535,252 @@ export class EspHomeClient extends EventEmitter {
       }
     }
 
+    // Mutate-then-notify: a listener reading `client.latest(id)` or iterating `client.snapshot()` from inside `on("telemetry")` or the per-type channel must see the
+    // just-emitted event. Pinned by the "cache contract:" test in esphome-client.test.ts. When the entity is unknown (no successful discovery), skip the write rather
+    // than fabricate an id.
+    if(knownEntity) {
+
+      // Reuse the id the registry already minted at register time rather than re-minting it (two `toLowerCase` + a concat) on every state event. The registry is the
+      // single mint site; the `??` fallback re-mints only in the unreachable case where a key resolved by `byKey` is somehow absent from the id index.
+      this.latestCache.set(this.registry.idByKey(key) ?? mintEntityId(knownEntity.type, knownEntity.objectId), data);
+    }
+
     // We emit a strongly-typed union on the generic telemetry channel. This is the most flexible subscription path.
     this.emit("telemetry", data);
 
-    // We also emit a per-type channel using the discriminant as the event name. This enables targeted subscriptions.
+    // We also emit a per-type channel using the tag as the event name. This enables targeted subscriptions. The cast at the boundary is sound by construction:
+    // `data.type` is the tag, and `data` matches the per-type variant of the union; TypeScript cannot prove this through the generic emit signature, so we
+    // narrow at the known boundary.
     this.emit(data.type, data);
 
-    // We keep a concise debug record for quick tracing during development and diagnostics.
-    this.log.debug("TYPE: " + data.type + " | data: " + JSON.stringify(data));
+    // We keep a concise debug record for quick tracing during development and diagnostics. The event is passed as a deferred parameter rather than pre-serialized, so the
+    // default no-op debug logger discards it without paying the per-frame JSON.stringify (a full object walk + string allocation) the warm telemetry path would otherwise
+    // incur on every state event regardless of whether debug is enabled.
+    this.log.debug("State update received.", data);
   }
 
-  /**
-   * Decode state response using schema-driven field extraction. This unified method extracts all fields defined in the schema and converts them to the appropriate
-   * types based on the schema's valueType specifications.
-   *
-   * @param fields - The decoded protobuf fields.
-   * @param stateSchema - The state schema containing field definitions.
-   * @param name - The entity name.
-   * @param key - The entity key.
-   * @param entityType - The entity type string.
-   * @returns A telemetry data object with all extracted fields.
-   */
-  private decodeStateFromSchema(fields: Record<number, FieldValue[]>, stateSchema: StateSchema, name: string, key: number, entityType: string): TelemetryEvent {
-
-    // Build the base telemetry data object with common fields.
-    const data: Record<string, unknown> = {
-
-      entity: name,
-      key,
-      type: entityType
-    };
-
-    // Extract device_id if the schema defines it.
-    if(stateSchema.deviceIdFieldNumber > 0) {
-
-      const deviceId = this.extractNumberField(fields, stateSchema.deviceIdFieldNumber);
-
-      if(deviceId !== undefined) {
-
-        data.deviceId = deviceId;
-      }
-    }
-
-    // Extract each field defined in the schema.
-    for(const [ fieldName, fieldSpec ] of Object.entries(stateSchema.fields)) {
-
-      const rawValue = this.extractFieldBySpec(fields, fieldSpec);
-
-      // Skip undefined values.
-      if(rawValue === undefined) {
-
-        continue;
-      }
-
-      // Convert value based on the field's valueType.
-      switch(fieldSpec.valueType) {
-
-        case "bool":
-
-          // Bool values are encoded as 0/1 integers in protobuf.
-          data[fieldName] = (typeof rawValue === "number") ? (rawValue === 1) : undefined;
-
-          break;
-
-        case "enum":
-        case "varint":
-        case "sint32":
-        case "fixed32":
-
-          // Numeric values are stored directly.
-          data[fieldName] = rawValue;
-
-          break;
-
-        case "float":
-
-          // Float values may come as number from extractTelemetryValue.
-          data[fieldName] = (typeof rawValue === "number") ? rawValue : undefined;
-
-          break;
-
-        case "string":
-
-          // String values are stored directly.
-          data[fieldName] = rawValue;
-
-          break;
-
-        default:
-
-          // Unknown types are stored as-is.
-          data[fieldName] = rawValue;
-      }
-    }
-
-    return data as unknown as TelemetryEvent;
-  }
+  // Schema-driven decoders are implemented in `discovery.ts` (entity discovery + scalar/repeated field extractors) and `telemetry.ts` (state-update decoding). The
+  // host class owns the state-mutation seam: it routes inbound payloads through the pure decoders, then writes the results into its registries and emits bus events.
 
   /**
-   * Extract a field value based on its schema specification. This method selects the appropriate extraction method based on the field's wireType and valueType.
+   * Send a typed message via the active transport. Routes to plaintext framing or to encrypted noise framing automatically based on the transport's phase. The promise
+   * is fire-and-forget at the consumer level: a send-time socket fault tears the transport's iterator down, which the receiver escalates through its terminal-completion
+   * seam to {@link disconnectInternal}, so the fault drives a single teardown (and auto-reconnect) rather than being lost. The method returns synchronously so call sites
+   * stay one-line; the underlying socket write is awaited internally.
    *
-   * @param fields - The decoded protobuf fields.
-   * @param fieldSpec - The field specification from the schema.
-   * @returns The extracted value or undefined if not found.
+   * @param type - The message type identifier.
+   * @param payload - The encoded message payload (already a protobuf-encoded body).
    */
-  private extractFieldBySpec(fields: Record<number, FieldValue[]>, fieldSpec: FieldSpec): number | string | undefined {
+  private frameAndSend(type: number, payload: Buffer): void {
 
-    // Use appropriate extraction method based on valueType.
-    switch(fieldSpec.valueType) {
+    if(!this.transport) {
 
-      case "float":
-
-        // Float values need special extraction using extractTelemetryValue.
-        return this.extractTelemetryValue(fields, fieldSpec.fieldNumber);
-
-      case "string":
-
-        // String values are extracted as UTF-8.
-        return this.extractStringField(fields, fieldSpec.fieldNumber);
-
-      case "bool":
-      case "enum":
-      case "varint":
-      case "sint32":
-
-        // Numeric values are extracted directly.
-        return this.extractNumberField(fields, fieldSpec.fieldNumber);
-
-      case "fixed32":
-
-        // Fixed32 values need special extraction.
-        return this.extractFixed32Field(fields, fieldSpec.fieldNumber);
-
-      default:
-
-        // Fall back to number extraction for unknown types.
-        return this.extractNumberField(fields, fieldSpec.fieldNumber);
-    }
-  }
-
-  /**
-   * Extract repeated field values from protobuf fields. Repeated fields can appear multiple times with the same field number.
-   *
-   * @param fields - The decoded protobuf fields.
-   * @param fieldSpec - The repeated field specification from the schema.
-   * @returns Array of extracted values (strings or numbers), or undefined if no values found.
-   */
-  private extractRepeatedField(fields: Record<number, FieldValue[]>, fieldSpec: RepeatedFieldSpec): (number | string)[] | undefined {
-
-    const values = fields[fieldSpec.fieldNumber];
-
-    // At runtime, accessing a non-existent field number returns undefined despite the type system saying otherwise.
-    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
-    if(!values || (values.length === 0)) {
-
-      return undefined;
-    }
-
-    const results: (number | string)[] = [];
-
-    for(const value of values) {
-
-      if(fieldSpec.valueType === "string") {
-
-        // String values are stored as Buffers.
-        if(Buffer.isBuffer(value)) {
-
-          results.push(value.toString("utf8"));
-        }
-      } else {
-
-        // Enum and varint values are stored as numbers.
-        if(typeof value === "number") {
-
-          results.push(value);
-        }
-      }
-    }
-
-    return results.length > 0 ? results : undefined;
-  }
-
-  /**
-   * Decode an entity from protobuf fields using the schema-driven approach. This extracts all fields defined in the schema and returns a typed Entity object.
-   *
-   * @param fields - The decoded protobuf fields.
-   * @param schema - The entity schema containing field definitions.
-   * @param entityType - The entity type label (e.g., "sensor", "light").
-   * @returns The decoded Entity object, or undefined if required fields are missing.
-   */
-  private decodeEntityFromSchema(fields: Record<number, FieldValue[]>, schema: EntitySchema, entityType: EntityType): Entity | undefined {
-
-    const listSchema = schema.listEntities;
-
-    // Extract required base fields using standardized field numbers.
-    const objectId = this.extractStringField(fields, listSchema.objectIdFieldNumber);
-    const key = this.extractFixed32Field(fields, listSchema.keyFieldNumber);
-    const name = this.extractStringField(fields, listSchema.nameFieldNumber);
-
-    if((objectId === undefined) || (key === undefined) || (name === undefined)) {
-
-      const missing = [ objectId === undefined ? "objectId" : null, key === undefined ? "key" : null, name === undefined ? "name" : null ].filter(Boolean).join(", ");
-
-      this.log.warn("Received " + entityType + " entity missing required field(s): " + missing + ".");
-
-      return undefined;
-    }
-
-    // Build the entity object with base fields.
-    const entity: Record<string, unknown> = {
-
-      key,
-      name,
-      objectId,
-      type: entityType
-    };
-
-    // Extract device_id for this entity type.
-    const deviceId = this.extractNumberField(fields, listSchema.deviceIdFieldNumber);
-
-    if(deviceId !== undefined) {
-
-      entity.deviceId = deviceId;
-    }
-
-    // Extract all scalar fields defined in the schema.
-    for(const [ fieldName, fieldSpec ] of Object.entries(listSchema.fields) as [ string, FieldSpec ][]) {
-
-      const value = this.extractFieldBySpec(fields, fieldSpec);
-
-      if(value !== undefined) {
-
-        entity[fieldName] = value;
-      }
-    }
-
-    // Extract all repeated fields defined in the schema.
-    if(listSchema.repeatedFields) {
-
-      for(const [ fieldName, fieldSpec ] of Object.entries(listSchema.repeatedFields) as [ string, RepeatedFieldSpec ][]) {
-
-        const values = this.extractRepeatedField(fields, fieldSpec);
-
-        if(values !== undefined) {
-
-          entity[fieldName] = values;
-        }
-      }
-    }
-
-    return entity as unknown as Entity;
-  }
-
-  /**
-   * Extract entity key from protobuf fields. Entity keys can be encoded as either Buffer or number types.
-   *
-   * @param fields - The decoded protobuf fields.
-   * @param fieldNum - The field number to extract.
-   * @returns The entity key or undefined if not found.
-   */
-  private extractEntityKey(fields: Record<number, FieldValue[]>, fieldNum: number): number | undefined {
-
-    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
-    const rawKey = fields[fieldNum]?.[0];
-
-    if(!rawKey) {
-
-      return undefined;
-    }
-
-    // Handle both Buffer and number types.
-    if(Buffer.isBuffer(rawKey)) {
-
-      return rawKey.readUInt32LE(0);
-    }
-
-    if(typeof rawKey === "number") {
-
-      return rawKey;
-    }
-
-    return undefined;
-  }
-
-  /**
-   * Extract fixed32 field from protobuf fields. Fixed32 fields are always 4 bytes and represent 32-bit values.
-   *
-   * @param fields - The decoded protobuf fields.
-   * @param fieldNum - The field number to extract.
-   * @returns The numeric value or undefined if not found.
-   */
-  private extractFixed32Field(fields: Record<number, FieldValue[]>, fieldNum: number): number | undefined {
-
-    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
-    const rawBuf = fields[fieldNum]?.[0];
-
-    if(!Buffer.isBuffer(rawBuf) || (rawBuf.length !== FIXED32_SIZE)) {
-
-      return undefined;
-    }
-
-    return rawBuf.readUInt32LE(0);
-  }
-
-  /**
-   * Extract string field from protobuf fields. String fields are encoded as UTF-8 bytes.
-   *
-   * @param fields - The decoded protobuf fields.
-   * @param fieldNum - The field number to extract.
-   * @returns The string value or undefined if not found.
-   */
-  private extractStringField(fields: Record<number, FieldValue[]>, fieldNum: number): string | undefined {
-
-    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
-    const rawBuf = fields[fieldNum]?.[0];
-
-    if(!Buffer.isBuffer(rawBuf)) {
-
-      return undefined;
-    }
-
-    return rawBuf.toString("utf8");
-  }
-
-  /**
-   * Extract number field from protobuf fields. Number fields are encoded as varints.
-   *
-   * @param fields - The decoded protobuf fields.
-   * @param fieldNum - The field number to extract.
-   * @returns The numeric value or undefined if not found.
-   */
-  private extractNumberField(fields: Record<number, FieldValue[]>, fieldNum: number): number | undefined {
-
-    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
-    const raw = fields[fieldNum]?.[0];
-
-    return (typeof raw === "number") ? raw : undefined;
-  }
-
-  /**
-   * Extract repeated HomeAssistantServiceMap fields and convert to a Record. This handles the repeated nested message pattern used for data, data_template, and
-   * variables fields in HomeassistantServiceResponse.
-   *
-   * @param fields - The decoded protobuf fields.
-   * @param fieldNum - The field number containing the repeated map entries.
-   * @returns A Record mapping keys to values.
-   */
-  private extractRepeatedServiceMap(fields: Record<number, FieldValue[]>, fieldNum: number): Record<string, string> {
-
-    const result: Record<string, string> = {};
-    const mapFields = fields[fieldNum];
-
-    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
-    if(!mapFields || !Array.isArray(mapFields)) {
-
-      return result;
-    }
-
-    for(const mapBuffer of mapFields) {
-
-      if(Buffer.isBuffer(mapBuffer)) {
-
-        const mapMsg = this.decodeProtobuf(mapBuffer);
-        const key = this.extractStringField(mapMsg, 1);
-        const value = this.extractStringField(mapMsg, 2);
-
-        if((key !== undefined) && (value !== undefined)) {
-
-          result[key] = value;
-        }
-      }
-    }
-
-    return result;
-  }
-
-  /**
-   * Extract telemetry value from protobuf fields. Telemetry values can be numbers, floats, or strings depending on the entity type.
-   *
-   * @param fields - The decoded protobuf fields.
-   * @param fieldNum - The field number to extract.
-   * @returns The telemetry value or undefined if not found.
-   */
-  private extractTelemetryValue(fields: Record<number, FieldValue[]>, fieldNum: number): number | string | undefined {
-
-    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
-    const valRaw = fields[fieldNum]?.[0];
-
-    if(Buffer.isBuffer(valRaw)) {
-
-      // Interpret 4-byte buffers as float32, others as UTF-8 strings.
-      return valRaw.length === FIXED32_SIZE ? valRaw.readFloatLE(0) : valRaw.toString("utf8");
-    }
-
-    return valRaw as number;
-  }
-
-  /**
-   * Frames a raw protobuf payload with the appropriate framing based on encryption state. This method automatically chooses between encrypted and plaintext framing.
-   *
-   * @param type - The message type.
-   * @param payload - The message payload.
-   */
-  private frameAndSend(type: MessageType, payload: Buffer): void {
-
-    if((this.handshakeState === Handshake.READY) && this.noiseClient?.sendCipher) {
-
-      // Use Noise encryption.
-      const message = this.serializeNoiseMessage(type, payload);
-      const encrypted = this.noiseClient.sendCipher.EncryptWithAd(Buffer.alloc(0), message);
-
-      this.writeNoiseFrame(Buffer.from(encrypted));
-    } else {
-
-      // Use plaintext framing.
-      this.sendPlaintextMessage(type, payload);
-    }
-  }
-
-  /**
-   * Send a plaintext message with standard framing. Plaintext messages use a simple length-prefixed format.
-   *
-   * @param type - The message type.
-   * @param payload - The message payload.
-   */
-  private sendPlaintextMessage(type: MessageType, payload: Buffer): void {
-
-    // Construct the message header with sentinel, length, and type.
-    const header = Buffer.concat([ Buffer.from([ProtocolType.PLAINTEXT]), this.encodeVarint(payload.length), this.encodeVarint(type) ]);
-
-    // Write the complete framed message to the socket.
-    if(this.clientSocket && !this.clientSocket.destroyed) {
-
-      this.clientSocket.write(Buffer.concat([ header, payload ]));
-    }
-  }
-
-  /**
-   * Encode protobuf fields into a buffer. This creates a protobuf message from field definitions.
-   *
-   * @param fields - The fields to encode.
-   * @returns The encoded protobuf message.
-   */
-  private encodeProtoFields(fields: ProtoField[]): Buffer {
-
-    const parts: Buffer[] = [];
-    let buf: Buffer;
-
-    for(const field of fields) {
-
-      // Encode the field tag.
-      parts.push(this.encodeVarint((field.fieldNumber << 3) | field.wireType));
-
-      // Encode the field value based on wire type.
-      switch(field.wireType) {
-
-        case WireType.VARINT:
-
-          parts.push(this.encodeVarint(field.value as number));
-
-          break;
-
-        case WireType.LENGTH_DELIMITED:
-
-          buf = field.value as Buffer;
-
-          parts.push(this.encodeVarint(buf.length));
-          parts.push(buf);
-
-          break;
-
-        case WireType.FIXED32:
-
-          buf = Buffer.alloc(FIXED32_SIZE);
-
-          if(typeof field.value === "number") {
-
-            buf.writeUInt32LE(field.value, 0);
-          } else {
-
-            (field.value as Buffer).copy(buf);
-          }
-
-          parts.push(buf);
-
-          break;
-      }
-    }
-
-    return Buffer.concat(parts);
-  }
-
-  /**
-   * Build key field as fixed32 for command requests. Entity keys are always sent as fixed32 fields in command messages.
-   *
-   * @param key - The entity key.
-   * @returns The field definition.
-   */
-  private buildKeyField(key: number): ProtoField {
-
-    return { fieldNumber: 1, value: key, wireType: WireType.FIXED32 };
-  }
-
-  /**
-   * Add device_id field to command fields if the entity has one.
-   *
-   * @param fields - The array of protobuf fields to add to.
-   * @param key - The entity key to look up device_id for.
-   * @param fieldNumber - The field number to use for device_id.
-   */
-  private addDeviceIdField(fields: ProtoField[], key: number, fieldNumber: number): void {
-
-    const deviceId = this.entityDeviceIds.get(key);
-
-    if(deviceId !== undefined) {
-
-      fields.push({ fieldNumber, value: deviceId, wireType: WireType.VARINT });
-    }
-  }
-
-  /**
-   * Encode a single field value based on its schema specification. This handles the wire type encoding for different value types.
-   *
-   * @param value - The value to encode.
-   * @param spec - The field specification from the schema.
-   * @returns The encoded value suitable for a ProtoField.
-   */
-  private encodeFieldValue(value: unknown, spec: FieldSpec | HasPatternField): number | Buffer {
-
-    const valueType = spec.valueType;
-
-    switch(valueType) {
-
-      case "bool":
-
-        return (value as boolean) ? 1 : 0;
-
-      case "enum":
-      case "varint":
-      case "sint32":
-
-        return value as number;
-
-      case "float": {
-
-        const buf = Buffer.alloc(FIXED32_SIZE);
-
-        buf.writeFloatLE(value as number, 0);
-
-        return buf;
-      }
-
-      case "fixed32": {
-
-        const buf = Buffer.alloc(FIXED32_SIZE);
-
-        buf.writeUInt32LE(value as number, 0);
-
-        return buf;
-      }
-
-      case "string":
-
-        return Buffer.from(value as string, "utf8");
-
-      default:
-
-        return value as number;
-    }
-  }
-
-  /**
-   * Send a command to an entity using schema-driven encoding. This unified method handles all entity command types by looking up the appropriate schema and encoding
-   * fields according to the schema specification.
-   *
-   * @param entityType - The type of entity (e.g., "switch", "light", "climate").
-   * @param id - The entity ID (format: "type-object_id").
-   * @param options - The command options as key-value pairs.
-   */
-  private sendEntityCommand(entityType: string, id: string, options: Record<string, unknown>): void {
-
-    // Look up the schema for this entity type. We use optional chaining to handle unknown entity types safely.
-    const schema = ENTITY_SCHEMAS[entityType] as typeof ENTITY_SCHEMAS[keyof typeof ENTITY_SCHEMAS] | undefined;
-
-    if(schema === undefined) {
-
-      this.log.warn("Unknown entity type: " + entityType + ".");
+      this.log.debug("frameAndSend invoked without an active transport; dropping " + messageTypeName(type) + ".");
 
       return;
     }
 
-    // Verify this entity type supports commands.
-    if(!schema.command) {
-
-      this.log.warn("Entity type " + entityType + " does not support commands.");
-
-      return;
-    }
-
-    const commandSchema = schema.command;
-
-    // Look up the entity key using the provided ID.
-    const key = this.entityKeys.get(id);
-
-    // Log debugging information.
-    this.log.debug("sendEntityCommand - type: " + entityType + " | ID: " + id + " | KEY: " + key + " | options: " + JSON.stringify(options));
-
-    // Return early if the entity key is not found.
-    if(!key) {
-
-      this.log.warn("Entity key not found for ID: " + id + ".");
-
-      return;
-    }
-
-    // Apply enum mappings to transform string values to protocol enum numbers. This allows callers to use user-friendly strings like "heat" instead of numeric
-    // values like 3.
-    const transformedOptions: Record<string, unknown> = { ...options };
-
-    if(commandSchema.enumMappings) {
-
-      for(const [ fieldName, mapping ] of Object.entries(commandSchema.enumMappings)) {
-
-        const value = transformedOptions[fieldName];
-
-        if((typeof value === "string") && (value in mapping)) {
-
-          transformedOptions[fieldName] = mapping[value];
-        }
-      }
-    }
-
-    // Build the protobuf fields starting with the key field.
-    const fields: ProtoField[] = [this.buildKeyField(key)];
-
-    // Track which option keys we process so we can warn about unrecognized ones.
-    const processedKeys = new Set<string>();
-
-    // Process regular fields (non-has-pattern).
-    for(const [ optionName, fieldSpec ] of Object.entries(commandSchema.fields)) {
-
-      const value = transformedOptions[optionName];
-
-      if(value === undefined) {
-
-        continue;
-      }
-
-      processedKeys.add(optionName);
-
-      const encodedValue = this.encodeFieldValue(value, fieldSpec);
-
-      fields.push({
-
-        fieldNumber: fieldSpec.fieldNumber,
-        value: encodedValue,
-        wireType: fieldSpec.wireType
-      });
-    }
-
-    // Process has-pattern fields (fields that use the has_*/value pattern).
-    for(const [ optionName, hasPatternSpec ] of Object.entries(commandSchema.hasPatternFields)) {
-
-      const value = transformedOptions[optionName];
-
-      if(value === undefined) {
-
-        continue;
-      }
-
-      processedKeys.add(optionName);
-
-      // Add the "has" field (always a varint with value 1).
-      fields.push({
-
-        fieldNumber: hasPatternSpec.hasFieldNumber,
-        value: 1,
-        wireType: WireType.VARINT
-      });
-
-      // Add the value field.
-      const encodedValue = this.encodeFieldValue(value, hasPatternSpec);
-
-      fields.push({
-
-        fieldNumber: hasPatternSpec.valueFieldNumber,
-        value: encodedValue,
-        wireType: hasPatternSpec.wireType
-      });
-    }
-
-    // Log any option keys that weren't recognized by the schema. This helps catch typos and API misuse.
-    for(const optionKey of Object.keys(options)) {
-
-      if(!processedKeys.has(optionKey)) {
-
-        this.log.debug("sendEntityCommand: unrecognized option '" + optionKey + "' for entity type '" + entityType + "' (ignored).");
-      }
-    }
-
-    // Add device_id if present.
-    this.addDeviceIdField(fields, key, commandSchema.deviceIdFieldNumber);
-
-    // Encode and send the command request.
-    const payload = this.encodeProtoFields(fields);
-
-    this.frameAndSend(commandSchema.messageType, payload);
-  }
-
-  /**
-   * Get entity key by ID. This looks up the numeric key for an entity given its string ID.
-   *
-   * @param id - The entity ID to look up.
-   *
-   * @returns The entity key or `null` if not found.
-   */
-  public getEntityKey(id: string): Nullable<number> {
-
-    return this.entityKeys.get(id) ?? null;
-  }
-
-  /**
-   * Log all registered entity IDs for debugging. Logs entities grouped by type with their names and keys. This is primarily a debugging and development tool.
-   */
-  public logAllEntityIds(): void {
-
-    this.log.warn("Registered Entity IDs:");
-
-    for(const [ type, ids ] of Object.entries(this.getAvailableEntityIds())) {
-
-      this.log.warn("  " + type + ":");
-
-      for(const id of ids) {
-
-        const entity = this.getEntityById(id);
-
-        if(entity) {
-
-          this.log.warn("    " + id + " => " + entity.name + " (key: " + entity.key + ")");
-        }
-      }
-    }
-  }
-
-  /**
-   * Get entity information by ID. This retrieves full entity details given its string ID.
-   *
-   * @param id - The entity ID to look up.
-   *
-   * @returns The entity information or `null` if not found.
-   */
-  public getEntityById(id: string): Nullable<Entity> {
-
-    const key = this.entityKeys.get(id);
-
-    if(!key) {
-
-      return null;
-    }
-
-    const name = this.entityNames.get(key);
-    const objectId = this.entityObjectIds.get(key);
-    const type = this.entityTypes.get(key);
-
-    if(!name || !objectId || !type) {
-
-      return null;
-    }
-
-    return { key, name, objectId, type };
-  }
-
-  /**
-   * Check if an entity ID exists. This is useful for validating entity IDs before sending commands.
-   *
-   * @param id - The entity ID to check.
-   *
-   * @returns `true` if the entity exists, `false` otherwise.
-   */
-  public hasEntity(id: string): boolean {
-
-    return this.entityKeys.has(id);
-  }
-
-  /**
-   * Get all available entity IDs grouped by type. This provides a structured view of all discovered entities.
-   *
-   * @returns Object with entity types as keys and arrays of IDs as values.
-   */
-  public getAvailableEntityIds(): Record<string, string[]> {
-
-    const result: Record<string, string[]> = {};
-
-    for(const id of this.entityKeys.keys()) {
-
-      const type = id.split("-")[0];
-
-      result[type] ??= [];
-      result[type].push(id);
-    }
-
-    return result;
-  }
-
-  /**
-   * Get all entities with their IDs. This returns the complete list of entities with their string IDs included.
-   *
-   * @returns Array of entities with their corresponding IDs.
-   */
-  public getEntitiesWithIds(): Array<Entity & { id: string }> {
-
-    return this.discoveredEntities.map(entity => {
-
-      const id = (entity.type + "-" + entity.name).replace(/ /g, "_").toLowerCase();
-
-      return { ...entity, id };
+    // Fire-and-forget; a send-related socket fault surfaces on the transport's iterator and is routed via the receiver's terminal-completion seam into the disconnect
+    // path (which schedules auto-reconnect). The local catch only happens if the socket was destroyed mid-write, which we cannot recover from at the application layer;
+    // logging at debug suffices because the iterator-driven teardown is the authoritative recovery.
+    void this.transport.send(type, payload).catch((err: unknown) => {
+
+      this.log.debug("frameAndSend failed for " + messageTypeName(type) + ": " + (err instanceof Error ? err.message : String(err)));
     });
   }
 
   /**
-   * Send a ping request to the device to heartbeat the connection. This can be used to keep the connection alive and verify connectivity.
+   * Get entity key by ID. This looks up the numeric key for an entity given its branded id. Use {@link entityId} to mint the brand or
+   * {@link parseEntityId} to narrow an untrusted string before calling.
+   *
+   * Usage:
+   *
+   * {@includeCode ./examples/showcase.ts#entity-key-resolution}
+   *
+   * @param id - The branded entity id to look up.
+   *
+   * @returns The entity key or `null` if not found.
+   *
+   */
+  public getEntityKey(id: EntityId): Nullable<number> {
+
+    return this.registry.keyForId(id);
+  }
+
+  /**
+   * Emit a structured debug-level log of every registered entity, grouped by type, with names and numeric keys. Diagnostic helper - not for consumer-facing UI.
+   */
+  public logAllEntityIds(): void {
+
+    this.registry.logAll();
+  }
+
+  /**
+   * Get entity information by ID. This retrieves full entity details given its branded id. Use {@link entityId} to mint the brand or
+   * {@link parseEntityId} to narrow an untrusted string before calling.
+   *
+   * Usage:
+   *
+   * {@includeCode ./examples/showcase.ts#discovery-walkthrough}
+   *
+   * @param id - The branded entity id to look up.
+   *
+   * @returns The entity information or `null` if not found.
+   *
+   */
+  public getEntityById(id: EntityId): Nullable<Entity> {
+
+    return this.registry.byId(id);
+  }
+
+  /**
+   * Check if an entity ID exists. This is the one entity-lookup method that explicitly accepts both branded ids and plain strings - the question "is this a known
+   * id at all" is the boundary where untrusted input is allowed.
+   *
+   * Usage:
+   *
+   * {@includeCode ./examples/showcase.ts#entity-id-narrowing}
+   *
+   * @param id - The entity id to check, branded or plain.
+   *
+   * @returns `true` if the entity exists, `false` otherwise.
+   *
+   */
+  public hasEntity(id: EntityId | string): boolean {
+
+    return this.registry.hasId(id);
+  }
+
+  /**
+   * Read the most recent state event for an entity, narrowed to the entity's type.
+   *
+   * @remarks Cache contract: the latest-state cache is updated **before** listeners are notified. A `client.latest(id)` read from inside an `on("telemetry")` or
+   * per-type listener sees the event that fired the listener. The same guarantee holds for the {@link snapshot} and {@link snapshotFor} views.
+   *
+   * Usage:
+   *
+   * {@includeCode ./examples/showcase.ts#latest-state-lookup}
+   *
+   * @typeParam T - Entity type tag carried by the branded id.
+   * @param id - Branded entity id.
+   * @returns The state event, or `null` when no state has been recorded since the most recent {@link EspHomeClient.connect}.
+   *
+   */
+  public latest<T extends ExtendedEntityType<Extras>>(id: EntityId<T>): Nullable<StateEventFor<SchemaForExtended<T, Extras>>> {
+
+    // The cache is keyed by the same branded id the caller already narrowed to type T; for extras-keyed types the cache stores whatever event was set under that
+    // id, so the cast back to the extras-keyed shape is sound without needing extras-specific cache typing.
+    return this.latestCache.get(id as EntityId) as Nullable<StateEventFor<SchemaForExtended<T, Extras>>>;
+  }
+
+  /**
+   * Read-only snapshot of the entire latest-state cache. One {@link TelemetryEvent} per entity, keyed by branded id. Useful for "rehydrate UI from current state on
+   * (re)connect" patterns.
+   *
+   * @remarks Cache contract: the returned map is a live view, and the cache is updated **before** listeners are notified. A `client.snapshot()` iteration inside an
+   * `on("telemetry")` or per-type listener already includes the event that fired the listener. The map reflects only the state events received so far - it is a live view
+   * of the cache, not a guaranteed-complete point-in-time snapshot, because ESPHome's `SubscribeStates` stream has no "initial states complete" marker.
+   *
+   * Usage:
+   *
+   * {@includeCode ./examples/showcase.ts#snapshot}
+   *
+   * @returns A read-only view of every entity's most recent state.
+   *
+   */
+  public snapshot(): ReadonlyMap<EntityId, TelemetryEvent> {
+
+    return this.latestCache.entries();
+  }
+
+  /**
+   * Read-only snapshot of the latest-state cache, narrowed to one entity type.
+   *
+   * @remarks Cache contract: same as {@link snapshot} - the cache is updated **before** listeners are notified, so an `on("telemetry")` or per-type listener that
+   * calls `snapshotFor(type)` sees the event that fired the listener.
+   *
+   * Usage:
+   *
+   * {@includeCode ./examples/showcase.ts#snapshot}
+   *
+   * @typeParam T - Entity type tag.
+   * @param type - The entity type to filter on.
+   * @returns A read-only map of entity ids to their state events, narrowed to entries of type `T`.
+   */
+  public snapshotFor<T extends ExtendedEntityType<Extras>>(type: T): ReadonlyMap<EntityId<T>, StateEventFor<SchemaForExtended<T, Extras>>> {
+
+    // entriesFor filters by the same type string the schema's `type` tag declares, matching the bus channel's routing key one-to-one; extras-keyed
+    // entries route correctly without needing extras-specific cache typing.
+    return this.latestCache.entriesFor(type as EntityType) as unknown as ReadonlyMap<EntityId<T>, StateEventFor<SchemaForExtended<T, Extras>>>;
+  }
+
+  /**
+   * Enumerate the parent ESP's sub-devices. Single-device configurations return an empty array; multi-device parents return one record per addressable sub-device
+   * (the parent itself, `device_id` 0, is not included).
+   *
+   * Usage:
+   *
+   * {@includeCode ./examples/showcase.ts#sub-device-enumeration}
+   *
+   * @returns A read-only list of {@link SubDevice} records.
+   *
+   */
+  public subDevices(): readonly SubDevice[] {
+
+    return this.subDeviceList;
+  }
+
+  /**
+   * Filter the discovered entity list by parent device. Pass a positive sub-device id to scope to that sub-device, `0` to scope to the parent ESP, or `undefined`
+   * to return every entity regardless of device.
+   *
+   * Usage:
+   *
+   * {@includeCode ./examples/showcase.ts#sub-device-enumeration}
+   *
+   * @param deviceId - The device id to filter on, or `undefined` to return every entity.
+   * @returns A new array of matching entities. The original entity records are not copied; consumers should treat them as read-only.
+   *
+   */
+  public entitiesByDevice(deviceId: number | undefined): Entity[] {
+
+    return this.registry.byDevice(deviceId);
+  }
+
+  /**
+   * Snapshot every discovered entity id, grouped by entity type. Convenient for "what can I control on this device?" UIs that don't need the per-entity metadata.
+   *
+   * Usage:
+   *
+   * {@includeCode ./examples/showcase.ts#discovery-walkthrough}
+   *
+   * @returns A plain record keyed by entity type, each value an array of branded id strings in discovery order.
+   *
+   */
+  public getAvailableEntityIds(): Record<string, string[]> {
+
+    return this.registry.availableIds();
+  }
+
+  /**
+   * Snapshot every discovered entity record with its branded id stamped in as the `id` field. Useful when a consumer needs both the typed metadata and the routable
+   * id together (for example to populate a UI list keyed by id).
+   *
+   * Usage:
+   *
+   * {@includeCode ./examples/showcase.ts#discovery-walkthrough}
+   *
+   * @returns A new array of entity records with `id` derived from the registry's reverse index. Mutating the array does not affect the registry.
+   *
+   */
+  public getEntitiesWithIds(): (Entity & { id: string })[] {
+
+    return this.registry.withIds();
+  }
+
+  /**
+   * Send a `PING_REQUEST` frame on demand. The keep-alive supervisor drives heartbeat automatically when `keepAlive` is enabled; this method is for consumers that
+   * want to force an immediate liveness probe (e.g., after a long idle period before issuing a critical command).
    */
   public sendPing(): void {
 
@@ -4292,1606 +2788,782 @@ export class EspHomeClient extends EventEmitter {
   }
 
   /**
-   * Sends a SwitchCommandRequest for the given entity ID and on/off state. This controls binary switch entities like garage door openers.
+   * Generic, type-safe command entry point. The single canonical way to issue any entity command.
    *
-   * @param id - The entity ID (format: "switch-object_id").
-   * @param state - `true` for on, `false` for off.
+   * @remarks `T` is inferred from the branded id, which narrows `options` automatically: `command(lightId, { state: true, brightness: 0.5 })` typechecks; passing
+   * `position` for a light is a compile error. The runtime adapter table (`COMMAND_ADAPTERS` from `./schemas/adapters.ts`) handles wire-vs-API divergences (light's
+   * `rgb: { r, g, b }` flattening, siren's duration rounding) before the schema-driven encoder runs.
+   *
+   * Fire-and-forget at the consumer level: encode failures and unknown ids are warned via the configured logger and dropped rather than thrown, so the call site
+   * stays linear. To await a matching state event, use {@link EspHomeClient.commandAndAwait}.
+   *
+   * Usage:
+   *
+   * {@includeCode ./examples/showcase.ts#command-and-await}
+   *
+   * @param id - The branded entity id. Use the {@link entityId} mint or {@link parseEntityId} / {@link isEntityId} predicates to
+   * obtain one from an untrusted string.
+   * @param options - Type-narrowed command options for the entity type.
+   *
    */
-  public sendSwitchCommand(id: string, state: boolean): void {
+  public command<T extends ExtendedEntityType<Extras>>(id: EntityId<T>, options: CommandFor<SchemaForExtended<T, Extras>>): void {
 
-    this.sendEntityCommand("switch", id, { state });
+    // The internal {@link runCommand} runner is parameterized over the built-in {@link EntityType} for tests' ergonomic continuity. The runtime is brand-erased - the
+    // runner extracts the entity-type string from the id's prefix and consults the seam's per-instance schema resolver - so casting at this single boundary is sound:
+    // for an extras-keyed `T` the cast widens the brand to the runner's accepted type without changing the runtime payload, and the seam routes the schema lookup
+    // through the per-instance table, not the module-level constant.
+    runCommand(this.commandHost, id as unknown as EntityId, options as unknown);
   }
 
   /**
-   * Sends a ButtonCommandRequest to press a button entity. Button entities trigger one-time actions when pressed.
+   * Send a command and resolve with the next matching state event for the same entity. Useful for "set the light, await confirmation" patterns where the caller
+   * wants the post-command state in one await rather than wiring up a separate subscription.
    *
-   * @param id - The entity ID (format: "button-object_id").
+   * @remarks Type-level constraint excludes entity types with no state response - `button` (stateless), `sensor`, `binary_sensor`, and `text_sensor` (read-only),
+   * `camera` (multi-packet image events lack the numeric key the predicate-match loop compares against), and `infrared` / `radio_frequency` (transmit is
+   * fire-and-forget; the receive event is an unsolicited inbound signal, not a command acknowledgement). Calling `commandAndAwait` against any of those is a compile
+   * error, not a runtime hang.
+   *
+   * The stream subscription opens *before* the command is sent, so the device cannot win the race by responding before we listen. The default 2000ms timeout and the
+   * caller's optional signal are composed via `AbortSignal.any`; either trigger rejects the await and tears down the subscription.
+   *
+   * Usage:
+   *
+   * {@includeCode ./examples/showcase.ts#command-and-await}
+   *
+   * @typeParam T - Entity type tag carried by the branded id.
+   * @param id - Branded entity id.
+   * @param options - Type-narrowed command options for the entity type.
+   * @param awaitOptions - Optional cancellation signal, custom timeout, and predicate that further narrows the matching state event.
+   * @returns The first state event for the entity that matches the predicate.
+   *
+   * @throws {ConfigurationError} (`MALFORMED_ENTITY_ID`) when the supplied id is not a valid `${type}-${objectId}` brand.
+   * @throws {ConfigurationError} (`UNKNOWN_ENTITY_ID`) when the id parses but the entity has not been discovered on the current connection.
+   * @throws {ConfigurationError} (`AWAIT_STREAM_CLOSED`) when the underlying telemetry stream ends before a matching state event arrives - typically because the
+   * connection dropped while the await was pending.
+   * @throws {DOMException} (`AbortError` / `TimeoutError`) when the caller's signal aborts or the default 2000ms deadline elapses.
+   *
    */
-  public sendButtonCommand(id: string): void {
+  public async commandAndAwait<T extends Exclude<ExtendedEntityType<Extras>, NonAwaitableEntityType>>(
+    id: EntityId<T>,
+    options: CommandFor<SchemaForExtended<T, Extras>>,
+    awaitOptions?: CommandAndAwaitOptions<T & Exclude<EntityType, NonAwaitableEntityType>>
+  ): Promise<StateEventFor<SchemaForExtended<T, Extras>>> {
 
-    this.sendEntityCommand("button", id, {});
+    // Same brand-erasure pattern as {@link command}; the per-instance schema resolver flows through the seam so extras-registered entity types resolve correctly.
+    return runCommandAndAwait(
+      this.commandHost,
+      id as unknown as EntityId<Exclude<EntityType, NonAwaitableEntityType>>,
+      options as unknown,
+      awaitOptions as unknown as CommandAndAwaitOptions<Exclude<EntityType, NonAwaitableEntityType>>
+    ) as Promise<StateEventFor<SchemaForExtended<T, Extras>>>;
   }
 
   /**
-   * Sends a CoverCommandRequest for the given entity ID. Cover entities represent things like garage doors, blinds, or shades.
-   * This implementation uses modern API semantics only - no deprecated legacy commands.
+   * Transmit raw mark/space timings on an infrared or radio-frequency entity. Issues `INFRARED_RF_TRANSMIT_RAW_TIMINGS_REQUEST` (id 136) on the wire; the device drives
+   * its LED or RF transmitter to reproduce the supplied pattern. Accepts either `EntityId<"infrared">` or `EntityId<"radio_frequency">`, since the wire message and
+   * field layout are shared across both physical layers.
    *
-   * @param id - The entity ID (format: "cover-object_id").
-   * @param options - Command options (at least one option must be provided).
-   * @param options.stop - Stop the cover movement (optional).
-   * @param options.position - Target position 0.0-1.0 where 0 is closed, 1 is open (optional).
-   * @param options.tilt - Target tilt 0.0-1.0 where 0 is closed, 1 is open (optional).
+   * @remarks This is the only consumer-facing entry point for the shared transmit RPC. Unlike {@link command}, the call surfaces typed failure for unknown or
+   * non-transmitter entities instead of warn-and-drop, because an IR/RF transmit silently dropped is invisible to the consumer (no acknowledged completion event arrives,
+   * so a missing transmission cannot be detected after the fact). Capability gating is centralized here so callers do not need to bit-test against
+   * {@link InfraredCapabilityFlags} themselves before every transmit. The capability flag bit positions are identical between {@link InfraredCapabilityFlags} and
+   * {@link RadioFrequencyCapabilityFlags}, so the same `TRANSMITTER` constant covers both branches.
    *
-   * @example
-   * ```typescript
-   * // Open fully
-   * await client.sendCoverCommand("cover-garage_door_cover", { position: 1.0 });
+   * Usage (infrared):
    *
-   * // Close fully
-   * await client.sendCoverCommand("cover-garage_door_cover", { position: 0.0 });
+   * {@includeCode ./examples/showcase.ts#infrared-transmit}
    *
-   * // Stop movement
-   * await client.sendCoverCommand("cover-garage_door_cover", { stop: true });
+   * Usage (radio frequency):
    *
-   * // Set to specific position - 50% open.
-   * await client.sendCoverCommand("cover-garage_door_cover", { position: 0.5 });
+   * {@includeCode ./examples/showcase.ts#radio-frequency-transmit}
    *
-   * // Set position and tilt for blinds
-   * await client.sendCoverCommand("cover-blinds_cover", { position: 1.0, tilt: 0.25 });
-   * ```
+   * @typeParam T - The branded entity-type tag; must resolve to `"infrared"` or `"radio_frequency"`.
+   * @param id - The branded entity id. The brand carries the entity type at the type level so consumers cannot transmit through a non-IR/RF entity by accident.
+   * @param options - Transmit parameters. `carrierFrequency` (Hz) drives the IR carrier or RF carrier; `repeatCount` is the number of times the entire pattern is
+   * transmitted (1 = once); `timings` is the mark/space pattern in microseconds where positive values are mark (LED/TX on) and negative values are space (LED/TX off);
+   * `modulation` is the {@link RadioFrequencyModulation} enum value (ignored for IR entities per the proto, but accepted for consumer simplicity - passing through
+   * whatever the consumer supplies is the safer choice than silently rewriting it).
+   *
+   * @throws {ConnectionError} with code `ENTITY_NOT_FOUND` when no entity is registered for `id` on the current connection.
+   * @throws {ConnectionError} with code `ENTITY_NOT_TRANSMITTER` when the entity exists but its `capabilities` bitmask does not include the transmitter bit. Receive-only
+   * hardware cannot fulfill a transmit request, so failing eagerly surfaces the configuration mismatch.
+   *
    */
-  public sendCoverCommand(id: string, options: Partial<{ stop: boolean; position: number; tilt: number }>): void {
+  public transmitRawTimings<T extends "infrared" | "radio_frequency">(id: EntityId<T>, options: CommandFor<typeof ENTITY_SCHEMAS[T]>): void {
 
-    // Validate that at least one option is provided.
-    if(!options.stop && (typeof options.position !== "number") && (typeof options.tilt !== "number")) {
+    const entity = this.registry.byId(id);
 
-      this.log.warn("sendCoverCommand requires at least one option: stop, position, or tilt.");
+    if(!entity) {
 
-      return;
+      throw new ConnectionError("No entity is registered for " + id + ".", "ENTITY_NOT_FOUND");
     }
 
-    this.sendEntityCommand("cover", id, options);
-  }
+    // The capability bitmask values for IR and RF use the same bit positions (bit 0 = transmitter). Bit-test against either constant produces the same result; we
+    // keep the bit-test inlined here so the host method does not need to branch on entity type. The `capabilities` field is declared on both schemas; the
+    // `Entity` discriminated union exposes it as `number | undefined` (a wire-missing field surfaces as undefined). Treat missing as "no transmitter bit set" - we
+    // cannot transmit through a device that did not advertise the capability.
+    const capabilities = ((entity as { capabilities?: number }).capabilities) ?? 0;
 
-  /**
-   * Sends a FanCommandRequest to control a fan entity. Fan entities represent devices that move air with optional speed and oscillation control.
-   *
-   * @param id - The entity ID (format: "fan-object_id").
-   * @param options - Command options (at least one option must be provided).
-   * @param options.state - Turn fan on (true) or off (false) (optional).
-   * @param options.speedLevel - Fan speed level as an integer (0-100 or device-specific range) (optional).
-   * @param options.oscillating - Enable (true) or disable (false) oscillation (optional).
-   * @param options.direction - Fan direction: "forward" or "reverse" (optional).
-   * @param options.presetMode - Preset mode string (optional).
-   *
-   * @example
-   * ```typescript
-   * // Turn on fan at 50% speed
-   * await client.sendFanCommand("fan-bedroom_fan", { state: true, speedLevel: 50 });
-   *
-   * // Turn on oscillation
-   * await client.sendFanCommand("fan-bedroom_fan", { oscillating: true });
-   *
-   * // Set to reverse direction
-   * await client.sendFanCommand("fan-ceiling_fan", { direction: "reverse" });
-   *
-   * // Set preset mode
-   * await client.sendFanCommand("fan-bedroom_fan", { presetMode: "sleep" });
-   *
-   * // Turn off fan
-   * await client.sendFanCommand("fan-bedroom_fan", { state: false });
-   * ```
-   */
-  public sendFanCommand(id: string, options: { state?: boolean; speedLevel?: number; oscillating?: boolean; direction?: "forward" | "reverse"; presetMode?: string }):
-  void {
+    if((capabilities & InfraredCapabilityFlags.TRANSMITTER) === 0) {
 
-    // Validate that at least one option is provided.
-    if((options.state === undefined) && (typeof options.speedLevel !== "number") && (options.oscillating === undefined) && !options.direction && !options.presetMode) {
-
-      this.log.warn("sendFanCommand requires at least one option to be specified");
-
-      return;
+      throw new ConnectionError("Entity " + id + " is not a transmitter (capabilities bitmask: " + String(capabilities) + ").", "ENTITY_NOT_TRANSMITTER");
     }
 
-    // The schema's enumMappings handle direction string-to-number transformation.
-    this.sendEntityCommand("fan", id, options);
+    // Delegate to the schema-driven command runner. Both infrared and radio_frequency declare the same command messageType (136) and field layout, so encoder output is
+    // wire-identical; the only consumer-visible distinction is the branded id's type tag carried through telemetry, not the transmit path.
+    runCommand(this.commandHost, id as unknown as EntityId, options as unknown);
   }
 
   /**
-   * Sends a comprehensive LightCommandRequest to control all aspects of a light entity. Light entities support various color modes, effects, and transitions.
+   * Async-iterable view of every state update across every entity. Yields the {@link TelemetryEvent} discriminated union; consumers narrow on the event's `type`
+   * tag.
    *
-   * @param id - The entity ID (format: "light-object_id").
-   * @param options - Command options.
-   * @param options.state - Turn light on (true) or off (false) (optional).
-   * @param options.brightness - Brightness level 0.0-1.0 (optional).
-   * @param options.colorMode - The color mode to use (see ColorMode enum) (optional).
-   * @param options.colorBrightness - Color brightness 0.0-1.0 for RGB modes (optional).
-   * @param options.rgb - RGB color values with r, g, b properties 0.0-1.0 (optional).
-   * @param options.white - White channel value 0.0-1.0 (optional).
-   * @param options.colorTemperature - Color temperature in mireds (optional).
-   * @param options.coldWhite - Cold white channel value 0.0-1.0 (optional).
-   * @param options.warmWhite - Warm white channel value 0.0-1.0 (optional).
-   * @param options.effect - Effect name string (optional).
-   * @param options.transitionLength - Transition duration in milliseconds (optional).
-   * @param options.flashLength - Flash duration in milliseconds (optional).
+   * Usage:
    *
-   * @example
-   * ```typescript
-   * // Simple on/off with brightness.
-   * await client.sendLightCommand("light-living_room_light", { state: true, brightness: 0.8 });
+   * {@includeCode ./examples/showcase.ts#telemetry-stream}
    *
-   * // Set RGB color.
-   * await client.sendLightCommand("light-led_strip_light", {
-   *   state: true,
-   *   colorMode: ColorMode.RGB,
-   *   rgb: { r: 1.0, g: 0.0, b: 0.5 },
-   *   colorBrightness: 0.9
-   * });
+   * @param options - Optional backpressure policy and cancellation signal.
+   * @returns An `AsyncIterable<TelemetryEvent>`.
    *
-   * // Set color temperature to warm white in mireds.
-   * await client.sendLightCommand("light-bedroom_light", {
-   *   state: true,
-   *   colorMode: ColorMode.COLOR_TEMPERATURE,
-   *   colorTemperature: 300,
-   *   brightness: 0.7
-   * });
-   *
-   * // Set cold/warm white balance.
-   * await client.sendLightCommand("light-kitchen_light", {
-   *   state: true,
-   *   colorMode: ColorMode.COLD_WARM_WHITE,
-   *   coldWhite: 0.3,
-   *   warmWhite: 0.7
-   * });
-   *
-   * // Apply effect with a 2 second transition.
-   * await client.sendLightCommand("light-accent_light", {
-   *   state: true,
-   *   effect: "rainbow",
-   *   transitionLength: 2000
-   * });
-   *
-   * // Flash the light for 500ms.
-   * await client.sendLightCommand("light-notification_light", {
-   *   state: true,
-   *   flashLength: 500
-   * });
-   * ```
    */
-  public sendLightCommand(id: string, options: {
-    state?: boolean;
-    brightness?: number;
-    colorMode?: ColorMode;
-    colorBrightness?: number;
-    rgb?: { r: number; g: number; b: number };
-    white?: number;
-    colorTemperature?: number;
-    coldWhite?: number;
-    warmWhite?: number;
-    effect?: string;
-    transitionLength?: number;
-    flashLength?: number;
-  }): void {
+  public telemetry(options?: StreamOptions): AsyncIterable<TelemetryEvent> {
 
-    // Build command options, expanding RGB object into flat fields for the schema-driven encoding.
-    const commandOptions: Record<string, unknown> = { ...options };
-
-    // Remove the rgb object and expand it into flat hasRgb, red, green, blue fields for schema-based encoding.
-    if(options.rgb) {
-
-      delete commandOptions.rgb;
-      commandOptions.blue = options.rgb.b;
-      commandOptions.green = options.rgb.g;
-      commandOptions.hasRgb = true;
-      commandOptions.red = options.rgb.r;
-    }
-
-    this.sendEntityCommand("light", id, commandOptions);
+    return this.bus.stream("telemetry", options);
   }
 
   /**
-   * Sends a complete LockCommandRequest to control lock entities. Lock entities support lock, unlock, and open commands with optional codes.
+   * Async-iterable view of state updates for one entity type. Filters the generic {@link telemetry} stream to events of the requested type.
    *
-   * @param id - The entity ID (format: "lock-object_id").
-   * @param command - The command to send: "lock", "unlock", or "open".
-   * @param code - Optional unlock/lock code (optional).
+   * Usage:
    *
-   * @example
-   * ```typescript
-   * // Lock without code
-   * await client.sendLockCommand("lock-front_door_lock", "lock");
+   * {@includeCode ./examples/showcase.ts#telemetry-stream-per-type}
    *
-   * // Unlock with code
-   * await client.sendLockCommand("lock-front_door_lock", "unlock", "1234");
+   * @typeParam T - Entity type tag.
+   * @param type - The entity type to filter on.
+   * @param options - Optional backpressure policy and cancellation signal.
+   * @returns An `AsyncIterable<StateEventFor<typeof ENTITY_SCHEMAS[T]>>`.
    *
-   * // Open (for locks that support it, like gate locks)
-   * await client.sendLockCommand("lock-gate_lock", "open", "5678");
-   * ```
    */
-  public sendLockCommand(id: string, command: "lock" | "unlock" | "open", code?: string): void {
+  public telemetryFor<T extends ExtendedEntityType<Extras>>(type: T, options?: StreamOptions): AsyncIterable<StateEventFor<SchemaForExtended<T, Extras>>> {
 
-    // Build options with command string and optional code. The schema's enumMappings handle command string-to-number transformation.
-    const options: Record<string, unknown> = { command };
-
-    if(code !== undefined) {
-
-      options.code = code;
-    }
-
-    this.sendEntityCommand("lock", id, options);
+    // The bus already keys per-type events by the type string; we read directly from that channel rather than filter the generic telemetry stream because the channel
+    // matches the EntityType key one-to-one in {@link ClientEventsMap}. For extras-keyed types the bus channel is the same string the schema's `type` tag
+    // declares, so the generic stream() call routes them correctly without needing extras-specific bus typing.
+    return this.bus.stream(type as EntityType, options) as AsyncIterable<StateEventFor<SchemaForExtended<T, Extras>>>;
   }
 
   /**
-   * Sends a ClimateCommandRequest to control a climate/HVAC entity. Climate entities represent heating, ventilation, and air conditioning systems with comprehensive
-   * control over temperature, fan modes, swing modes, and operating modes.
+   * Async-iterable view of state updates for one specific entity. Filters {@link telemetryFor} on the entity's numeric key (resolved from the branded id at
+   * iteration start so the filter is O(1) per event).
    *
-   * @param id - The entity ID (format: "climate-object_id").
-   * @param options - Command options (at least one option must be provided).
-   * @param options.mode - Operating mode: "off", "heat_cool", "cool", "heat", "fan_only", "dry", "auto" (optional).
-   * @param options.targetTemperature - Target temperature in the unit configured on the device (optional).
-   * @param options.targetTemperatureLow - Low point for heat_cool mode in the unit configured on the device (optional).
-   * @param options.targetTemperatureHigh - High point for heat_cool mode in the unit configured on the device (optional).
-   * @param options.fanMode - Fan mode: "on", "off", "auto", "low", "medium", "high", "middle", "focus", "diffuse", "quiet" (optional).
-   * @param options.swingMode - Swing mode: "off", "both", "vertical", "horizontal" (optional).
-   * @param options.customFanMode - Custom fan mode string when using a custom fan configuration (optional).
-   * @param options.preset - Preset mode: "none", "home", "away", "boost", "comfort", "eco", "sleep", "activity" (optional).
-   * @param options.customPreset - Custom preset string when using a custom preset configuration (optional).
-   * @param options.targetHumidity - Target humidity percentage 0-100 (optional).
+   * Usage:
    *
-   * @example
-   * ```typescript
-   * // Turn on heating to 72°F
-   * await client.sendClimateCommand("climate-thermostat_climate", {
-   *   mode: "heat",
-   *   targetTemperature: 72
-   * });
+   * {@includeCode ./examples/showcase.ts#telemetry-stream-per-id}
    *
-   * // Set to heat_cool mode with temperature range
-   * await client.sendClimateCommand("climate-thermostat_climate", {
-   *   mode: "heat_cool",
-   *   targetTemperatureLow: 68,
-   *   targetTemperatureHigh: 76
-   * });
+   * @typeParam T - Entity type tag carried by the branded id.
+   * @param id - Branded entity id.
+   * @param options - Optional backpressure policy and cancellation signal.
+   * @returns An `AsyncIterable<StateEventFor<typeof ENTITY_SCHEMAS[T]>>`.
    *
-   * // Turn on cooling with specific fan and swing settings
-   * await client.sendClimateCommand("climate-ac_climate", {
-   *   mode: "cool",
-   *   targetTemperature: 74,
-   *   fanMode: "high",
-   *   swingMode: "vertical"
-   * });
-   *
-   * // Set to eco preset
-   * await client.sendClimateCommand("climate-thermostat_climate", {
-   *   preset: "eco"
-   * });
-   *
-   * // Turn off the climate system
-   * await client.sendClimateCommand("climate-thermostat_climate", { mode: "off" });
-   *
-   * // Set custom fan mode
-   * await client.sendClimateCommand("climate-ac_climate", {
-   *   customFanMode: "turbo"
-   * });
-   *
-   * // Control humidity along with temperature
-   * await client.sendClimateCommand("climate-hvac_climate", {
-   *   mode: "auto",
-   *   targetTemperature: 72,
-   *   targetHumidity: 45
-   * });
-   * ```
    */
-  public sendClimateCommand(id: string, options: {
-    mode?: "off" | "heat_cool" | "cool" | "heat" | "fan_only" | "dry" | "auto";
-    targetTemperature?: number;
-    targetTemperatureLow?: number;
-    targetTemperatureHigh?: number;
-    fanMode?: "on" | "off" | "auto" | "low" | "medium" | "high" | "middle" | "focus" | "diffuse" | "quiet";
-    swingMode?: "off" | "both" | "vertical" | "horizontal";
-    customFanMode?: string;
-    preset?: "none" | "home" | "away" | "boost" | "comfort" | "eco" | "sleep" | "activity";
-    customPreset?: string;
-    targetHumidity?: number;
-  }): void {
+  public telemetryForId<T extends ExtendedEntityType<Extras>>(id: EntityId<T>, options?: StreamOptions): AsyncIterable<StateEventFor<SchemaForExtended<T, Extras>>> {
 
-    // Validate that at least one option is provided. Climate commands must specify at least one parameter to change.
-    if(!options.mode && (typeof options.targetTemperature !== "number") && (typeof options.targetTemperatureLow !== "number") &&
-       (typeof options.targetTemperatureHigh !== "number") && !options.fanMode && !options.swingMode && !options.customFanMode &&
-       !options.preset && !options.customPreset && (typeof options.targetHumidity !== "number")) {
+    const dash = id.indexOf("-");
+    const entityType = ((dash > 0) ? id.slice(0, dash) : id) as T;
+    const targetKey = this.registry.keyForId(id as EntityId) ?? undefined;
+    const stream = this.bus.stream(entityType as EntityType, options) as AsyncIterable<StateEventFor<SchemaForExtended<T, Extras>>>;
 
-      this.log.warn("sendClimateCommand requires at least one option to be specified.");
+    return (async function *(): AsyncGenerator<StateEventFor<SchemaForExtended<T, Extras>>> {
 
-      return;
-    }
+      // We pre-resolve the target key once. If the entity isn't known yet (e.g., subscribing before discovery completes), every event will be dropped until the consumer
+      // re-acquires the iterator after the entity is known. That's the correct behavior - we shouldn't fabricate a match against a key we don't have.
+      if(targetKey === undefined) {
 
-    // The schema's enumMappings handle mode, fanMode, swingMode, and preset string-to-number transformations.
-    this.sendEntityCommand("climate", id, options);
-  }
-
-  /**
-   * Sends a NumberCommandRequest to set the value of a number entity. Number entities represent numeric values that can be adjusted within a defined range.
-   *
-   * @param id - The entity ID (format: "number-object_id").
-   * @param value - The numeric value to set.
-   *
-   * @example
-   * ```typescript
-   * // Set a temperature setpoint
-   * await client.sendNumberCommand("number-thermostat_setpoint_number", 72.5);
-   *
-   * // Set a brightness percentage
-   * await client.sendNumberCommand("number-brightness_percent_number", 85);
-   *
-   * // Set a timer duration
-   * await client.sendNumberCommand("number-timer_minutes_number", 30);
-   * ```
-   */
-  public sendNumberCommand(id: string, value: number): void {
-
-    this.sendEntityCommand("number", id, { state: value });
-  }
-
-  /**
-   * Sends a SelectCommandRequest to set the value of a select entity. Select entities represent a choice from a list of predefined options.
-   *
-   * @param id - The entity ID (format: "select-object_id").
-   * @param option - The option string to select.
-   *
-   * @example
-   * ```typescript
-   * // Set a mode selection
-   * await client.sendSelectCommand("select-hvac_mode_select", "cooling");
-   *
-   * // Set a fan speed
-   * await client.sendSelectCommand("select-fan_speed_select", "high");
-   *
-   * // Set a preset
-   * await client.sendSelectCommand("select-preset_select", "eco");
-   * ```
-   */
-  public sendSelectCommand(id: string, option: string): void {
-
-    this.sendEntityCommand("select", id, { state: option });
-  }
-
-  /**
-   * Sends a TextCommandRequest to set the value of a text input entity. Text entities allow free-form text input within configured constraints.
-   *
-   * @param id - The entity ID (format: "text-object_id").
-   * @param text - The text string to set.
-   *
-   * @example
-   * ```typescript
-   * // Set a name field
-   * await client.sendTextCommand("text-device_name_text", "Living Room Light");
-   *
-   * // Set a message
-   * await client.sendTextCommand("text-status_message_text", "Away until 6pm");
-   *
-   * // Set a custom value
-   * await client.sendTextCommand("text-custom_field_text", "User defined value");
-   * ```
-   */
-  public sendTextCommand(id: string, text: string): void {
-
-    this.sendEntityCommand("text", id, { state: text });
-  }
-
-  /**
-   * Sends a DateCommandRequest to set the value of a date entity. Date entities represent calendar dates without time information.
-   *
-   * @param id - The entity ID (format: "date-object_id").
-   * @param year - The year (e.g., 2025).
-   * @param month - The month (1-12).
-   * @param day - The day of month (1-31).
-   *
-   * @example
-   * ```typescript
-   * // Set a target date
-   * await client.sendDateCommand("date-target_date", 2025, 12, 25);
-   *
-   * // Set a birthday
-   * await client.sendDateCommand("date-birthday", 1990, 5, 15);
-   * ```
-   */
-  public sendDateCommand(id: string, year: number, month: number, day: number): void {
-
-    this.sendEntityCommand("date", id, { day, month, year });
-  }
-
-  /**
-   * Sends a TimeCommandRequest to set the value of a time entity. Time entities represent time of day without date information.
-   *
-   * @param id - The entity ID (format: "time-object_id").
-   * @param hour - The hour (0-23).
-   * @param minute - The minute (0-59).
-   * @param second - The second (0-59, optional, defaults to 0).
-   *
-   * @example
-   * ```typescript
-   * // Set an alarm time
-   * await client.sendTimeCommand("time-alarm", 7, 30);
-   *
-   * // Set a schedule time with seconds
-   * await client.sendTimeCommand("time-schedule", 14, 45, 30);
-   * ```
-   */
-  public sendTimeCommand(id: string, hour: number, minute: number, second: number = 0): void {
-
-    this.sendEntityCommand("time", id, { hour, minute, second });
-  }
-
-  /**
-   * Sends a DateTimeCommandRequest to set the value of a datetime entity. DateTime entities represent both date and time information.
-   *
-   * @param id - The entity ID (format: "datetime-object_id").
-   * @param epochSeconds - The Unix timestamp in seconds.
-   *
-   * @example
-   * ```typescript
-   * // Set to current time
-   * await client.sendDateTimeCommand("datetime-last_update", Math.floor(Date.now() / 1000));
-   *
-   * // Set to a specific datetime
-   * const targetDate = new Date("2025-12-25T08:00:00");
-   * await client.sendDateTimeCommand("datetime-scheduled", Math.floor(targetDate.getTime() / 1000));
-   * ```
-   */
-  public sendDateTimeCommand(id: string, epochSeconds: number): void {
-
-    this.sendEntityCommand("datetime", id, { epochSeconds });
-  }
-
-  /**
-   * Sends a comprehensive MediaPlayerCommandRequest to control all aspects of a media player entity. Media player entities support playback control, volume
-   * adjustments, playlist management, and media loading with announcement support.
-   *
-   * @param id - The entity ID (format: "media_player-object_id").
-   * @param options - Command options (at least one option must be provided).
-   * @param options.command - Media command from MediaPlayerCommand enum (optional).
-   * @param options.volume - Volume level 0.0-1.0 (optional).
-   * @param options.mediaUrl - URL of media to play (optional).
-   * @param options.announcement - Whether this is an announcement that should interrupt current playback (optional).
-   *
-   * @example
-   * ```typescript
-   * // Simple playback control using enum
-   * await client.sendMediaPlayerCommand("media_player-living_room", {
-   *   command: MediaPlayerCommand.PLAY
-   * });
-   *
-   * // Pause playback
-   * await client.sendMediaPlayerCommand("media_player-living_room", {
-   *   command: MediaPlayerCommand.PAUSE
-   * });
-   *
-   * // Set volume
-   * await client.sendMediaPlayerCommand("media_player-living_room", {
-   *   volume: 0.5
-   * });
-   *
-   * // Mute/unmute
-   * await client.sendMediaPlayerCommand("media_player-living_room", {
-   *   command: MediaPlayerCommand.MUTE
-   * });
-   *
-   * // Play a specific URL
-   * await client.sendMediaPlayerCommand("media_player-living_room", {
-   *   mediaUrl: "http://example.com/music.mp3",
-   *   command: MediaPlayerCommand.PLAY
-   * });
-   *
-   * // Play an announcement (interrupts current playback)
-   * await client.sendMediaPlayerCommand("media_player-living_room", {
-   *   mediaUrl: "http://example.com/doorbell.mp3",
-   *   announcement: true,
-   *   volume: 0.8
-   * });
-   *
-   * // Control playlist
-   * await client.sendMediaPlayerCommand("media_player-living_room", {
-   *   command: MediaPlayerCommand.REPEAT_ONE
-   * });
-   * await client.sendMediaPlayerCommand("media_player-living_room", {
-   *   command: MediaPlayerCommand.CLEAR_PLAYLIST
-   * });
-   *
-   * // Turn on/off the media player
-   * await client.sendMediaPlayerCommand("media_player-living_room", {
-   *   command: MediaPlayerCommand.TURN_ON
-   * });
-   * ```
-   */
-  public sendMediaPlayerCommand(id: string, options: {
-    command?: MediaPlayerCommand;
-    volume?: number;
-    mediaUrl?: string;
-    announcement?: boolean;
-  }): void {
-
-    // Validate that at least one option is provided.
-    if((options.command === undefined) && (typeof options.volume !== "number") && !options.mediaUrl) {
-
-      this.log.warn("sendMediaPlayerCommand requires at least one option: command, volume, or mediaUrl.");
-
-      return;
-    }
-
-    this.sendEntityCommand("media_player", id, options);
-  }
-
-  /**
-   * Sends an AlarmControlPanelCommandRequest to control an alarm panel entity. Alarm control panel entities represent security system interfaces.
-   *
-   * @param id - The entity ID (format: "alarm_control_panel-object_id").
-   * @param command - The command: "disarm", "arm_home", "arm_away", "arm_night", "arm_vacation", "arm_custom_bypass", "trigger".
-   * @param code - Optional alarm code for arming/disarming (field 3).
-   *
-   * @example
-   * ```typescript
-   * // Disarm with code
-   * await client.sendAlarmControlPanelCommand("alarm_control_panel-main", "disarm", "1234");
-   *
-   * // Arm in home mode without code
-   * await client.sendAlarmControlPanelCommand("alarm_control_panel-main", "arm_home");
-   *
-   * // Arm in away mode with code
-   * await client.sendAlarmControlPanelCommand("alarm_control_panel-main", "arm_away", "1234");
-   *
-   * // Trigger alarm (usually for testing)
-   * await client.sendAlarmControlPanelCommand("alarm_control_panel-main", "trigger");
-   * ```
-   */
-  public sendAlarmControlPanelCommand(id: string, command: "disarm" | "arm_home" | "arm_away" | "arm_night" | "arm_vacation" | "arm_custom_bypass" | "trigger",
-    code?: string): void {
-
-    // Build options with command string and optional code. The schema's enumMappings handle command string-to-number transformation.
-    const options: Record<string, unknown> = { command };
-
-    if((code !== undefined) && (code !== "")) {
-
-      options.code = code;
-    }
-
-    this.sendEntityCommand("alarm_control_panel", id, options);
-  }
-
-  /**
-   * Sends a SirenCommandRequest to control a siren entity. Siren entities represent audible or visual alarm devices.
-   *
-   * @param id - The entity ID (format: "siren-object_id").
-   * @param options - Command options.
-   * @param options.state - Turn siren on (true) or off (false) (optional).
-   * @param options.tone - Siren tone/pattern string to use (optional).
-   * @param options.duration - Duration in seconds (uint32) for the siren to sound (optional).
-   * @param options.volume - Volume level 0.0-1.0 (optional).
-   *
-   * @example
-   * ```typescript
-   * // Turn on siren
-   * await client.sendSirenCommand("siren-alarm", { state: true });
-   *
-   * // Turn on with specific tone and duration
-   * await client.sendSirenCommand("siren-alarm", {
-   *   state: true,
-   *   tone: "burglar",
-   *   duration: 30,
-   *   volume: 0.8
-   * });
-   *
-   * // Turn off siren
-   * await client.sendSirenCommand("siren-alarm", { state: false });
-   * ```
-   */
-  public sendSirenCommand(id: string, options: { state?: boolean; tone?: string; duration?: number; volume?: number }): void {
-
-    // Validate that at least one option is provided.
-    if((options.state === undefined) && !options.tone && (typeof options.duration !== "number") && (typeof options.volume !== "number")) {
-
-      this.log.warn("sendSirenCommand requires at least one option: state, tone, duration, or volume.");
-
-      return;
-    }
-
-    // Transform duration to integer if provided since it's a varint (uint32) in the protocol.
-    const commandOptions: Record<string, unknown> = { ...options };
-
-    if(typeof options.duration === "number") {
-
-      commandOptions.duration = Math.round(options.duration);
-    }
-
-    this.sendEntityCommand("siren", id, commandOptions);
-  }
-
-  /**
-   * Sends an UpdateCommandRequest to control an update entity. Update entities represent firmware or software updates that can be installed.
-   *
-   * @param id - The entity ID (format: "update-object_id").
-   * @param command - The command: "update" to install the update, "check" to check for updates, or "none" for no action.
-   *
-   * @example
-   * ```typescript
-   * // Check for updates
-   * await client.sendUpdateCommand("update-firmware", "check");
-   *
-   * // Install available update
-   * await client.sendUpdateCommand("update-firmware", "update");
-   * ```
-   */
-  public sendUpdateCommand(id: string, command: "none" | "update" | "check"): void {
-
-    // The schema's enumMappings handle command string-to-number transformation.
-    this.sendEntityCommand("update", id, { command });
-  }
-
-  /**
-   * Sends a CameraImageRequest to capture an image from a camera entity. Camera entities represent image capture devices.
-   * Note: Unlike other commands, camera image requests don't target a specific entity - the device will send images from all cameras.
-   *
-   * @param single - Whether to capture a single image (true) or stream images continuously (false).
-   *
-   * @example
-   * ```typescript
-   * // Capture a single image from all cameras
-   * await client.sendCameraImageRequest(true);
-   *
-   * // Start streaming images from all cameras
-   * await client.sendCameraImageRequest(false);
-   *
-   * // Listen for camera images
-   * client.on("camera", (data) => {
-   *   console.log(`Image from ${data.entity}: ${data.image.length} bytes`);
-   *   if (data.done) {
-   *     console.log("Image capture complete");
-   *   }
-   *   // Save image to file
-   *   fs.writeFileSync(`camera-${data.entity}.jpg`, data.image);
-   * });
-   * ```
-   */
-  public sendCameraImageRequest(single: boolean): void {
-
-    // Log debugging information.
-    this.log.debug("sendCameraImageRequest - single: " + single + " | stream: " + !single);
-
-    // Build the protobuf fields according to CameraImageRequest specification. Camera image requests don't have an entity key - they apply to all cameras on the device.
-    const fields: ProtoField[] = [
-
-      { fieldNumber: 1, value: single ? 1 : 0, wireType: WireType.VARINT },
-      { fieldNumber: 2, value: single ? 0 : 1, wireType: WireType.VARINT }
-    ];
-
-    // Encode and send the camera image request. This will trigger all cameras on the device to capture or stream images. Responses will be received as
-    // CAMERA_IMAGE_RESPONSE messages.
-    const payload = this.encodeProtoFields(fields);
-
-    this.frameAndSend(MessageType.CAMERA_IMAGE_REQUEST, payload);
-  }
-
-  /**
-   * Sends a ValveCommandRequest for the given entity ID. Valve entities represent controllable valves for fluid or gas flow control.
-   *
-   * @param id - The entity ID (format: "valve-object_id").
-   * @param options - Command options (at least one option must be provided).
-   * @param options.position - Target position 0.0-1.0 where 0 is closed, 1 is open (optional).
-   * @param options.stop - Stop the valve at its current position (optional).
-   *
-   * @example
-   * ```typescript
-   * // Open valve fully
-   * await client.sendValveCommand("valve-water_main", { position: 1.0 });
-   *
-   * // Close valve
-   * await client.sendValveCommand("valve-water_main", { position: 0.0 });
-   *
-   * // Set to 50% open
-   * await client.sendValveCommand("valve-water_main", { position: 0.5 });
-   *
-   * // Stop valve movement
-   * await client.sendValveCommand("valve-water_main", { stop: true });
-   * ```
-   */
-  public sendValveCommand(id: string, options: { position?: number; stop?: boolean }): void {
-
-    // Validate that at least one option is provided.
-    if((typeof options.position !== "number") && !options.stop) {
-
-      this.log.warn("sendValveCommand requires at least one option: position or stop.");
-
-      return;
-    }
-
-    this.sendEntityCommand("valve", id, options);
-  }
-
-  /**
-   * Get the list of discovered user-defined services.
-   *
-   * @returns An array of discovered service entities.
-   *
-   * @example
-   * ```typescript
-   * const services = client.getServices();
-   * services.forEach(service => {
-   *   console.log(`Service: ${service.name} (key: ${service.key})`);
-   *   service.args.forEach(arg => {
-   *     console.log(`  - ${arg.name}: ${ServiceArgType[arg.type]}`);
-   *   });
-   * });
-   * ```
-   */
-  public getServices(): ServiceEntity[] {
-
-    return [...this.discoveredServices];
-  }
-
-  /**
-   * Execute a user-defined service on the ESPHome device.
-   *
-   * @param key - The service key (numeric identifier).
-   * @param args - An array of argument values matching the service definition.
-   *
-   * @example
-   * ```typescript
-   * // Execute a service with a string and number argument
-   * await client.executeService(12345, [
-   *   { stringValue: "test" },
-   *   { intValue: 42 }
-   * ]);
-   *
-   * // Execute a service with array arguments
-   * await client.executeService(54321, [
-   *   { boolArray: [true, false, true] },
-   *   { floatArray: [1.5, 2.5, 3.5] }
-   * ]);
-   * ```
-   */
-  public executeService(key: number, args: ExecuteServiceArgumentValue[] = []): void {
-
-    // Validate the service exists.
-    const service = this.services.get(key);
-
-    if(!service) {
-
-      this.log.error("Service with key " + key + " not found.");
-
-      return;
-    }
-
-    // Log debugging information.
-    this.log.debug("executeService - service: " + service.name + " | key: " + key + " | args: " + args.length);
-
-    // Build the ExecuteServiceRequest message according to the protocol specification.
-    const fields: ProtoField[] = [];
-
-    // Add the service key (field 1: fixed32).
-    const keyBuf = Buffer.alloc(FIXED32_SIZE);
-
-    keyBuf.writeUInt32LE(key, 0);
-    fields.push({ fieldNumber: 1, value: keyBuf, wireType: WireType.FIXED32 });
-
-    // Add each argument as a nested message (field 2: repeated ExecuteServiceArgument).
-    for(let i = 0; i < args.length; i++) {
-
-      const argValue = args[i];
-      const argDef = service.args[i];
-
-      // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
-      if(!argDef) {
-
-        this.log.warn("Argument at index " + i + " exceeds service argument definition.");
-
-        continue;
+        return;
       }
 
-      // Encode the argument based on its type.
-      const argFields: ProtoField[] = [];
+      for await (const event of stream) {
 
-      if(argValue.boolValue !== undefined) {
+        // Camera state events have a different shape (no `key`); other entity events expose `key`. Cast to a structural shape that exposes it and skip non-matching
+        // events.
+        const keyed = event as unknown as { key: number };
 
-        argFields.push({ fieldNumber: 1, value: argValue.boolValue ? 1 : 0, wireType: WireType.VARINT });
+        if(keyed.key === targetKey) {
 
-      } else if(argValue.intValue !== undefined) {
-
-        // Use field 5 for signed int32 (sint32).
-        argFields.push({ fieldNumber: 5, value: this.encodeZigzag(argValue.intValue), wireType: WireType.VARINT });
-
-      } else if(argValue.floatValue !== undefined) {
-
-        const floatBuf = Buffer.alloc(FIXED32_SIZE);
-
-        floatBuf.writeFloatLE(argValue.floatValue, 0);
-        argFields.push({ fieldNumber: 3, value: floatBuf, wireType: WireType.FIXED32 });
-
-      } else if(argValue.stringValue !== undefined) {
-
-        const stringBuf = Buffer.from(argValue.stringValue, "utf8");
-
-        argFields.push({ fieldNumber: 4, value: stringBuf, wireType: WireType.LENGTH_DELIMITED });
-
-      } else if(argValue.boolArray !== undefined) {
-
-        for(const val of argValue.boolArray) {
-
-          argFields.push({ fieldNumber: 6, value: val ? 1 : 0, wireType: WireType.VARINT });
-        }
-
-      } else if(argValue.intArray !== undefined) {
-
-        for(const val of argValue.intArray) {
-
-          argFields.push({ fieldNumber: 7, value: this.encodeZigzag(val), wireType: WireType.VARINT });
-        }
-
-      } else if(argValue.floatArray !== undefined) {
-
-        for(const val of argValue.floatArray) {
-
-          const floatBuf = Buffer.alloc(FIXED32_SIZE);
-
-          floatBuf.writeFloatLE(val, 0);
-          argFields.push({ fieldNumber: 8, value: floatBuf, wireType: WireType.FIXED32 });
-        }
-
-      } else if(argValue.stringArray !== undefined) {
-
-        for(const val of argValue.stringArray) {
-
-          const stringBuf = Buffer.from(val, "utf8");
-
-          argFields.push({ fieldNumber: 9, value: stringBuf, wireType: WireType.LENGTH_DELIMITED });
+          yield event;
         }
       }
+    })();
+  }
 
-      // Encode the argument as a nested message.
-      if(argFields.length > 0) {
+  /**
+   * Refcounted async-iterable view of device log messages at the requested level. The first iterator opened sends `SUBSCRIBE_LOGS_REQUEST(level)` on the wire;
+   * opening a second iterator at a higher verbosity upgrades the device-side subscription. ESPHome has no unsubscribe path, so the subscription persists at the
+   * highest level any iterator has requested for the lifetime of the connection (downgrades on the last close are a best-effort re-subscribe at the new maximum).
+   *
+   * Usage:
+   *
+   * {@includeCode ./examples/showcase.ts#log-subscription}
+   *
+   * @param level - The minimum log level to subscribe to.
+   * @param options - Optional backpressure policy and cancellation signal.
+   * @returns An `AsyncIterable<LogEventData>`.
+   *
+   */
+  public logs(level: LogLevel, options?: StreamOptions): AsyncIterable<LogEventData> {
 
-        const argPayload = this.encodeProtoFields(argFields);
+    return this.logManager.subscribe(level, options);
+  }
 
-        fields.push({ fieldNumber: 2, value: argPayload, wireType: WireType.LENGTH_DELIMITED });
-      }
+  /**
+   * Web Streams adapter for {@link telemetry}. Same data, different surface; backpressure parity comes from the underlying AsyncIterable. Construction is one line
+   * because `ReadableStream.from` is a stable platform method in Node 22.6+.
+   *
+   * Usage:
+   *
+   * {@includeCode ./examples/showcase.ts#web-streams-interop}
+   *
+   * @param options - Optional backpressure policy and cancellation signal.
+   * @returns A `ReadableStream<TelemetryEvent>`.
+   *
+   */
+  public telemetryReadable(options?: StreamOptions): ReadableStream<TelemetryEvent> {
+
+    return ReadableStream.from(this.telemetry(options));
+  }
+
+  /**
+   * Web Streams adapter for {@link logs}. Subscription refcounting and level-upgrade semantics are inherited from the underlying AsyncIterable.
+   *
+   * Usage:
+   *
+   * {@includeCode ./examples/showcase.ts#web-streams-interop}
+   *
+   * @param level - The minimum log level to subscribe to.
+   * @param options - Optional backpressure policy and cancellation signal.
+   * @returns A `ReadableStream<LogEventData>`.
+   *
+   */
+  public logsReadable(level: LogLevel, options?: StreamOptions): ReadableStream<LogEventData> {
+
+    return ReadableStream.from(this.logs(level, options));
+  }
+
+  /**
+   * Synchronous read of the live {@link ConnectionHealth} record. Uptime is not stored on the record; derive it from the returned snapshot via {@link
+   * connectionUptimeMs}, which reads `connectedAtMs` while the socket is up and `0` while it is down.
+   *
+   * Usage:
+   *
+   * {@includeCode ./examples/showcase.ts#lifecycle-and-health}
+   *
+   * @returns The current health record.
+   *
+   */
+  public health(): ConnectionHealth {
+
+    // Boundary copy so a consumer mutating the returned snapshot cannot corrupt the cached record. The record is the discriminated union as-is; uptime is derived by the
+    // caller via {@link connectionUptimeMs} from `connectedAtMs`, so there is nothing to compute or guard here.
+    return { ...this.healthRecord };
+  }
+
+  /**
+   * Subscribe a callback to health-state transitions. Returns a `Disposable` that removes the listener on dispose.
+   *
+   * Usage:
+   *
+   * {@includeCode ./examples/showcase.ts#health-stream}
+   *
+   * @param handler - The callback. Receives the current health record on every transition.
+   * @returns A `Disposable` that removes the listener.
+   *
+   */
+  public onHealthChange(handler: (health: ConnectionHealth) => void): Disposable {
+
+    return this.bus.on("healthChange", handler);
+  }
+
+  /**
+   * Async-iterable view of health-state transitions.
+   *
+   * Usage:
+   *
+   * {@includeCode ./examples/showcase.ts#health-stream}
+   *
+   * @param options - Optional backpressure policy and cancellation signal.
+   * @returns An `AsyncIterable<ConnectionHealth>`.
+   *
+   */
+  public healthStream(options?: StreamOptions): AsyncIterable<ConnectionHealth> {
+
+    return this.bus.stream("healthChange", options);
+  }
+
+  /**
+   * Async-iterable view of connect/disconnect transitions. Each event is the typed {@link LifecycleEvent} discriminated union; consumers gate on
+   * `event.kind === "connect" | "disconnect"` and pattern-match the disconnect cause against the typed error hierarchy.
+   *
+   * Usage:
+   *
+   * {@includeCode ./examples/showcase.ts#lifecycle-and-health}
+   *
+   * @param options - Optional backpressure policy and cancellation signal.
+   * @returns An `AsyncIterable<LifecycleEvent>`.
+   *
+   */
+  public lifecycle(options?: StreamOptions): AsyncIterable<LifecycleEvent> {
+
+    return this.bus.stream("lifecycle", options);
+  }
+
+  /**
+   * Web Streams adapter for {@link lifecycle}.
+   *
+   * Usage:
+   *
+   * {@includeCode ./examples/showcase.ts#web-streams-interop}
+   *
+   * @param options - Optional backpressure policy and cancellation signal.
+   * @returns A `ReadableStream<LifecycleEvent>`.
+   *
+   */
+  public lifecycleReadable(options?: StreamOptions): ReadableStream<LifecycleEvent> {
+
+    return ReadableStream.from(this.lifecycle(options));
+  }
+
+  /**
+   * Voice-assistant sub-API. Lazy-instantiated on first access. Single instance per client, persistent across reconnects (consumer-held references stay valid).
+   *
+   * Usage:
+   *
+   * {@includeCode ./examples/showcase.ts#voice-assistant}
+   *
+   * @returns The voice-assistant sub-API instance.
+   *
+   */
+  public get voiceAssistant(): VoiceAssistantApi {
+
+    if(!this.voiceAssistantApi) {
+
+      const seam: VoiceAssistantHost = {
+
+        bus: this.bus,
+        log: this.log,
+        send: (type, payload): void => { this.frameAndSend(type, payload); }
+      };
+
+      this.voiceAssistantApi = new VoiceAssistantApi(seam);
     }
 
-    // Encode and send the execute service request.
-    const payload = this.encodeProtoFields(fields);
-
-    this.frameAndSend(MessageType.EXECUTE_SERVICE_REQUEST, payload);
+    return this.voiceAssistantApi;
   }
 
   /**
-   * Execute a user-defined service on the ESPHome device by name.
+   * Serial-proxy sub-API. Lazy-instantiated on first access. Single instance per client, persistent across reconnects (consumer-held references stay valid).
    *
-   * @param name - The service name.
-   * @param args - An array of argument values matching the service definition.
+   * @remarks Composes two `Correlator` instances (flush + getModemPins, keyed by instance) with a refcounted per-instance subscriber map for the data-stream
+   * iterators. Re-issues the device-side subscriptions on every successful reconnect so consumer-held iterators see a continuous stream across the disconnect.
    *
-   * @example
-   * ```typescript
-   * // Execute a service by name
-   * await client.executeServiceByName("my_custom_service", [
-   *   { stringValue: "test" },
-   *   { intValue: 42 }
-   * ]);
-   * ```
+   * Usage:
+   *
+   * {@includeCode ./examples/showcase.ts#serial-list}
+   *
+   * @returns The serial-proxy sub-API instance.
+   *
    */
-  public executeServiceByName(name: string, args: ExecuteServiceArgumentValue[] = []): void {
+  public get serial(): SerialProxyApi {
 
-    // Find the service by name.
-    const service = this.discoveredServices.find(s => s.name === name);
+    if(!this.serialProxyApi) {
 
-    if(!service) {
+      const seam: SerialProxyHost = {
 
-      this.log.error("Service with name '" + name + "' not found.");
+        bus: this.bus,
+        deviceInfo: (): Nullable<DeviceInfo> => this.remoteDeviceInfo,
+        log: this.log,
+        send: (type, payload): void => { this.frameAndSend(type, payload); }
+      };
 
-      return;
+      this.serialProxyApi = new SerialProxyApi(seam);
     }
 
-    // Execute the service using its key.
-    this.executeService(service.key, args);
+    return this.serialProxyApi;
   }
 
   /**
-   * Subscribe to voice assistant events from the ESPHome device.
+   * Bluetooth-proxy sub-API. Lazy-instantiated on first access. Single instance per client, persistent across reconnects (consumer-held references stay valid).
    *
-   * @param flags - Subscription flags (optional, defaults to NONE).
+   * @remarks Owns the global advertisement-subscription refcount and the cached scanner-state push. Re-issues the device-side advertisement subscription on every
+   * successful reconnect so iterators alive across the cycle see a continuous stream. The module owns both the scanning surface and the `Correlator`-driven GATT
+   * request/response operations (connect, pair, unpair, service discovery, characteristic and descriptor read/write, notify).
    *
-   * @example
-   * ```typescript
-   * // Subscribe to voice assistant without audio streaming
-   * client.subscribeVoiceAssistant();
+   * Usage:
    *
-   * // Subscribe with audio streaming
-   * client.subscribeVoiceAssistant(VoiceAssistantSubscribeFlag.API_AUDIO);
-   * ```
+   * {@includeCode ./examples/showcase.ts#bluetooth-availability}
+   *
+   * @returns The Bluetooth-proxy sub-API instance.
+   *
    */
-  public subscribeVoiceAssistant(flags: VoiceAssistantSubscribeFlag = VoiceAssistantSubscribeFlag.NONE): void {
+  public get bluetooth(): BluetoothProxyApi {
 
-    this.log.debug("Subscribing to voice assistant with flags: " + flags);
+    if(!this.bluetoothProxyApi) {
 
-    // Build the SubscribeVoiceAssistantRequest message.
-    const fields: ProtoField[] = [
+      const seam: BluetoothProxyHost = {
 
-      { fieldNumber: 1, value: 1, wireType: WireType.VARINT },
-      { fieldNumber: 2, value: flags, wireType: WireType.VARINT }
-    ];
+        bus: this.bus,
+        deviceInfo: (): Nullable<DeviceInfo> => this.remoteDeviceInfo,
+        log: this.log,
+        send: (type, payload): void => { this.frameAndSend(type, payload); }
+      };
 
-    const payload = this.encodeProtoFields(fields);
-
-    this.frameAndSend(MessageType.SUBSCRIBE_VOICE_ASSISTANT_REQUEST, payload);
-    this.voiceAssistantSubscribed = true;
-  }
-
-  /**
-   * Unsubscribe from voice assistant events.
-   *
-   * @example
-   * ```typescript
-   * client.unsubscribeVoiceAssistant();
-   * ```
-   */
-  public unsubscribeVoiceAssistant(): void {
-
-    this.log.debug("Unsubscribing from voice assistant");
-
-    // Build the SubscribeVoiceAssistantRequest message with subscribe = false.
-    const fields: ProtoField[] = [
-
-      { fieldNumber: 1, value: 0, wireType: WireType.VARINT }
-    ];
-
-    const payload = this.encodeProtoFields(fields);
-
-    this.frameAndSend(MessageType.SUBSCRIBE_VOICE_ASSISTANT_REQUEST, payload);
-    this.voiceAssistantSubscribed = false;
-  }
-
-  /**
-   * Subscribe to Home Assistant service calls from the ESPHome device. When subscribed, the client will receive `homeassistantService` events whenever the device
-   * triggers a `homeassistant.action` or `homeassistant.service` call in its ESPHome configuration.
-   *
-   * @example
-   * ```typescript
-   * // Subscribe to Home Assistant service calls.
-   * client.subscribeHomeAssistantServices();
-   *
-   * // Handle service call events.
-   * client.on("homeassistantService", (event) => {
-   *
-   *   console.log("Service: " + event.service);
-   *   console.log("Data: " + JSON.stringify(event.data));
-   * });
-   * ```
-   */
-  public subscribeHomeAssistantServices(): void {
-
-    this.log.debug("Subscribing to Home Assistant services.");
-
-    // Send empty SubscribeHomeassistantServicesRequest message.
-    this.frameAndSend(MessageType.SUBSCRIBE_HOMEASSISTANT_SERVICES_REQUEST, Buffer.alloc(0));
-  }
-
-  /**
-   * Subscribe to Home Assistant state requests from the ESPHome device. When subscribed, the client will receive `homeassistantStateRequest` events whenever the
-   * device wants to import the state of a Home Assistant entity.
-   *
-   * @example
-   * ```typescript
-   * // Subscribe to Home Assistant state requests.
-   * client.subscribeHomeAssistantStates();
-   *
-   * // Handle state request events and respond with the requested state.
-   * client.on("homeassistantStateRequest", (request) => {
-   *
-   *   // Look up the state in your system and send it back.
-   *   const state = getHomeAssistantState(request.entityId, request.attribute);
-   *
-   *   client.sendHomeAssistantState(request.entityId, state, request.attribute);
-   * });
-   * ```
-   */
-  public subscribeHomeAssistantStates(): void {
-
-    this.log.debug("Subscribing to Home Assistant state requests.");
-
-    // Send empty SubscribeHomeAssistantStatesRequest message.
-    this.frameAndSend(MessageType.SUBSCRIBE_HOME_ASSISTANT_STATES_REQUEST, Buffer.alloc(0));
-  }
-
-  /**
-   * Send a Home Assistant entity state to the ESPHome device. This is used to respond to `homeassistantStateRequest` events when the device needs the current state
-   * of a Home Assistant entity.
-   *
-   * @param entityId - The Home Assistant entity ID.
-   * @param state - The current state value as a string.
-   * @param attribute - The specific attribute (optional, empty string for main state).
-   *
-   * @example
-   * ```typescript
-   * // Send state for the main entity state.
-   * client.sendHomeAssistantState("sensor.temperature", "21.5");
-   *
-   * // Send state for a specific attribute.
-   * client.sendHomeAssistantState("climate.living_room", "22", "temperature");
-   * ```
-   */
-  public sendHomeAssistantState(entityId: string, state: string, attribute: string = ""): void {
-
-    this.log.debug("Sending Home Assistant state - entityId: " + entityId + " | state: " + state + " | attribute: " + attribute);
-
-    // Build the HomeAssistantStateResponse message.
-    const fields: ProtoField[] = [];
-
-    // Add entity_id (field 1: string).
-    const entityIdBuf = Buffer.from(entityId, "utf8");
-
-    fields.push({ fieldNumber: 1, value: entityIdBuf, wireType: WireType.LENGTH_DELIMITED });
-
-    // Add state (field 2: string).
-    const stateBuf = Buffer.from(state, "utf8");
-
-    fields.push({ fieldNumber: 2, value: stateBuf, wireType: WireType.LENGTH_DELIMITED });
-
-    // Add attribute (field 3: string) if provided.
-    if(attribute.length > 0) {
-
-      const attributeBuf = Buffer.from(attribute, "utf8");
-
-      fields.push({ fieldNumber: 3, value: attributeBuf, wireType: WireType.LENGTH_DELIMITED });
+      this.bluetoothProxyApi = new BluetoothProxyApi(seam);
     }
 
-    const payload = this.encodeProtoFields(fields);
-
-    this.frameAndSend(MessageType.HOME_ASSISTANT_STATE_RESPONSE, payload);
+    return this.bluetoothProxyApi;
   }
 
   /**
-   * Send a voice assistant response to the device. Most clients use the API-audio path, and this port-based path is likely going to be deprecated in the future.
+   * Z-Wave-proxy sub-API. Lazy-instantiated on first access. Single instance per client, persistent across reconnects (consumer-held references stay valid).
    *
-   * @param port - The port number for audio streaming (0 for no audio).
-   * @param error - Whether an error occurred.
+   * @remarks This sub-API is a transparent byte pipe to the device's Z-Wave radio Serial API. It does NOT parse Z-Wave Serial API frames, command classes, or security
+   * envelopes. Consumers route the inbound frame stream into a Z-Wave-aware library (e.g., `zwave-js`) and write back via {@link ZWaveProxyApi.send}. The
+   * module shape mirrors {@link bluetooth} simplified for the single-subscription case: a single-integer refcount, a cached home id, and no `Correlator` instances
+   * (there is no request/response correlation in this subsystem - frames flow asynchronously in both directions and home-id changes are unsolicited pushes).
    *
-   * @example
-   * ```typescript
-   * // Respond with audio port
-   * client.sendVoiceAssistantResponse(12345, false);
+   * Usage:
    *
-   * // Respond with error
-   * client.sendVoiceAssistantResponse(0, true);
-   * ```
+   * {@includeCode ./examples/showcase.ts#zwave-byte-pipe}
+   *
+   * @returns The Z-Wave-proxy sub-API instance.
+   *
    */
-  public sendVoiceAssistantResponse(port: number, error: boolean): void {
+  public get zwave(): ZWaveProxyApi {
 
-    this.log.debug("Sending voice assistant response - port: " + port + " | error: " + error);
+    if(!this.zwaveProxyApi) {
 
-    // Build the VoiceAssistantResponse message.
-    const fields: ProtoField[] = [];
+      const seam: ZWaveProxyHost = {
 
-    // Add port (field 1: uint32).
-    fields.push({ fieldNumber: 1, value: port, wireType: WireType.VARINT });
+        bus: this.bus,
+        deviceInfo: (): Nullable<DeviceInfo> => this.remoteDeviceInfo,
+        log: this.log,
+        send: (type, payload): void => { this.frameAndSend(type, payload); }
+      };
 
-    // Add error flag (field 2: bool).
-    fields.push({ fieldNumber: 2, value: error ? 1 : 0, wireType: WireType.VARINT });
-
-    const payload = this.encodeProtoFields(fields);
-
-    this.frameAndSend(MessageType.VOICE_ASSISTANT_RESPONSE, payload);
-  }
-
-  /**
-   * Send a voice assistant event to the device.
-   *
-   * @param eventType - The type of event.
-   * @param data - Optional event data.
-   *
-   * @example
-   * ```typescript
-   * // Send run start event
-   * client.sendVoiceAssistantEvent(VoiceAssistantEvent.RUN_START);
-   *
-   * // Send event with data
-   * client.sendVoiceAssistantEvent(VoiceAssistantEvent.STT_END, [
-   *   { name: "text", value: "Turn on the lights" }
-   * ]);
-   * ```
-   */
-  public sendVoiceAssistantEvent(eventType: VoiceAssistantEvent, data: VoiceAssistantEventData[] = []): void {
-
-    this.log.debug("Sending voice assistant event - type: " + VoiceAssistantEvent[eventType] + " | data items: " + data.length);
-
-    // Build the VoiceAssistantEventResponse message.
-    const fields: ProtoField[] = [];
-
-    // Add event type (field 1: VoiceAssistantEvent enum).
-    fields.push({ fieldNumber: 1, value: eventType, wireType: WireType.VARINT });
-
-    // Add event data (field 2: repeated VoiceAssistantEventData).
-    for(const item of data) {
-
-      const dataFields: ProtoField[] = [];
-
-      // Add name (field 1: string).
-      const nameBuf = Buffer.from(item.name, "utf8");
-
-      dataFields.push({ fieldNumber: 1, value: nameBuf, wireType: WireType.LENGTH_DELIMITED });
-
-      // Add value (field 2: string).
-      const valueBuf = Buffer.from(item.value, "utf8");
-
-      dataFields.push({ fieldNumber: 2, value: valueBuf, wireType: WireType.LENGTH_DELIMITED });
-
-      // Encode as nested message.
-      const dataPayload = this.encodeProtoFields(dataFields);
-
-      fields.push({ fieldNumber: 2, value: dataPayload, wireType: WireType.LENGTH_DELIMITED });
+      this.zwaveProxyApi = new ZWaveProxyApi(seam);
     }
 
-    const payload = this.encodeProtoFields(fields);
-
-    this.frameAndSend(MessageType.VOICE_ASSISTANT_EVENT_RESPONSE, payload);
+    return this.zwaveProxyApi;
   }
 
   /**
-   * Send voice assistant audio data to the device.
+   * Camera sub-API. Returns a per-id instance cached for the lifetime of the client; repeated calls with the same id return the same object, so a single
+   * `const cam = client.camera(id)` stays coherent across call sites.
    *
-   * @param audioData - The audio data buffer.
-   * @param end - Whether this is the last audio packet.
+   * Usage:
    *
-   * @example
-   * ```typescript
-   * // Send audio chunk
-   * client.sendVoiceAssistantAudio(audioBuffer, false);
+   * {@includeCode ./examples/showcase.ts#camera-snapshot}
    *
-   * // Send final audio chunk
-   * client.sendVoiceAssistantAudio(lastAudioBuffer, true);
-   * ```
+   * @param id - Branded camera id.
+   * @returns The camera sub-API instance.
+   *
    */
-  public sendVoiceAssistantAudio(audioData: Buffer, end: boolean = false): void {
+  public camera(id: EntityId<"camera">): CameraApi {
 
-    this.log.debug("Sending voice assistant audio - size: " + audioData.length + " bytes | end: " + end);
+    const existing = this.cameraInstances.get(id);
 
-    // Build the VoiceAssistantAudio message.
-    const fields: ProtoField[] = [];
+    if(existing) {
 
-    // Add audio data (field 1: bytes).
-    fields.push({ fieldNumber: 1, value: audioData, wireType: WireType.LENGTH_DELIMITED });
-
-    // Add end flag (field 2: bool).
-    fields.push({ fieldNumber: 2, value: end ? 1 : 0, wireType: WireType.VARINT });
-
-    const payload = this.encodeProtoFields(fields);
-
-    this.frameAndSend(MessageType.VOICE_ASSISTANT_AUDIO, payload);
-  }
-
-  /**
-   * Send a voice assistant timer event to the device.
-   *
-   * @param timerData - The timer event data.
-   *
-   * @example
-   * ```typescript
-   * client.sendVoiceAssistantTimerEvent({
-   *   eventType: VoiceAssistantTimerEvent.STARTED,
-   *   timerId: "timer-123",
-   *   name: "Kitchen Timer",
-   *   totalSeconds: 300,
-   *   secondsLeft: 300,
-   *   isActive: true
-   * });
-   * ```
-   */
-  public sendVoiceAssistantTimerEvent(timerData: VoiceAssistantTimerEventData): void {
-
-    this.log.debug("Sending voice assistant timer event - type: " + VoiceAssistantTimerEvent[timerData.eventType] +
-                  " | timer: " + timerData.timerId);
-
-    // Build the VoiceAssistantTimerEventResponse message.
-    const fields: ProtoField[] = [];
-
-    // Add event type (field 1: VoiceAssistantTimerEvent enum).
-    fields.push({ fieldNumber: 1, value: timerData.eventType, wireType: WireType.VARINT });
-
-    // Add timer ID (field 2: string).
-    const timerIdBuf = Buffer.from(timerData.timerId, "utf8");
-
-    fields.push({ fieldNumber: 2, value: timerIdBuf, wireType: WireType.LENGTH_DELIMITED });
-
-    // Add name (field 3: string).
-    const nameBuf = Buffer.from(timerData.name, "utf8");
-
-    fields.push({ fieldNumber: 3, value: nameBuf, wireType: WireType.LENGTH_DELIMITED });
-
-    // Add total seconds (field 4: uint32).
-    fields.push({ fieldNumber: 4, value: timerData.totalSeconds, wireType: WireType.VARINT });
-
-    // Add seconds left (field 5: uint32).
-    fields.push({ fieldNumber: 5, value: timerData.secondsLeft, wireType: WireType.VARINT });
-
-    // Add is active flag (field 6: bool).
-    fields.push({ fieldNumber: 6, value: timerData.isActive ? 1 : 0, wireType: WireType.VARINT });
-
-    const payload = this.encodeProtoFields(fields);
-
-    this.frameAndSend(MessageType.VOICE_ASSISTANT_TIMER_EVENT_RESPONSE, payload);
-  }
-
-  /**
-   * Request voice assistant configuration from the device.
-   *
-   * @example
-   * ```typescript
-   * client.requestVoiceAssistantConfiguration();
-   *
-   * // Listen for the response
-   * client.on("voiceAssistantConfiguration", (config) => {
-   *   console.log("Available wake words:", config.availableWakeWords);
-   *   console.log("Active wake words:", config.activeWakeWords);
-   * });
-   * ```
-   */
-  public requestVoiceAssistantConfiguration(): void {
-
-    this.log.debug("Requesting voice assistant configuration");
-
-    // Send empty VoiceAssistantConfigurationRequest message.
-    this.frameAndSend(MessageType.VOICE_ASSISTANT_CONFIGURATION_REQUEST, Buffer.alloc(0));
-  }
-
-  /**
-   * Set voice assistant configuration on the device.
-   *
-   * @param activeWakeWords - Array of wake word IDs to activate.
-   *
-   * @example
-   * ```typescript
-   * // Set active wake words
-   * client.setVoiceAssistantConfiguration(["alexa", "hey_google"]);
-   * ```
-   */
-  public setVoiceAssistantConfiguration(activeWakeWords: string[]): void {
-
-    this.log.debug("Setting voice assistant configuration - active wake words: " + activeWakeWords.join(", "));
-
-    // Build the VoiceAssistantSetConfiguration message.
-    const fields: ProtoField[] = [];
-
-    // Add active wake words (field 1: repeated string).
-    for(const wakeWord of activeWakeWords) {
-
-      const wakeWordBuf = Buffer.from(wakeWord, "utf8");
-
-      fields.push({ fieldNumber: 1, value: wakeWordBuf, wireType: WireType.LENGTH_DELIMITED });
+      return existing;
     }
 
-    const payload = this.encodeProtoFields(fields);
+    const seam: CameraHost = {
 
-    this.frameAndSend(MessageType.VOICE_ASSISTANT_SET_CONFIGURATION, payload);
+      bus: this.bus,
+      log: this.log,
+      maxImageBytes: this.maxImageBytes,
+      send: (type, payload): void => { this.frameAndSend(type, payload); }
+    };
+
+    const fresh = new CameraApi(seam, id);
+
+    this.cameraInstances.set(id, fresh);
+
+    return fresh;
   }
 
   /**
-   * Send a voice assistant announce request to the device.
+   * User-defined services sub-API. Exposes the discovered service catalog and the two execution paths:
    *
-   * @param options - The announce options.
+   *   - `list()` - enumerate the user-defined services discovered on the current connection (shallow copy in discovery order).
+   *   - `execute(key, args?)` - execute a service by its numeric key (the lower-level entry point when the key is cached).
+   *   - `executeByName(name, args?)` - look the service up by name in the discovery registry and dispatch.
    *
-   * @example
-   * ```typescript
-   * // Simple announcement
-   * client.sendVoiceAssistantAnnounce({
-   *   text: "Dinner is ready"
-   * });
+   * Devices that opt into `USE_API_USER_DEFINED_ACTION_RESPONSES` emit an `EXECUTE_SERVICE_RESPONSE` correlated via `callId`; consumers receive these via the
+   * client's `serviceCallResult` event. Older firmware treats `execute()` as fire-and-forget and never produces the response message.
    *
-   * // Announcement with media and conversation start
-   * client.sendVoiceAssistantAnnounce({
-   *   mediaId: "doorbell.mp3",
-   *   text: "Someone is at the door",
-   *   preannounceMediaId: "chime.mp3",
-   *   startConversation: true
-   * });
-   * ```
+   * Usage:
+   *
+   * {@includeCode ./examples/showcase.ts#service-execution}
+   *
+   * @returns The {@link UserServicesApi} instance bound to this client. The instance is lazy-built on first access and cached for the client's lifetime.
+   *
    */
-  public sendVoiceAssistantAnnounce(options: {
-    mediaId?: string;
-    text?: string;
-    preannounceMediaId?: string;
-    startConversation?: boolean;
-  }): void {
+  public get services(): UserServicesApi {
 
-    this.log.debug("Sending voice assistant announce - text: " + (options.text ?? "none") + " | start conversation: " + (options.startConversation ?? false));
+    this.userServicesApi ??= new UserServicesApi({
 
-    // Build the VoiceAssistantAnnounceRequest message.
-    const fields: ProtoField[] = [];
+      log: this.log,
+      send: (type: number, payload: Buffer): void => { this.frameAndSend(type, payload); },
+      serviceRegistry: this.serviceRegistry
+    });
 
-    // Add media ID (field 1: string).
-    if(options.mediaId) {
-
-      const mediaIdBuf = Buffer.from(options.mediaId, "utf8");
-
-      fields.push({ fieldNumber: 1, value: mediaIdBuf, wireType: WireType.LENGTH_DELIMITED });
-    }
-
-    // Add text (field 2: string).
-    if(options.text) {
-
-      const textBuf = Buffer.from(options.text, "utf8");
-
-      fields.push({ fieldNumber: 2, value: textBuf, wireType: WireType.LENGTH_DELIMITED });
-    }
-
-    // Add preannounce media ID (field 3: string).
-    if(options.preannounceMediaId) {
-
-      const preannounceMediaIdBuf = Buffer.from(options.preannounceMediaId, "utf8");
-
-      fields.push({ fieldNumber: 3, value: preannounceMediaIdBuf, wireType: WireType.LENGTH_DELIMITED });
-    }
-
-    // Add start conversation flag (field 4: bool).
-    if(options.startConversation !== undefined) {
-
-      fields.push({ fieldNumber: 4, value: options.startConversation ? 1 : 0, wireType: WireType.VARINT });
-    }
-
-    const payload = this.encodeProtoFields(fields);
-
-    this.frameAndSend(MessageType.VOICE_ASSISTANT_ANNOUNCE_REQUEST, payload);
+    return this.userServicesApi;
   }
 
   /**
-   * Get the current voice assistant configuration.
+   * Home Assistant integration sub-API. Exposes the outbound subscribe-and-respond surface for the two HA-bridge feeds:
    *
-   * @returns The voice assistant configuration or null if not available.
+   *   - `subscribeServices()` - subscribe to inbound `homeassistant.action` / `homeassistant.service` calls from the device. Receives `homeassistantService` events.
+   *   - `subscribeStates()` - subscribe to inbound state-import requests. Receives `homeassistantStateRequest` events.
+   *   - `sendState(entityId, state, attribute?)` - respond with a Home Assistant entity's current state. Pair with `subscribeStates()`.
+   *   - `respondToAction(callId, options)` - acknowledge an inbound action with a `callId` and `wantsResponse: true`. Firmware enabling
+   *     `USE_API_HOMEASSISTANT_ACTION_RESPONSES` surfaces these fields on the `homeassistantService` event.
    *
-   * @example
-   * ```typescript
-   * const config = client.getVoiceAssistantConfiguration();
-   * if (config) {
-   *   console.log("Available wake words:", config.availableWakeWords);
-   * }
-   * ```
+   * All four methods are connection-scoped on the wire; ESPHome has no unsubscribe message, so subscriptions live until the connection drops. Re-call subscribe
+   * after each reconnect (typically from a `lifecycle`-stream `connect` handler) when the consumer wants the subscription to span the new session.
+   *
+   * Usage:
+   *
+   * {@includeCode ./examples/showcase.ts#home-assistant-services}
+   *
+   * @returns The {@link HomeAssistantApi} instance bound to this client.
+   *
    */
-  public getVoiceAssistantConfiguration(): VoiceAssistantConfiguration | null {
+  public get homeAssistant(): HomeAssistantApi {
 
-    return this.voiceAssistantConfig;
+    return this.homeAssistantApi;
   }
 
   /**
-   * Check if subscribed to voice assistant.
+   * Decode a protobuf message body into a record keyed by field number. Thin wrapper around {@link decodeProtobuf} that injects the client's resource
+   * bound and the diagnostic warn hook so call sites stay terse.
    *
-   * @returns Whether voice assistant subscription is active.
-   *
-   * @example
-   * ```typescript
-   * if (client.isVoiceAssistantSubscribed()) {
-   *   console.log("Voice assistant is active");
-   * }
-   * ```
-   */
-  public isVoiceAssistantSubscribed(): boolean {
-
-    return this.voiceAssistantSubscribed;
-  }
-
-  /**
-   * Encode a signed integer using zigzag encoding for efficient protobuf representation.
-   *
-   * @param value - The signed integer to encode.
-   * @returns The zigzag encoded value.
-   */
-  private encodeZigzag(value: number): number {
-
-    return (value << 1) ^ (value >> 31);
-  }
-
-  /**
-   * Encode an integer as a VarInt (protobuf-style). VarInts use 7 bits per byte with a continuation bit in the MSB.
-   *
-   * @param value - The value to encode.
-   * @returns The encoded varint as a Buffer.
-   */
-  private encodeVarint(value: number): Buffer {
-
-    // Initialize an array to accumulate the encoded bytes.
-    const bytes: number[] = [];
-
-    // Loop through the value, seven bits at a time, until all bits are consumed.
-    for(let v = value; ; v >>>= 7) {
-
-      // Extract the lowest 7 bits of the current value chunk.
-      const bytePart = v & 0x7F;
-
-      // Determine if there are more bits left beyond this chunk.
-      const hasMore = (v >>> 7) !== 0;
-
-      // If there are more chunks, set the MSB (continuation) bit; otherwise leave it clear.
-      const byte = hasMore ? (bytePart | 0x80) : bytePart;
-
-      // Append this byte into our buffer array.
-      bytes.push(byte);
-
-      // If this was the final chunk (no more bits), exit the loop.
-      if(!hasMore) {
-
-        break;
-      }
-    }
-
-    // Convert the array of byte values into a Buffer and return it.
-    return Buffer.from(bytes);
-  }
-
-  /**
-   * Read a VarInt from buffer at offset; returns [value, bytesRead]. This decodes protobuf-style variable-length integers.
-   *
-   * @param buffer - The buffer to read from.
-   * @param offset - The offset to start reading at.
-   * @returns A tuple of [decoded value, number of bytes consumed].
-   */
-  private readVarint(buffer: Buffer, offset: number): [number, number] {
-
-    // Accumulator for the decoded integer result.
-    let result = 0;
-
-    // Counter for how many bytes we've consumed.
-    let bytesRead = 0;
-
-    // Read byte-by-byte, adding 7 bits at each step, until the continuation bit is clear.
-    for(let shift = 0; ; shift += 7) {
-
-      // Fetch the next raw byte from the buffer.
-      const byte = buffer[offset + bytesRead];
-
-      // Mask off the continuation bit and merge into the result at the correct position.
-      result |= (byte & 0x7F) << shift;
-
-      // Advance our byte counter.
-      bytesRead++;
-
-      // If the continuation bit (0x80) is not set, we're done.
-      if((byte & 0x80) === 0) {
-
-        break;
-      }
-    }
-
-    // Return the decoded integer and the number of bytes we consumed.
-    return [ result, bytesRead ];
-  }
-
-  /**
-   * Decode a simple protobuf message into a map of field numbers to values. This implements basic protobuf decoding for the ESPHome protocol.
-   *
-   * @param buffer - The protobuf message to decode.
-   * @returns A map from field numbers to arrays of decoded values.
+   * @param buffer - The encoded message body.
+   * @returns The decoded fields by number.
    */
   private decodeProtobuf(buffer: Buffer): Record<number, FieldValue[]> {
 
-    // Initialize the map from field numbers to arrays of decoded values.
-    const fields: Record<number, FieldValue[]> = {};
-
-    // Iterate through the buffer by manually advancing the offset.
-    for(let offset = 0; offset < buffer.length;) {
-
-      let len: number;
-      let lenLen: number;
-      let v: number;
-      let value: FieldValue;
-      let vLen: number;
-
-      // Read the next varint as the tag (combines field number and wire type).
-      const [ tag, tagLen ] = this.readVarint(buffer, offset);
-
-      // Advance past the tag bytes.
-      offset += tagLen;
-
-      // Extract the field number (upper bits of tag).
-      const fieldNum = tag >>> 3;
-
-      // Extract the wire type (lower 3 bits of tag).
-      const wireType = tag & 0x07;
-
-      // Decode the payload based on its wire type.
-      switch(wireType) {
-
-        case WireType.VARINT:
-
-          // Read a varint payload.
-          [ v, vLen ] = this.readVarint(buffer, offset);
-
-          // Assign the numeric result.
-          value = v;
-
-          // Advance past the varint bytes.
-          offset += vLen;
-
-          break;
-
-        case WireType.FIXED64:
-
-          // Read a 64-bit little-endian double.
-          value = buffer.readDoubleLE(offset);
-
-          // Advance by eight bytes.
-          offset += 8;
-
-          break;
-
-        case WireType.LENGTH_DELIMITED:
-
-          // Read the length prefix as a varint.
-          [ len, lenLen ] = this.readVarint(buffer, offset);
-
-          // Advance past the length prefix.
-          offset += lenLen;
-
-          // Slice out the next len bytes as a Buffer.
-          value = buffer.subarray(offset, offset + len);
-
-          // Advance past the length-delimited payload.
-          offset += len;
-
-          break;
-
-        case WireType.FIXED32:
-
-          // For 32-bit fields, return the raw bytes for caller interpretation.
-          value = buffer.subarray(offset, offset + 4);
-
-          // Advance by four bytes.
-          offset += 4;
-
-          break;
-
-        default:
-
-          // Warn about unsupported wire types and return what's decoded so far.
-          this.log.warn("Unsupported wire type " + wireType + ".");
-
-          return fields;
-      }
-
-      // Ensure there is an array to hold this field's values.
-      fields[fieldNum] ??= [];
-
-      // Append the decoded value for this field.
-      fields[fieldNum].push(value);
-    }
-
-    // Return the completed map of field numbers to value arrays.
-    return fields;
+    return decodeProtobuf(buffer, { maxFieldsPerMessage: this.maxFieldsPerMessage, warn: (m): void => { this.log.warn(m); } });
   }
 
   /**
-   * Return whether we are on an encrypted connection or not.
+   * Encode a list of fields into a protobuf message. Thin wrapper around {@link encodeProtoFields} preserved as a method so the dozens of call sites
+   * stay terse without each one re-importing the function.
    *
-   * @returns `true` if we are on an encrypted connection, `false` otherwise.
+   * @param fields - The fields to encode.
+   * @returns The encoded message bytes.
+   */
+  private encodeProtoFields(fields: readonly ProtoField[]): Buffer {
+
+    return encodeProtoFields(fields);
+  }
+
+  /**
+   * Whether the active transport is operating in noise-data phase. Mirrors `Transport.isEncrypted`.
+   *
+   * @returns `true` when an encrypted session is established, `false` otherwise (including when disconnected).
    */
   public get isEncrypted(): boolean {
 
-    return (this.handshakeState === Handshake.READY) && (this.connectionState === ConnectionState.CONNECTED) && this.usingEncryption;
+    return this.capabilitiesCache.encryption.active;
+  }
+
+  /**
+   * Read the structured capability record for the current connection. Built from the negotiated API minor version, the encrypted-transport flag, and the device's
+   * {@link DeviceInfo} response. Returns the disconnected placeholder before the first successful connect.
+   *
+   * @remarks Consumers should gate behavior on named capabilities rather than version numbers or raw bitfields. Adding a new capability is one entry in the type
+   * definition plus one parser case; the consumer-visible API stays stable as the underlying flag layout evolves. Returns a deep boundary copy (deepening the
+   * {@link deviceInfo} shallow-copy idiom because the capability record nests one level) so a consumer mutating the snapshot cannot corrupt the host's cached record -
+   * which {@link isEncrypted} reads internally.
+   *
+   * Usage:
+   *
+   * {@includeCode ./examples/showcase.ts#capabilities}
+   *
+   * @returns A point-in-time copy of the structured capability record.
+   *
+   */
+  public capabilities(): ClientCapabilities {
+
+    // Deep boundary copy. The record nests one level (api / encryption / voiceAssistant / ... are objects), so a shallow spread would still alias those nested objects;
+    // structuredClone (a Node 22 built-in) decouples every level with no shape-specific maintenance, and this is a cold read path.
+    return structuredClone(this.capabilitiesCache);
+  }
+
+  /**
+   * Subscribe a callback to an event. Returns a `Disposable` whose `[Symbol.dispose]` removes the listener; per the explicit-resource-management proposal,
+   * `using sub = client.on("telemetry", cb)` automatically removes the listener on scope exit.
+   *
+   * Usage:
+   *
+   * {@includeCode ./examples/showcase.ts#typed-event-bus}
+   *
+   * @param event - The event name. Narrowed to keys of {@link ClientEventsMap}.
+   * @param handler - The callback. The payload parameter type is inferred from the event name.
+   * @returns A `Disposable` that removes the listener.
+   *
+   */
+  public on<K extends keyof ClientEventsMap>(event: K, handler: (payload: ClientEventsMap[K]) => void): Disposable {
+
+    return this.bus.on(event, handler);
+  }
+
+  /**
+   * Resolve on the next emission of `event`. Returns a `Promise`-shaped one-shot; the optional signal argument cancels the await, and rejection propagates through
+   * the returned promise.
+   *
+   * Usage:
+   *
+   * {@includeCode ./examples/showcase.ts#typed-event-bus}
+   *
+   * @param event - The event name. Narrowed to keys of {@link ClientEventsMap}.
+   * @param options - Optional cancellation signal.
+   * @returns A `Promise` that resolves with the next payload.
+   *
+   */
+  public async once<K extends keyof ClientEventsMap>(event: K, options?: { signal?: AbortSignal }): Promise<ClientEventsMap[K]> {
+
+    return this.bus.once(event, options);
+  }
+
+  /**
+   * Async-iterable view of every emission of `event` for the lifetime of the iteration. Applies the backpressure policy from {@link StreamOptions}. Each call
+   * produces an independent subscription; multiple concurrent iterators of the same event each receive every emission.
+   *
+   * Usage:
+   *
+   * {@includeCode ./examples/showcase.ts#typed-event-bus}
+   *
+   * @param event - The event name. Narrowed to keys of {@link ClientEventsMap}.
+   * @param options - Optional backpressure policy and cancellation signal.
+   * @returns An `AsyncIterable<ClientEventsMap[event]>`.
+   *
+   */
+  public stream<K extends keyof ClientEventsMap>(event: K, options?: StreamOptions): AsyncIterable<ClientEventsMap[K]> {
+
+    return this.bus.stream(event, options);
+  }
+
+  /**
+   * Internal emit forwarder. Type-narrowed against {@link ClientEventsMap} so a typo in the event name or a payload-shape mismatch is a compile error. Returns whether
+   * any listener was invoked, mirroring the platform's emit contract.
+   */
+  private emit<K extends keyof ClientEventsMap>(event: K, payload: ClientEventsMap[K]): boolean {
+
+    return this.bus.emit(event, payload);
+  }
+
+  /**
+   * Custom `util.inspect` implementation. `console.log(client)` produces a clean structured summary (host, encryption, entity count, connection state) instead of
+   * dumping every internal field, listener, and cipher state. The {@link VoiceAssistantApi} and {@link CameraApi} sub-API classes carry their own inspect
+   * implementations so nested logging stays equally tidy.
+   *
+   * @param depth - Inspector depth, propagated from the parent inspect call.
+   * @param options - Stylization options propagated from the parent inspect call.
+   * @returns A formatted string suitable for direct console output.
+   */
+  public [Symbol.for("nodejs.util.inspect.custom")](depth: number, options: { stylize: (text: string, style: string) => string; depth: number | null }): string {
+
+    if(depth < 0) {
+
+      return options.stylize("[EspHomeClient]", "special");
+    }
+
+    const summary: Record<string, unknown> = {
+
+      encrypted: this.isEncrypted,
+      entities: this.registry.size,
+      host: this.host + ":" + String(this.port),
+      state: this.transport ? "connected" : "disconnected"
+    };
+
+    if(this.remoteDeviceInfo) {
+
+      summary["device"] = this.remoteDeviceInfo.name;
+      summary["api"] = "1." + String(this.deviceApiMinorVersion);
+    }
+
+    return options.stylize("EspHomeClient", "special") + " " + JSON.stringify(summary);
   }
 }
 
-// These overloads provide strong typing for event subscriptions. The generic form ensures that when a known event name is provided, the listener's payload parameter
-// type matches the event's payload in ClientEventsMap. We export .on() for continuous listeners and .once() for one-shot listeners.
-export interface EspHomeClient {
+/**
+ * Factory function. Creates a new {@link EspHomeClient}, connects, and resolves the connected client. Permanent errors ({@link PermanentError} subclasses) reject
+ * immediately; transient errors retry up to {@link EspHomeClientOpenOptions.maxConstructionRetries} times with backoff.
+ *
+ * Usage:
+ *
+ * {@includeCode ./examples/showcase.ts#open-and-dispose}
+ *
+ * @param options - Client construction options plus open-time retry configuration.
+ * @returns A `Promise<EspHomeClient>` that resolves to a connected client.
+ *
+ */
+// eslint-disable-next-line @typescript-eslint/no-empty-object-type -- `{}` default is required; see infrared-rf.types.test.ts.
+export async function openEspHomeClient<Extras extends ExtraSchemaSet = {}>(options: EspHomeClientOpenOptions<Extras>): Promise<EspHomeClient<Extras>> {
 
-  /**
-   * Subscribes to an event and invokes the listener every time the event is emitted. The payload type is inferred from the event name based on {@link ClientEventsMap}.
-   *
-   * @param event - The name of the event to subscribe to.
-   * @param listener - The function to invoke when the event is emitted.
-   * @returns The client instance, to allow chaining.
-   */
-  on<K extends keyof ClientEventsMap>(event: K, listener: (payload: ClientEventsMap[K]) => void): this;
+  const client = new EspHomeClient<Extras>(options);
+  const maxRetries = options.maxConstructionRetries ?? 3;
+  const initialDelayMs = options.constructionRetry?.initialDelayMs ?? 500;
+  const maxDelayMs = options.constructionRetry?.maxDelayMs ?? 5000;
+  const backoffMultiplier = options.constructionRetry?.backoffMultiplier ?? 2;
+  const jitter = options.constructionRetry?.jitter ?? 0.2;
 
-  /**
-   * Subscribes to an event and invokes the listener at most once. After the first invocation, the listener is removed. The payload type is inferred from the event name
-   * based on {@link ClientEventsMap}.
-   *
-   * @param event - The name of the event to subscribe to.
-   * @param listener - The function to invoke once when the event is emitted.
-   * @returns The client instance, to allow chaining.
-   */
-  once<K extends keyof ClientEventsMap>(event: K, listener: (payload: ClientEventsMap[K]) => void): this;
+  let attempt = 0;
+
+  // The factory keeps trying until either: success, a permanent error, the user signal aborts, or the retry budget is exhausted.
+  for(;;) {
+
+    options.signal?.throwIfAborted();
+
+    try {
+
+      const connectOptions = options.signal !== undefined ? { signal: options.signal } : undefined;
+
+      // eslint-disable-next-line no-await-in-loop -- Construction-retry loop is intrinsically sequential: try connect, on failure wait the backoff, then maybe retry.
+      await client.connect(connectOptions);
+
+      return client;
+
+    } catch(err) {
+
+      // Permanent errors do not benefit from retry. Surface immediately so the consumer sees the misconfiguration without waiting for the retry budget to drain.
+      if(err instanceof PermanentError) {
+
+        client[Symbol.dispose]();
+
+        throw err;
+      }
+
+      attempt++;
+
+      if(attempt > maxRetries) {
+
+        client[Symbol.dispose]();
+
+        throw err;
+      }
+
+      // Exponential backoff with jitter. The jitter widens the delay window by +/-jitter to prevent thundering-herd reconnects across multiple clients.
+      const baseDelay = Math.min(initialDelayMs * (backoffMultiplier ** (attempt - 1)), maxDelayMs);
+      const jitterFactor = 1 + ((Math.random() * 2 - 1) * jitter);
+      const delayMs = Math.max(0, Math.floor(baseDelay * jitterFactor));
+
+      // eslint-disable-next-line no-await-in-loop -- Backoff delay between retry attempts is sequential by design.
+      await delay(delayMs);
+    }
+  }
 }
+
