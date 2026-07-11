@@ -4,10 +4,14 @@
  */
 
 /**
- * Entity schema definitions and type interfaces for the ESPHome protocol.
+ * Entity schema definitions, derived public types, override tables, runtime adapters, and the extension API for out-of-spec entity types.
  *
  * @module schemas
  */
 
-export * from "./entity-schemas.js";
-export * from "./entity-types.js";
+export * from "./adapters.ts";
+export * from "./derived.ts";
+export * from "./entity-schemas.ts";
+export * from "./entity-types.ts";
+export * from "./extensions.ts";
+export * from "./overrides.ts";

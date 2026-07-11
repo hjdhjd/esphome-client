@@ -1,87 +1,29 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
- * entity-types.ts: Entity type definitions for ESPHome protocol.
+ * entity-types.ts: Entity type primitives and per-entity type aliases derived from ENTITY_SCHEMAS.
  */
 
 /**
- * Entity type definitions for the ESPHome protocol.
+ * Per-entity type aliases derived from {@link ENTITY_SCHEMAS}. Names like `LightEntity` and `SensorEntity` resolve to schema-derived shapes, so consumer code
+ * referencing them tracks the schema as the single source of truth. Wire-level protocol enums (`EntityCategory`, `SensorStateClass`, `NumberMode`, `TextMode`,
+ * etc.) live in `api-constants.ts` alongside every other wire enum; this module focuses on type aliases over the schema registry.
  *
- * @remarks This module provides TypeScript interfaces and enums for all 22 ESPHome entity types. Each entity interface extends `BaseEntity` and includes
- * type-specific properties parsed from ListEntities responses. The `Entity` discriminated union allows type narrowing based on the `type` field.
- *
- * @module entity-types
+ * @module schemas/entity-types
  */
+import type { EntityFor, StateEventFor } from "./derived.ts";
+import type { ENTITY_SCHEMAS } from "./entity-schemas.ts";
+import type { EntityCategory } from "../api-constants.ts";
 
 /**
- * Entity category classification from the ESPHome protocol. These categories help organize entities for display and filtering purposes.
+ * String literal union enumerating every ESPHome entity type. Used as the tag on the {@link Entity} union for narrowing. Derived directly
+ * from the keys of the {@link ENTITY_SCHEMAS} registry so the union and the schema cannot drift apart - adding a new entity type to
+ * ENTITY_SCHEMAS automatically extends this union.
  */
-export enum EntityCategory {
-
-  NONE = 0,
-  CONFIG = 1,
-  DIAGNOSTIC = 2
-}
+export type EntityType = keyof typeof ENTITY_SCHEMAS;
 
 /**
- * Sensor state class from the ESPHome protocol. These define how sensor values should be interpreted for long-term statistics.
- */
-export enum StateClass {
-
-  NONE = 0,
-  MEASUREMENT = 1,
-  TOTAL_INCREASING = 2,
-  TOTAL = 3
-}
-
-/**
- * Number input display mode from the ESPHome protocol. These define how numeric inputs should be rendered in user interfaces.
- */
-export enum NumberMode {
-
-  AUTO = 0,
-  BOX = 1,
-  SLIDER = 2
-}
-
-/**
- * Text input display mode from the ESPHome protocol. These define how text inputs should be rendered in user interfaces.
- */
-export enum TextMode {
-
-  TEXT = 0,
-  PASSWORD = 1
-}
-
-/**
- * Union type of all entity type strings. This provides type-safe entity type discrimination.
- */
-export type EntityType =
-  "alarm_control_panel" |
-  "binary_sensor" |
-  "button" |
-  "camera" |
-  "climate" |
-  "cover" |
-  "date" |
-  "datetime" |
-  "event" |
-  "fan" |
-  "light" |
-  "lock" |
-  "media_player" |
-  "number" |
-  "select" |
-  "sensor" |
-  "siren" |
-  "switch" |
-  "text" |
-  "text_sensor" |
-  "time" |
-  "update" |
-  "valve";
-
-/**
- * Base entity interface containing fields common to all ESPHome entity types.
+ * Base entity interface containing fields common to all ESPHome entity types. Carries the same fields as the schema-derived shape under a conventional name for
+ * ergonomic consumer use.
  */
 export interface BaseEntity {
 
@@ -95,286 +37,192 @@ export interface BaseEntity {
   type: EntityType;
 }
 
+// Per-entity type aliases. Each is a derived shape from ENTITY_SCHEMAS plus any EntityOverrides entry, exposed under conventional names (LightEntity, SensorEntity,
+// etc.) for ergonomic consumer use. Adding a new entity type to ENTITY_SCHEMAS produces a new shape under EntityFor<typeof ENTITY_SCHEMAS["new_type"]> automatically;
+// no parallel interface to maintain here.
 /**
- * Alarm control panel entity with security panel capabilities.
+ * The `alarm_control_panel` entity type: arm / disarm / trigger transitions guarded by an optional code.
+ *
+ * Usage:
+ *
+ * {@includeCode ../examples/showcase.ts#alarm-control-panel-command}
  */
-export interface AlarmControlPanelEntity extends BaseEntity {
-
-  requiresCode?: boolean;
-  requiresCodeToArm?: boolean;
-  supportedFeatures?: number;
-  type: "alarm_control_panel";
-}
-
+export type AlarmControlPanelEntity = EntityFor<typeof ENTITY_SCHEMAS["alarm_control_panel"]>;
+export type BinarySensorEntity = EntityFor<typeof ENTITY_SCHEMAS["binary_sensor"]>;
 /**
- * Binary sensor entity for boolean state sensors.
+ * The `button` entity type: a stateless momentary trigger (press-only, with no awaitable state).
+ *
+ * Usage:
+ *
+ * {@includeCode ../examples/showcase.ts#button-command}
  */
-export interface BinarySensorEntity extends BaseEntity {
-
-  deviceClass?: string;
-  isStatusBinarySensor?: boolean;
-  type: "binary_sensor";
-}
-
+export type ButtonEntity = EntityFor<typeof ENTITY_SCHEMAS["button"]>;
+export type CameraEntity = EntityFor<typeof ENTITY_SCHEMAS["camera"]>;
 /**
- * Button entity for stateless trigger actions.
+ * The `climate` entity type: HVAC mode, target setpoint(s), fan mode, preset, and swing.
+ *
+ * Usage:
+ *
+ * {@includeCode ../examples/showcase.ts#climate-command}
  */
-export interface ButtonEntity extends BaseEntity {
-
-  deviceClass?: string;
-  type: "button";
-}
-
+export type ClimateEntity = EntityFor<typeof ENTITY_SCHEMAS["climate"]>;
 /**
- * Camera entity for image capture.
+ * The `cover` entity type: position, tilt, and open / close / stop operation with a current-operation state.
+ *
+ * Usage:
+ *
+ * {@includeCode ../examples/showcase.ts#cover-command}
  */
-export interface CameraEntity extends BaseEntity {
-
-  type: "camera";
-}
-
+export type CoverEntity = EntityFor<typeof ENTITY_SCHEMAS["cover"]>;
+export type DateEntity = EntityFor<typeof ENTITY_SCHEMAS["date"]>;
 /**
- * Climate entity for HVAC control with modes, temperatures, and humidity.
+ * The `datetime` entity type: a combined date-and-time value.
+ *
+ * Usage:
+ *
+ * {@includeCode ../examples/showcase.ts#number-select-text-command}
  */
-export interface ClimateEntity extends BaseEntity {
-
-  supportedCustomFanModes?: string[];
-  supportedCustomPresets?: string[];
-  supportedFanModes?: number[];
-  supportedModes?: number[];
-  supportedPresets?: number[];
-  supportedSwingModes?: number[];
-  supportsAction?: boolean;
-  supportsCurrentHumidity?: boolean;
-  supportsCurrentTemperature?: boolean;
-  supportsTargetHumidity?: boolean;
-  supportsTwoPointTargetTemperature?: boolean;
-  type: "climate";
-  visualCurrentTemperatureStep?: number;
-  visualMaxHumidity?: number;
-  visualMaxTemperature?: number;
-  visualMinHumidity?: number;
-  visualMinTemperature?: number;
-  visualTargetTemperatureStep?: number;
-}
-
+export type DateTimeEntity = EntityFor<typeof ENTITY_SCHEMAS["datetime"]>;
+export type EventEntity = EntityFor<typeof ENTITY_SCHEMAS["event"]>;
 /**
- * Cover entity for position and tilt control.
+ * The `fan` entity type: on/off, speed level, oscillation, direction, and preset mode.
+ *
+ * Usage:
+ *
+ * {@includeCode ../examples/showcase.ts#fan-command}
  */
-export interface CoverEntity extends BaseEntity {
-
-  assumedState?: boolean;
-  deviceClass?: string;
-  supportsPosition?: boolean;
-  supportsStop?: boolean;
-  supportsTilt?: boolean;
-  type: "cover";
-}
-
+export type FanEntity = EntityFor<typeof ENTITY_SCHEMAS["fan"]>;
 /**
- * Date entity for date values.
+ * The `infrared` entity type: transmits a raw mark/space timing pattern to a connected IR blaster.
+ *
+ * Usage:
+ *
+ * {@includeCode ../examples/showcase.ts#infrared-transmit}
  */
-export interface DateEntity extends BaseEntity {
-
-  type: "date";
-}
-
+export type InfraredEntity = EntityFor<typeof ENTITY_SCHEMAS["infrared"]>;
 /**
- * DateTime entity for epoch timestamp values.
+ * The `light` entity type: on/off, brightness, color (RGB / white / color-temperature in mireds), and effects.
+ *
+ * Usage:
+ *
+ * {@includeCode ../examples/showcase.ts#light-command}
  */
-export interface DateTimeEntity extends BaseEntity {
-
-  type: "datetime";
-}
-
+export type LightEntity = EntityFor<typeof ENTITY_SCHEMAS["light"]>;
 /**
- * Event entity for event type tracking.
+ * The `lock` entity type: lock / unlock / open with an optional code and a current lock state.
+ *
+ * Usage:
+ *
+ * {@includeCode ../examples/showcase.ts#lock-command}
  */
-export interface EventEntity extends BaseEntity {
-
-  deviceClass?: string;
-  eventTypes?: string[];
-  type: "event";
-}
-
+export type LockEntity = EntityFor<typeof ENTITY_SCHEMAS["lock"]>;
 /**
- * Fan entity with speed, oscillation, and direction control.
+ * The `media_player` entity type: playback transport, volume, mute, and media-URL playback with announcements.
+ *
+ * Usage:
+ *
+ * {@includeCode ../examples/showcase.ts#media-player-command}
  */
-export interface FanEntity extends BaseEntity {
-
-  supportedPresetModes?: string[];
-  supportedSpeedCount?: number;
-  supportsDirection?: boolean;
-  supportsOscillation?: boolean;
-  supportsSpeed?: boolean;
-  type: "fan";
-}
-
+export type MediaPlayerEntity = EntityFor<typeof ENTITY_SCHEMAS["media_player"]>;
 /**
- * Light entity with brightness, color, and effect support. The supportedColorModes field contains numeric values corresponding to the ColorMode enum.
+ * The `number` entity type: a bounded numeric value set within its min / max / step range.
+ *
+ * Usage:
+ *
+ * {@includeCode ../examples/showcase.ts#number-select-text-command}
  */
-export interface LightEntity extends BaseEntity {
-
-  effects?: string[];
-  maxMireds?: number;
-  minMireds?: number;
-  supportedColorModes?: number[];
-  type: "light";
-}
-
+export type NumberEntity = EntityFor<typeof ENTITY_SCHEMAS["number"]>;
 /**
- * Lock entity with lock/unlock/open control.
+ * The `radio_frequency` entity type: transmits a raw 433.92 MHz OOK timing pattern to a connected RF module.
+ *
+ * Usage:
+ *
+ * {@includeCode ../examples/showcase.ts#radio-frequency-transmit}
  */
-export interface LockEntity extends BaseEntity {
-
-  assumedState?: boolean;
-  codeFormat?: string;
-  requiresCode?: boolean;
-  supportsOpen?: boolean;
-  type: "lock";
-}
-
+export type RadioFrequencyEntity = EntityFor<typeof ENTITY_SCHEMAS["radio_frequency"]>;
 /**
- * Media player entity with playback control and volume.
+ * The `select` entity type: a single choice from a fixed set of options.
+ *
+ * Usage:
+ *
+ * {@includeCode ../examples/showcase.ts#number-select-text-command}
  */
-export interface MediaPlayerEntity extends BaseEntity {
-
-  featureFlags?: number;
-  supportsPause?: boolean;
-  type: "media_player";
-}
-
+export type SelectEntity = EntityFor<typeof ENTITY_SCHEMAS["select"]>;
+export type SensorEntity = EntityFor<typeof ENTITY_SCHEMAS["sensor"]>;
 /**
- * Number entity for numeric values with min/max/step constraints.
+ * The `siren` entity type: on/off with optional tone, duration, and volume.
+ *
+ * Usage:
+ *
+ * {@includeCode ../examples/showcase.ts#siren-command}
  */
-export interface NumberEntity extends BaseEntity {
-
-  deviceClass?: string;
-  maxValue?: number;
-  minValue?: number;
-  mode?: NumberMode;
-  step?: number;
-  type: "number";
-  unitOfMeasurement?: string;
-}
-
+export type SirenEntity = EntityFor<typeof ENTITY_SCHEMAS["siren"]>;
 /**
- * Select entity for option selection from a predefined list.
+ * The `switch` entity type: a simple boolean on/off control.
+ *
+ * Usage:
+ *
+ * {@includeCode ../examples/showcase.ts#switch-command}
  */
-export interface SelectEntity extends BaseEntity {
-
-  options?: string[];
-  type: "select";
-}
-
+export type SwitchEntity = EntityFor<typeof ENTITY_SCHEMAS["switch"]>;
 /**
- * Sensor entity for numeric sensor readings with units and accuracy.
+ * The `text` entity type: a free-form string value within the device's length and mode constraints.
+ *
+ * Usage:
+ *
+ * {@includeCode ../examples/showcase.ts#number-select-text-command}
  */
-export interface SensorEntity extends BaseEntity {
+export type TextEntity = EntityFor<typeof ENTITY_SCHEMAS["text"]>;
+export type TextSensorEntity = EntityFor<typeof ENTITY_SCHEMAS["text_sensor"]>;
+export type TimeEntity = EntityFor<typeof ENTITY_SCHEMAS["time"]>;
+export type UpdateEntity = EntityFor<typeof ENTITY_SCHEMAS["update"]>;
+export type ValveEntity = EntityFor<typeof ENTITY_SCHEMAS["valve"]>;
+export type WaterHeaterEntity = EntityFor<typeof ENTITY_SCHEMAS["water_heater"]>;
 
-  accuracyDecimals?: number;
-  deviceClass?: string;
-  forceUpdate?: boolean;
-  stateClass?: StateClass;
-  type: "sensor";
-  unitOfMeasurement?: string;
-}
-
+// Per-entity telemetry-event aliases. Same SSOT story as the entity aliases above: each is a derived StateEventFor<...> shape, so consumer code referencing
+// LightEvent / SensorEvent etc. resolves to the schema-driven payload type.
+export type AlarmControlPanelEvent = StateEventFor<typeof ENTITY_SCHEMAS["alarm_control_panel"]>;
+export type BinarySensorEvent = StateEventFor<typeof ENTITY_SCHEMAS["binary_sensor"]>;
+export type ButtonEvent = StateEventFor<typeof ENTITY_SCHEMAS["button"]>;
+export type CameraEvent = StateEventFor<typeof ENTITY_SCHEMAS["camera"]>;
+export type ClimateEvent = StateEventFor<typeof ENTITY_SCHEMAS["climate"]>;
+export type CoverEvent = StateEventFor<typeof ENTITY_SCHEMAS["cover"]>;
+export type DateEvent = StateEventFor<typeof ENTITY_SCHEMAS["date"]>;
+export type DateTimeEvent = StateEventFor<typeof ENTITY_SCHEMAS["datetime"]>;
+export type EventEntityEvent = StateEventFor<typeof ENTITY_SCHEMAS["event"]>;
+export type FanEvent = StateEventFor<typeof ENTITY_SCHEMAS["fan"]>;
 /**
- * Siren entity for alarm control with tones and volume.
+ * The telemetry event for an `infrared` entity: a decoded inbound remote-control code received from the device.
+ *
+ * Usage:
+ *
+ * {@includeCode ../examples/showcase.ts#infrared-receive}
  */
-export interface SirenEntity extends BaseEntity {
-
-  supportsDuration?: boolean;
-  supportsVolume?: boolean;
-  tones?: string[];
-  type: "siren";
-}
+export type InfraredEvent = StateEventFor<typeof ENTITY_SCHEMAS["infrared"]>;
+export type LightEvent = StateEventFor<typeof ENTITY_SCHEMAS["light"]>;
+export type LockEvent = StateEventFor<typeof ENTITY_SCHEMAS["lock"]>;
+export type MediaPlayerEvent = StateEventFor<typeof ENTITY_SCHEMAS["media_player"]>;
+export type NumberEvent = StateEventFor<typeof ENTITY_SCHEMAS["number"]>;
+/**
+ * The telemetry event for a `radio_frequency` entity: a decoded inbound RF transmission received from the device.
+ *
+ * Usage:
+ *
+ * {@includeCode ../examples/showcase.ts#radio-frequency-receive}
+ */
+export type RadioFrequencyEvent = StateEventFor<typeof ENTITY_SCHEMAS["radio_frequency"]>;
+export type SelectEvent = StateEventFor<typeof ENTITY_SCHEMAS["select"]>;
+export type SensorEvent = StateEventFor<typeof ENTITY_SCHEMAS["sensor"]>;
+export type SirenEvent = StateEventFor<typeof ENTITY_SCHEMAS["siren"]>;
+export type SwitchEvent = StateEventFor<typeof ENTITY_SCHEMAS["switch"]>;
+export type TextEvent = StateEventFor<typeof ENTITY_SCHEMAS["text"]>;
+export type TextSensorEvent = StateEventFor<typeof ENTITY_SCHEMAS["text_sensor"]>;
+export type TimeEvent = StateEventFor<typeof ENTITY_SCHEMAS["time"]>;
+export type UpdateEvent = StateEventFor<typeof ENTITY_SCHEMAS["update"]>;
+export type ValveEvent = StateEventFor<typeof ENTITY_SCHEMAS["valve"]>;
+export type WaterHeaterEvent = StateEventFor<typeof ENTITY_SCHEMAS["water_heater"]>;
 
 /**
- * Switch entity for boolean on/off control.
+ * Telemetry-event type tag union. Derived directly from {@link ENTITY_SCHEMAS} so the literal-string union extends automatically as new entity types are added.
  */
-export interface SwitchEntity extends BaseEntity {
-
-  assumedState?: boolean;
-  deviceClass?: string;
-  type: "switch";
-}
-
-/**
- * Text entity for string input values with length and pattern constraints.
- */
-export interface TextEntity extends BaseEntity {
-
-  maxLength?: number;
-  minLength?: number;
-  mode?: TextMode;
-  pattern?: string;
-  type: "text";
-}
-
-/**
- * Text sensor entity for string sensor readings.
- */
-export interface TextSensorEntity extends BaseEntity {
-
-  deviceClass?: string;
-  type: "text_sensor";
-}
-
-/**
- * Time entity for time values.
- */
-export interface TimeEntity extends BaseEntity {
-
-  type: "time";
-}
-
-/**
- * Update entity for firmware update control.
- */
-export interface UpdateEntity extends BaseEntity {
-
-  deviceClass?: string;
-  type: "update";
-}
-
-/**
- * Valve entity for position control with operation state.
- */
-export interface ValveEntity extends BaseEntity {
-
-  assumedState?: boolean;
-  deviceClass?: string;
-  supportsPosition?: boolean;
-  supportsStop?: boolean;
-  type: "valve";
-}
-
-/**
- * Discriminated union of all entity types. The type field serves as the discriminant for type narrowing.
- */
-export type Entity =
-  AlarmControlPanelEntity |
-  BinarySensorEntity |
-  ButtonEntity |
-  CameraEntity |
-  ClimateEntity |
-  CoverEntity |
-  DateEntity |
-  DateTimeEntity |
-  EventEntity |
-  FanEntity |
-  LightEntity |
-  LockEntity |
-  MediaPlayerEntity |
-  NumberEntity |
-  SelectEntity |
-  SensorEntity |
-  SirenEntity |
-  SwitchEntity |
-  TextEntity |
-  TextSensorEntity |
-  TimeEntity |
-  UpdateEntity |
-  ValveEntity;
+export type TelemetryEventType = EntityType;

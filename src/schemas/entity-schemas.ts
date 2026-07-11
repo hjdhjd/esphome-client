@@ -4,23 +4,31 @@
  */
 
 /**
- * Centralized schema definitions for all 22 ESPHome entity types.
+ * Centralized schema definitions for every supported ESPHome entity type.
  *
  * @remarks This module provides the message type IDs, field numbers, and wire types needed to encode commands and decode state responses. By centralizing these
- * definitions, we eliminate magic numbers scattered throughout the codebase and provide a single source of truth for protocol field mappings.
+ * definitions, we eliminate magic numbers scattered throughout the codebase and provide a single source of truth for protocol field mappings. The canonical count
+ * and identity of the supported entity types is pinned by the registry-guarantee test in `entity-schemas.test.ts`, not duplicated in narrative comments here.
  *
  * @module schemas/entity-schemas
  */
 
-import { WireType } from "../protocol/index.js";
+import { AlarmControlPanelState, CLIMATE_FEATURE_BITS, ClimateAction, ClimateFanMode, ClimateMode, ClimatePreset, ClimateSwingMode, ColorMode, CoverOperation,
+  EntityCategory, FanDirection, LockState, MediaPlayerFormatPurpose, MediaPlayerState, NumberMode, SensorStateClass, TemperatureUnit, TextMode, ValveOperation,
+  WATER_HEATER_STATE_COMMAND_BITS, WATER_HEATER_STATE_INBOUND_BITS, WaterHeaterCommandHasField, WaterHeaterMode } from "../api-constants.ts";
+import { MessageType, WireType } from "../protocol/index.ts";
 
 // Re-export WireType so consumers can import it from this module.
 export { WireType };
 
 /**
  * Value types that describe how to interpret and encode/decode field data.
+ *
+ * @remarks The scalar value types collapse a wire-encoded field to a single TypeScript value (number, boolean, or string). The `"sint32-packed"` variant is the lone
+ * outlier - it surfaces a length-delimited body containing back-to-back zigzag-encoded varints as a `number[]` to consumers. Today only the infrared and radio-frequency
+ * schemas use it (for their `timings` arrays), so the projection only needs to support `WireType.LENGTH_DELIMITED`; future packed-repeated additions slot in alongside.
  */
-export type ValueType = "bool" | "enum" | "fixed32" | "float" | "sint32" | "string" | "varint";
+export type ValueType = "bool" | "enum" | "fixed32" | "float" | "sint32" | "sint32-packed" | "string" | "varint";
 
 /**
  * Defines the wire format for a single protobuf field.
@@ -44,32 +52,117 @@ export interface HasPatternField {
 }
 
 /**
+ * Defines a field that participates in a bitmask-aggregated has-pattern. Used by entity types where the wire format collapses every per-field "has" indicator into a
+ * single uint32 bitmask field instead of emitting one boolean per option (compare {@link HasPatternField}). The encoder ORs each present option's `bit` into a running
+ * mask, emits the value fields, then writes the aggregated mask under the schema's `bitmaskFieldNumber`.
+ *
+ * Currently used by water heater commands; reusable for any future entity that adopts the same bitmask shape.
+ */
+export interface BitmaskField {
+
+  bit: number;
+  fieldNumber: number;
+  valueType: ValueType;
+  wireType: WireType;
+}
+
+/**
  * Defines a mapping from user-friendly string values to protocol enum numbers. Used to transform string options into numeric values before encoding.
  */
 export type EnumMapping = Record<string, number>;
 
 /**
+ * One named bit within an {@link InboundPackedBitsField} (state or listEntities role). Carries the bit position only; the encoder's `hasFieldBit` contribution is
+ * not meaningful on inbound roles, so the type structurally excludes it.
+ */
+export interface InboundPackedBitSpec {
+
+  bit: number;
+}
+
+/**
+ * One named bit within a {@link CommandPackedBitsField} (command role). Adds the optional `hasFieldBit` that the encoder ORs into the role's has-bitmask carrier
+ * when the consumer touches this named bit. Inbound `PackedBitSpec` deliberately omits this field so a misconfigured state/listEntities schema fails to compile
+ * rather than carrying a silently-ignored slot.
+ */
+export interface CommandPackedBitSpec {
+
+  bit: number;
+  hasFieldBit?: number;
+}
+
+/**
+ * Inbound (state / listEntities) packed-bits field. Defines a single proto uint32 wire field that packs multiple consumer-facing booleans into its bits. The decoder
+ * reads the packed field and surfaces each named bit as a boolean on the entity/state object. The interface intentionally constrains its `bits` record to
+ * {@link InboundPackedBitSpec} so a misplaced `hasFieldBit` (command-only) on a state or listEntities schema is a compile error rather than dead code.
+ *
+ * Bit semantics are sourced from the firmware enum (e.g. ESPHome's `ClimateFeatures` in `climate_mode.h`) when the proto does not enumerate them. The matching
+ * named-constant in `api-constants.ts` is the SSOT for consumer-facing label names; the schema's `bits` record maps each named label to its bit position.
+ */
+export interface InboundPackedBitsField {
+
+  bits: Record<string, InboundPackedBitSpec>;
+  fieldNumber: number;
+  wireType: WireType;
+}
+
+/**
+ * Command-side packed-bits field. Mirrors {@link InboundPackedBitsField} but allows each named bit to carry an optional `hasFieldBit` that the encoder ORs into the
+ * role's `bitmaskFieldNumber` (the has-bitmask carrier) when the consumer supplies the named boolean - signaling the firmware that the corresponding packed bit is
+ * meaningful regardless of whether the consumer set it true or false.
+ *
+ * Used by the water-heater command schema today, where `awayState`/`onState` map both to bits in the packed `state` wire field (field 6) AND to the
+ * `HAS_AWAY_STATE`/`HAS_ON_STATE` bits in the `has_fields` carrier (field 2).
+ */
+export interface CommandPackedBitsField {
+
+  bits: Record<string, CommandPackedBitSpec>;
+  fieldNumber: number;
+  wireType: WireType;
+}
+
+/**
  * Defines the command message structure for an entity type.
+ *
+ * @remarks Three encoding pathways coexist on the same schema, picked per entity type:
+ *
+ * - {@link CommandSchema.fields} - plain protobuf fields, written when the consumer supplies the matching key.
+ * - {@link CommandSchema.hasPatternFields} - per-field `has_*`/value pairs (climate, fan, light, cover, ...).
+ * - {@link CommandSchema.bitmaskFields} + {@link CommandSchema.bitmaskFieldNumber} - bitmask-aggregated has-flags written as a single uint32 plus value fields (water
+ *   heater).
+ *
+ * An entity type uses whichever subset of the three matches its proto definition; the schema-driven encoder in `command-pipeline.ts` walks all three on every command.
  */
 export interface CommandSchema {
 
+  bitmaskFieldNumber?: number;
+  bitmaskFields?: Record<string, BitmaskField>;
   deviceIdFieldNumber: number;
   enumMappings?: Record<string, EnumMapping>;
   fields: Record<string, FieldSpec>;
   hasPatternFields: Record<string, HasPatternField>;
   keyFieldNumber: number;
   messageType: number;
+  packedBitsFields?: Record<string, CommandPackedBitsField>;
 }
 
 /**
  * Defines the state response message structure for an entity type.
+ *
+ * @remarks `enumMappings` mirrors the {@link CommandSchema} slot of the same name on the state side. When declared, each entry maps a state-field name to a record
+ * of named labels and their wire-numeric values; the schema-derived {@link StateEventFor} type narrows that field from plain `number` to the
+ * literal-union of the mapping's values. Drift between the schema's mapping and the corresponding named constant in `api-constants.ts` is a type bug; the dual-write
+ * is the architectural cost of the refinement and is verified by per-entity-type consistency tests in `entity-schemas.test.ts`. Forward-compat is preserved at
+ * runtime - the decoder does not validate against the mapping, so wire-enum members that ESPHome adds in future releases pass through as raw numbers.
  */
 export interface StateSchema {
 
   deviceIdFieldNumber: number;
+  enumMappings?: Record<string, EnumMapping>;
   fields: Record<string, FieldSpec>;
   keyFieldNumber: number;
   messageType: number;
+  packedBitsFields?: Record<string, InboundPackedBitsField>;
 }
 
 /**
@@ -83,17 +176,46 @@ export interface RepeatedFieldSpec {
 }
 
 /**
+ * Defines the wire format for a repeated protobuf field containing multiple sub-messages of the same shape. The wire bytes for each occurrence are decoded as their own
+ * protobuf message using {@link RepeatedMessageFieldSpec.fields}, and the resulting structured record is appended to the entity's surfaced array. Use this slot for
+ * fields like `MediaPlayerSupportedFormat` where the proto declares `repeated <NestedMessage>` and consumers need every nested scalar exposed without re-parsing raw
+ * bytes.
+ *
+ * `enumMappings` mirrors the same slot on the parent role: when an inner field key appears here, the schema-derived type narrows that key from plain `number` to the
+ * literal-union of the mapping's numeric values, exactly as the parent-level `enumMappings` does for the outer message.
+ */
+export interface RepeatedMessageFieldSpec {
+
+  enumMappings?: Record<string, EnumMapping>;
+  fieldNumber: number;
+  fields: Record<string, FieldSpec>;
+  wireType: WireType;
+}
+
+/**
  * Defines the list entities response message structure for an entity type.
+ *
+ * @remarks `enumMappings` mirrors the {@link StateSchema} slot of the same name on the discovery side. When declared, each entry maps a listEntities-field name to
+ * a record of named labels and their wire-numeric values; the schema-derived {@link EntityFor} type narrows that field from plain `number` (or
+ * `number[]` for repeated fields) to the literal-union of the mapping's numeric values. This brings listEntities enum narrowing into parity with state-side
+ * narrowing - both
+ * inbound schemas now produce numeric-literal-union types for enum fields, and consumers gain compile-time exhaustiveness on discovery-side enum comparisons just
+ * as they already have on state-side. Drift between a listEntities-side mapping and the corresponding named constant in `api-constants.ts` is a type bug; the
+ * dual-write is verified by per-entity-type consistency tests in `entity-schemas.test.ts`. Forward-compat is preserved at runtime - the decoder reads raw numeric
+ * wire values, so members ESPHome adds in future releases pass through as plain numbers.
  */
 export interface ListEntitiesSchema {
 
   deviceIdFieldNumber: number;
+  enumMappings?: Record<string, EnumMapping>;
   fields: Record<string, FieldSpec>;
   keyFieldNumber: number;
   messageType: number;
   nameFieldNumber: number;
   objectIdFieldNumber: number;
+  packedBitsFields?: Record<string, InboundPackedBitsField>;
   repeatedFields?: Record<string, RepeatedFieldSpec>;
+  repeatedMessageFields?: Record<string, RepeatedMessageFieldSpec>;
 }
 
 /**
@@ -107,79 +229,15 @@ export interface EntitySchema {
   type: string;
 }
 
-// Message type IDs from the ESPHome protocol. These values correspond to the message type enum in the protobuf specification.
-export const MESSAGE_TYPES = {
-
-  ALARM_CONTROL_PANEL_COMMAND_REQUEST: 96,
-  ALARM_CONTROL_PANEL_STATE_RESPONSE: 95,
-  BINARY_SENSOR_STATE_RESPONSE: 21,
-  BUTTON_COMMAND_REQUEST: 62,
-  CAMERA_IMAGE_RESPONSE: 44,
-  CLIMATE_COMMAND_REQUEST: 48,
-  CLIMATE_STATE_RESPONSE: 47,
-  COVER_COMMAND_REQUEST: 30,
-  COVER_STATE_RESPONSE: 22,
-  DATETIME_COMMAND_REQUEST: 114,
-  DATETIME_STATE_RESPONSE: 113,
-  DATE_COMMAND_REQUEST: 102,
-  DATE_STATE_RESPONSE: 101,
-  EVENT_RESPONSE: 108,
-  FAN_COMMAND_REQUEST: 31,
-  FAN_STATE_RESPONSE: 23,
-  LIGHT_COMMAND_REQUEST: 32,
-  LIGHT_STATE_RESPONSE: 24,
-  LIST_ENTITIES_ALARM_CONTROL_PANEL_RESPONSE: 94,
-  LIST_ENTITIES_BINARY_SENSOR_RESPONSE: 12,
-  LIST_ENTITIES_BUTTON_RESPONSE: 61,
-  LIST_ENTITIES_CAMERA_RESPONSE: 43,
-  LIST_ENTITIES_CLIMATE_RESPONSE: 46,
-  LIST_ENTITIES_COVER_RESPONSE: 13,
-  LIST_ENTITIES_DATETIME_RESPONSE: 112,
-  LIST_ENTITIES_DATE_RESPONSE: 100,
-  LIST_ENTITIES_EVENT_RESPONSE: 107,
-  LIST_ENTITIES_FAN_RESPONSE: 14,
-  LIST_ENTITIES_LIGHT_RESPONSE: 15,
-  LIST_ENTITIES_LOCK_RESPONSE: 58,
-  LIST_ENTITIES_MEDIA_PLAYER_RESPONSE: 63,
-  LIST_ENTITIES_NUMBER_RESPONSE: 49,
-  LIST_ENTITIES_SELECT_RESPONSE: 52,
-  LIST_ENTITIES_SENSOR_RESPONSE: 16,
-  LIST_ENTITIES_SIREN_RESPONSE: 55,
-  LIST_ENTITIES_SWITCH_RESPONSE: 17,
-  LIST_ENTITIES_TEXT_RESPONSE: 97,
-  LIST_ENTITIES_TEXT_SENSOR_RESPONSE: 18,
-  LIST_ENTITIES_TIME_RESPONSE: 103,
-  LIST_ENTITIES_UPDATE_RESPONSE: 116,
-  LIST_ENTITIES_VALVE_RESPONSE: 109,
-  LOCK_COMMAND_REQUEST: 60,
-  LOCK_STATE_RESPONSE: 59,
-  MEDIA_PLAYER_COMMAND_REQUEST: 65,
-  MEDIA_PLAYER_STATE_RESPONSE: 64,
-  NUMBER_COMMAND_REQUEST: 51,
-  NUMBER_STATE_RESPONSE: 50,
-  SELECT_COMMAND_REQUEST: 54,
-  SELECT_STATE_RESPONSE: 53,
-  SENSOR_STATE_RESPONSE: 25,
-  SIREN_COMMAND_REQUEST: 57,
-  SIREN_STATE_RESPONSE: 56,
-  SWITCH_COMMAND_REQUEST: 33,
-  SWITCH_STATE_RESPONSE: 26,
-  TEXT_COMMAND_REQUEST: 99,
-  TEXT_SENSOR_STATE_RESPONSE: 27,
-  TEXT_STATE_RESPONSE: 98,
-  TIME_COMMAND_REQUEST: 105,
-  TIME_STATE_RESPONSE: 104,
-  UPDATE_COMMAND_REQUEST: 118,
-  UPDATE_STATE_RESPONSE: 117,
-  VALVE_COMMAND_REQUEST: 111,
-  VALVE_STATE_RESPONSE: 110
-} as const;
-
 /**
- * Schema definitions for all 22 ESPHome entity types. Each schema provides the complete field mapping for encoding commands and decoding state responses.
+ * Schema definitions for every supported ESPHome entity type. Each schema provides the complete field mapping for encoding commands and decoding state responses.
+ *
+ * The `as const satisfies` pattern serves two purposes simultaneously: `satisfies Record<string, EntitySchema>` validates at compile time that every schema conforms to
+ * the EntitySchema shape, while `as const` preserves the literal types of every key, message ID, and enum mapping. This enables consumers to derive narrower types from
+ * the schema (for example, `keyof typeof ENTITY_SCHEMAS` is the canonical EntityType union) without a parallel hand-maintained list that could drift.
  */
 /* eslint-disable camelcase */
-export const ENTITY_SCHEMAS: Record<string, EntitySchema> = {
+export const ENTITY_SCHEMAS = {
 
   alarm_control_panel: {
 
@@ -197,11 +255,15 @@ export const ENTITY_SCHEMAS: Record<string, EntitySchema> = {
       },
       hasPatternFields: {},
       keyFieldNumber: 1,
-      messageType: MESSAGE_TYPES.ALARM_CONTROL_PANEL_COMMAND_REQUEST
+      messageType: MessageType.ALARM_CONTROL_PANEL_COMMAND_REQUEST
     },
     listEntities: {
 
       deviceIdFieldNumber: 11,
+      enumMappings: {
+
+        entityCategory: EntityCategory
+      },
       fields: {
 
         disabledByDefault: { fieldNumber: 6, valueType: "bool", wireType: WireType.VARINT },
@@ -212,19 +274,23 @@ export const ENTITY_SCHEMAS: Record<string, EntitySchema> = {
         supportedFeatures: { fieldNumber: 8, valueType: "varint", wireType: WireType.VARINT }
       },
       keyFieldNumber: 2,
-      messageType: MESSAGE_TYPES.LIST_ENTITIES_ALARM_CONTROL_PANEL_RESPONSE,
+      messageType: MessageType.LIST_ENTITIES_ALARM_CONTROL_PANEL_RESPONSE,
       nameFieldNumber: 3,
       objectIdFieldNumber: 1
     },
     state: {
 
       deviceIdFieldNumber: 3,
+      enumMappings: {
+
+        state: AlarmControlPanelState
+      },
       fields: {
 
         state: { fieldNumber: 2, valueType: "enum", wireType: WireType.VARINT }
       },
       keyFieldNumber: 1,
-      messageType: MESSAGE_TYPES.ALARM_CONTROL_PANEL_STATE_RESPONSE
+      messageType: MessageType.ALARM_CONTROL_PANEL_STATE_RESPONSE
     },
     type: "alarm_control_panel"
   },
@@ -234,6 +300,10 @@ export const ENTITY_SCHEMAS: Record<string, EntitySchema> = {
     listEntities: {
 
       deviceIdFieldNumber: 10,
+      enumMappings: {
+
+        entityCategory: EntityCategory
+      },
       fields: {
 
         deviceClass: { fieldNumber: 5, valueType: "string", wireType: WireType.LENGTH_DELIMITED },
@@ -243,7 +313,7 @@ export const ENTITY_SCHEMAS: Record<string, EntitySchema> = {
         isStatusBinarySensor: { fieldNumber: 6, valueType: "bool", wireType: WireType.VARINT }
       },
       keyFieldNumber: 2,
-      messageType: MESSAGE_TYPES.LIST_ENTITIES_BINARY_SENSOR_RESPONSE,
+      messageType: MessageType.LIST_ENTITIES_BINARY_SENSOR_RESPONSE,
       nameFieldNumber: 3,
       objectIdFieldNumber: 1
     },
@@ -256,7 +326,7 @@ export const ENTITY_SCHEMAS: Record<string, EntitySchema> = {
         state: { fieldNumber: 2, valueType: "bool", wireType: WireType.VARINT }
       },
       keyFieldNumber: 1,
-      messageType: MESSAGE_TYPES.BINARY_SENSOR_STATE_RESPONSE
+      messageType: MessageType.BINARY_SENSOR_STATE_RESPONSE
     },
     type: "binary_sensor"
   },
@@ -269,11 +339,15 @@ export const ENTITY_SCHEMAS: Record<string, EntitySchema> = {
       fields: {},
       hasPatternFields: {},
       keyFieldNumber: 1,
-      messageType: MESSAGE_TYPES.BUTTON_COMMAND_REQUEST
+      messageType: MessageType.BUTTON_COMMAND_REQUEST
     },
     listEntities: {
 
       deviceIdFieldNumber: 9,
+      enumMappings: {
+
+        entityCategory: EntityCategory
+      },
       fields: {
 
         deviceClass: { fieldNumber: 8, valueType: "string", wireType: WireType.LENGTH_DELIMITED },
@@ -282,7 +356,7 @@ export const ENTITY_SCHEMAS: Record<string, EntitySchema> = {
         icon: { fieldNumber: 5, valueType: "string", wireType: WireType.LENGTH_DELIMITED }
       },
       keyFieldNumber: 2,
-      messageType: MESSAGE_TYPES.LIST_ENTITIES_BUTTON_RESPONSE,
+      messageType: MessageType.LIST_ENTITIES_BUTTON_RESPONSE,
       nameFieldNumber: 3,
       objectIdFieldNumber: 1
     },
@@ -302,6 +376,10 @@ export const ENTITY_SCHEMAS: Record<string, EntitySchema> = {
     listEntities: {
 
       deviceIdFieldNumber: 8,
+      enumMappings: {
+
+        entityCategory: EntityCategory
+      },
       fields: {
 
         disabledByDefault: { fieldNumber: 5, valueType: "bool", wireType: WireType.VARINT },
@@ -309,7 +387,7 @@ export const ENTITY_SCHEMAS: Record<string, EntitySchema> = {
         icon: { fieldNumber: 6, valueType: "string", wireType: WireType.LENGTH_DELIMITED }
       },
       keyFieldNumber: 2,
-      messageType: MESSAGE_TYPES.LIST_ENTITIES_CAMERA_RESPONSE,
+      messageType: MessageType.LIST_ENTITIES_CAMERA_RESPONSE,
       nameFieldNumber: 3,
       objectIdFieldNumber: 1
     },
@@ -322,7 +400,7 @@ export const ENTITY_SCHEMAS: Record<string, EntitySchema> = {
         done: { fieldNumber: 3, valueType: "bool", wireType: WireType.VARINT }
       },
       keyFieldNumber: 1,
-      messageType: MESSAGE_TYPES.CAMERA_IMAGE_RESPONSE
+      messageType: MessageType.CAMERA_IMAGE_RESPONSE
     },
     type: "camera"
   },
@@ -354,21 +432,35 @@ export const ENTITY_SCHEMAS: Record<string, EntitySchema> = {
         targetTemperatureLow: { hasFieldNumber: 6, valueFieldNumber: 7, valueType: "float", wireType: WireType.FIXED32 }
       },
       keyFieldNumber: 1,
-      messageType: MESSAGE_TYPES.CLIMATE_COMMAND_REQUEST
+      messageType: MessageType.CLIMATE_COMMAND_REQUEST
     },
     listEntities: {
 
       deviceIdFieldNumber: 26,
+      enumMappings: {
+
+        entityCategory: EntityCategory,
+        supportedFanModes: ClimateFanMode,
+        supportedModes: ClimateMode,
+        supportedPresets: ClimatePreset,
+        supportedSwingModes: ClimateSwingMode,
+        temperatureUnit: TemperatureUnit
+      },
       fields: {
 
         disabledByDefault: { fieldNumber: 18, valueType: "bool", wireType: WireType.VARINT },
         entityCategory: { fieldNumber: 20, valueType: "enum", wireType: WireType.VARINT },
         icon: { fieldNumber: 19, valueType: "string", wireType: WireType.LENGTH_DELIMITED },
+        // The five per-capability deprecated booleans (proto fields 5, 6, 12, 22, 23) act as fallbacks when pre-1.14 firmware does not emit feature_flags. They share
+        // their consumer-facing names with the bits declared in `packedBitsFields.featureFlags.bits` so a single typed key surfaces to consumers regardless of which
+        // wire source the firmware used. The packed-bits decoder runs AFTER the fields decoder, so 1.14+ firmware that emits feature_flags wins; older firmware that
+        // emits only the booleans keeps its values.
         supportsAction: { fieldNumber: 12, valueType: "bool", wireType: WireType.VARINT },
         supportsCurrentHumidity: { fieldNumber: 22, valueType: "bool", wireType: WireType.VARINT },
         supportsCurrentTemperature: { fieldNumber: 5, valueType: "bool", wireType: WireType.VARINT },
         supportsTargetHumidity: { fieldNumber: 23, valueType: "bool", wireType: WireType.VARINT },
         supportsTwoPointTargetTemperature: { fieldNumber: 6, valueType: "bool", wireType: WireType.VARINT },
+        temperatureUnit: { fieldNumber: 28, valueType: "enum", wireType: WireType.VARINT },
         visualCurrentTemperatureStep: { fieldNumber: 21, valueType: "float", wireType: WireType.FIXED32 },
         visualMaxHumidity: { fieldNumber: 25, valueType: "float", wireType: WireType.FIXED32 },
         visualMaxTemperature: { fieldNumber: 9, valueType: "float", wireType: WireType.FIXED32 },
@@ -377,9 +469,22 @@ export const ENTITY_SCHEMAS: Record<string, EntitySchema> = {
         visualTargetTemperatureStep: { fieldNumber: 10, valueType: "float", wireType: WireType.FIXED32 }
       },
       keyFieldNumber: 2,
-      messageType: MESSAGE_TYPES.LIST_ENTITIES_CLIMATE_RESPONSE,
+      messageType: MessageType.LIST_ENTITIES_CLIMATE_RESPONSE,
       nameFieldNumber: 3,
       objectIdFieldNumber: 1,
+      // ESPHome 1.14+ packs every per-capability boolean into a single uint32 `feature_flags` field (proto field 27). The bit positions mirror the upstream firmware
+      // enum `ClimateFeatures` in `esphome/components/climate/climate_mode.h`. The five deprecated boolean fields above act as fallbacks for pre-1.14 firmware; the
+      // packed-bits decoder runs AFTER the scalar fields decoder, so when both sources are present (the firmware's back-compat path) the bits overwrite the
+      // booleans. REQUIRES_TWO_POINT_TARGET_TEMPERATURE has no pre-1.14 boolean counterpart and only surfaces when feature_flags is present.
+      packedBitsFields: {
+
+        featureFlags: {
+
+          bits: CLIMATE_FEATURE_BITS,
+          fieldNumber: 27,
+          wireType: WireType.VARINT
+        }
+      },
       repeatedFields: {
 
         supportedCustomFanModes: { fieldNumber: 15, valueType: "string", wireType: WireType.LENGTH_DELIMITED },
@@ -393,6 +498,14 @@ export const ENTITY_SCHEMAS: Record<string, EntitySchema> = {
     state: {
 
       deviceIdFieldNumber: 16,
+      enumMappings: {
+
+        action: ClimateAction,
+        fanMode: ClimateFanMode,
+        mode: ClimateMode,
+        preset: ClimatePreset,
+        swingMode: ClimateSwingMode
+      },
       fields: {
 
         action: { fieldNumber: 8, valueType: "enum", wireType: WireType.VARINT },
@@ -410,7 +523,7 @@ export const ENTITY_SCHEMAS: Record<string, EntitySchema> = {
         targetTemperatureLow: { fieldNumber: 5, valueType: "float", wireType: WireType.FIXED32 }
       },
       keyFieldNumber: 1,
-      messageType: MESSAGE_TYPES.CLIMATE_STATE_RESPONSE
+      messageType: MessageType.CLIMATE_STATE_RESPONSE
     },
     type: "climate"
   },
@@ -430,11 +543,15 @@ export const ENTITY_SCHEMAS: Record<string, EntitySchema> = {
         tilt: { hasFieldNumber: 6, valueFieldNumber: 7, valueType: "float", wireType: WireType.FIXED32 }
       },
       keyFieldNumber: 1,
-      messageType: MESSAGE_TYPES.COVER_COMMAND_REQUEST
+      messageType: MessageType.COVER_COMMAND_REQUEST
     },
     listEntities: {
 
       deviceIdFieldNumber: 13,
+      enumMappings: {
+
+        entityCategory: EntityCategory
+      },
       fields: {
 
         assumedState: { fieldNumber: 5, valueType: "bool", wireType: WireType.VARINT },
@@ -447,13 +564,17 @@ export const ENTITY_SCHEMAS: Record<string, EntitySchema> = {
         supportsTilt: { fieldNumber: 7, valueType: "bool", wireType: WireType.VARINT }
       },
       keyFieldNumber: 2,
-      messageType: MESSAGE_TYPES.LIST_ENTITIES_COVER_RESPONSE,
+      messageType: MessageType.LIST_ENTITIES_COVER_RESPONSE,
       nameFieldNumber: 3,
       objectIdFieldNumber: 1
     },
     state: {
 
       deviceIdFieldNumber: 6,
+      enumMappings: {
+
+        currentOperation: CoverOperation
+      },
       fields: {
 
         currentOperation: { fieldNumber: 5, valueType: "enum", wireType: WireType.VARINT },
@@ -461,7 +582,7 @@ export const ENTITY_SCHEMAS: Record<string, EntitySchema> = {
         tilt: { fieldNumber: 4, valueType: "float", wireType: WireType.FIXED32 }
       },
       keyFieldNumber: 1,
-      messageType: MESSAGE_TYPES.COVER_STATE_RESPONSE
+      messageType: MessageType.COVER_STATE_RESPONSE
     },
     type: "cover"
   },
@@ -479,11 +600,15 @@ export const ENTITY_SCHEMAS: Record<string, EntitySchema> = {
       },
       hasPatternFields: {},
       keyFieldNumber: 1,
-      messageType: MESSAGE_TYPES.DATE_COMMAND_REQUEST
+      messageType: MessageType.DATE_COMMAND_REQUEST
     },
     listEntities: {
 
       deviceIdFieldNumber: 8,
+      enumMappings: {
+
+        entityCategory: EntityCategory
+      },
       fields: {
 
         disabledByDefault: { fieldNumber: 6, valueType: "bool", wireType: WireType.VARINT },
@@ -491,7 +616,7 @@ export const ENTITY_SCHEMAS: Record<string, EntitySchema> = {
         icon: { fieldNumber: 5, valueType: "string", wireType: WireType.LENGTH_DELIMITED }
       },
       keyFieldNumber: 2,
-      messageType: MESSAGE_TYPES.LIST_ENTITIES_DATE_RESPONSE,
+      messageType: MessageType.LIST_ENTITIES_DATE_RESPONSE,
       nameFieldNumber: 3,
       objectIdFieldNumber: 1
     },
@@ -506,7 +631,7 @@ export const ENTITY_SCHEMAS: Record<string, EntitySchema> = {
         year: { fieldNumber: 3, valueType: "varint", wireType: WireType.VARINT }
       },
       keyFieldNumber: 1,
-      messageType: MESSAGE_TYPES.DATE_STATE_RESPONSE
+      messageType: MessageType.DATE_STATE_RESPONSE
     },
     type: "date"
   },
@@ -522,11 +647,15 @@ export const ENTITY_SCHEMAS: Record<string, EntitySchema> = {
       },
       hasPatternFields: {},
       keyFieldNumber: 1,
-      messageType: MESSAGE_TYPES.DATETIME_COMMAND_REQUEST
+      messageType: MessageType.DATETIME_COMMAND_REQUEST
     },
     listEntities: {
 
       deviceIdFieldNumber: 8,
+      enumMappings: {
+
+        entityCategory: EntityCategory
+      },
       fields: {
 
         disabledByDefault: { fieldNumber: 6, valueType: "bool", wireType: WireType.VARINT },
@@ -534,7 +663,7 @@ export const ENTITY_SCHEMAS: Record<string, EntitySchema> = {
         icon: { fieldNumber: 5, valueType: "string", wireType: WireType.LENGTH_DELIMITED }
       },
       keyFieldNumber: 2,
-      messageType: MESSAGE_TYPES.LIST_ENTITIES_DATETIME_RESPONSE,
+      messageType: MessageType.LIST_ENTITIES_DATETIME_RESPONSE,
       nameFieldNumber: 3,
       objectIdFieldNumber: 1
     },
@@ -547,7 +676,7 @@ export const ENTITY_SCHEMAS: Record<string, EntitySchema> = {
         missingState: { fieldNumber: 2, valueType: "bool", wireType: WireType.VARINT }
       },
       keyFieldNumber: 1,
-      messageType: MESSAGE_TYPES.DATETIME_STATE_RESPONSE
+      messageType: MessageType.DATETIME_STATE_RESPONSE
     },
     type: "datetime"
   },
@@ -557,6 +686,10 @@ export const ENTITY_SCHEMAS: Record<string, EntitySchema> = {
     listEntities: {
 
       deviceIdFieldNumber: 10,
+      enumMappings: {
+
+        entityCategory: EntityCategory
+      },
       fields: {
 
         deviceClass: { fieldNumber: 8, valueType: "string", wireType: WireType.LENGTH_DELIMITED },
@@ -565,7 +698,7 @@ export const ENTITY_SCHEMAS: Record<string, EntitySchema> = {
         icon: { fieldNumber: 5, valueType: "string", wireType: WireType.LENGTH_DELIMITED }
       },
       keyFieldNumber: 2,
-      messageType: MESSAGE_TYPES.LIST_ENTITIES_EVENT_RESPONSE,
+      messageType: MessageType.LIST_ENTITIES_EVENT_RESPONSE,
       nameFieldNumber: 3,
       objectIdFieldNumber: 1,
       repeatedFields: {
@@ -581,7 +714,7 @@ export const ENTITY_SCHEMAS: Record<string, EntitySchema> = {
         eventType: { fieldNumber: 2, valueType: "string", wireType: WireType.LENGTH_DELIMITED }
       },
       keyFieldNumber: 1,
-      messageType: MESSAGE_TYPES.EVENT_RESPONSE
+      messageType: MessageType.EVENT_RESPONSE
     },
     type: "event"
   },
@@ -605,11 +738,15 @@ export const ENTITY_SCHEMAS: Record<string, EntitySchema> = {
         state: { hasFieldNumber: 2, valueFieldNumber: 3, valueType: "bool", wireType: WireType.VARINT }
       },
       keyFieldNumber: 1,
-      messageType: MESSAGE_TYPES.FAN_COMMAND_REQUEST
+      messageType: MessageType.FAN_COMMAND_REQUEST
     },
     listEntities: {
 
       deviceIdFieldNumber: 13,
+      enumMappings: {
+
+        entityCategory: EntityCategory
+      },
       fields: {
 
         disabledByDefault: { fieldNumber: 9, valueType: "bool", wireType: WireType.VARINT },
@@ -621,7 +758,7 @@ export const ENTITY_SCHEMAS: Record<string, EntitySchema> = {
         supportsSpeed: { fieldNumber: 6, valueType: "bool", wireType: WireType.VARINT }
       },
       keyFieldNumber: 2,
-      messageType: MESSAGE_TYPES.LIST_ENTITIES_FAN_RESPONSE,
+      messageType: MessageType.LIST_ENTITIES_FAN_RESPONSE,
       nameFieldNumber: 3,
       objectIdFieldNumber: 1,
       repeatedFields: {
@@ -632,6 +769,10 @@ export const ENTITY_SCHEMAS: Record<string, EntitySchema> = {
     state: {
 
       deviceIdFieldNumber: 8,
+      enumMappings: {
+
+        direction: FanDirection
+      },
       fields: {
 
         direction: { fieldNumber: 5, valueType: "enum", wireType: WireType.VARINT },
@@ -641,9 +782,62 @@ export const ENTITY_SCHEMAS: Record<string, EntitySchema> = {
         state: { fieldNumber: 2, valueType: "bool", wireType: WireType.VARINT }
       },
       keyFieldNumber: 1,
-      messageType: MESSAGE_TYPES.FAN_STATE_RESPONSE
+      messageType: MessageType.FAN_STATE_RESPONSE
     },
     type: "fan"
+  },
+
+  infrared: {
+
+    command: {
+
+      // Shared with radio_frequency - the wire message (id 136 InfraredRFTransmitRawTimingsRequest) is reused for both physical layers. The schema's `type` tag
+      // ("infrared" vs "radio_frequency") carries the consumer-facing distinction; the wire bytes are identical.
+      deviceIdFieldNumber: 1,
+      fields: {
+
+        carrierFrequency: { fieldNumber: 3, valueType: "varint", wireType: WireType.VARINT },
+        modulation:       { fieldNumber: 6, valueType: "varint", wireType: WireType.VARINT },
+        repeatCount:      { fieldNumber: 4, valueType: "varint", wireType: WireType.VARINT },
+        timings:          { fieldNumber: 5, valueType: "sint32-packed", wireType: WireType.LENGTH_DELIMITED }
+      },
+      hasPatternFields: {},
+      keyFieldNumber: 2,
+      messageType: MessageType.INFRARED_RF_TRANSMIT_RAW_TIMINGS_REQUEST
+    },
+    listEntities: {
+
+      deviceIdFieldNumber: 7,
+      enumMappings: {
+
+        entityCategory: EntityCategory
+      },
+      fields: {
+
+        capabilities:      { fieldNumber: 8, valueType: "varint", wireType: WireType.VARINT },
+        disabledByDefault: { fieldNumber: 5, valueType: "bool",   wireType: WireType.VARINT },
+        entityCategory:    { fieldNumber: 6, valueType: "enum",   wireType: WireType.VARINT },
+        icon:              { fieldNumber: 4, valueType: "string", wireType: WireType.LENGTH_DELIMITED },
+        receiverFrequency: { fieldNumber: 9, valueType: "varint", wireType: WireType.VARINT }
+      },
+      keyFieldNumber: 2,
+      messageType: MessageType.LIST_ENTITIES_INFRARED_RESPONSE,
+      nameFieldNumber: 3,
+      objectIdFieldNumber: 1
+    },
+    state: {
+
+      // Shared receive event (id 137 InfraredRFReceiveEvent) - same wire shape for infrared and radio_frequency. handleTelemetry disambiguates the consumer-facing event
+      // by consulting the registered entity's type rather than the wire message-type alone.
+      deviceIdFieldNumber: 1,
+      fields: {
+
+        timings: { fieldNumber: 3, valueType: "sint32-packed", wireType: WireType.LENGTH_DELIMITED }
+      },
+      keyFieldNumber: 2,
+      messageType: MessageType.INFRARED_RF_RECEIVE_EVENT
+    },
+    type: "infrared"
   },
 
   light: {
@@ -675,11 +869,16 @@ export const ENTITY_SCHEMAS: Record<string, EntitySchema> = {
         white: { hasFieldNumber: 10, valueFieldNumber: 11, valueType: "float", wireType: WireType.FIXED32 }
       },
       keyFieldNumber: 1,
-      messageType: MESSAGE_TYPES.LIGHT_COMMAND_REQUEST
+      messageType: MessageType.LIGHT_COMMAND_REQUEST
     },
     listEntities: {
 
       deviceIdFieldNumber: 16,
+      enumMappings: {
+
+        entityCategory: EntityCategory,
+        supportedColorModes: ColorMode
+      },
       fields: {
 
         disabledByDefault: { fieldNumber: 13, valueType: "bool", wireType: WireType.VARINT },
@@ -689,7 +888,7 @@ export const ENTITY_SCHEMAS: Record<string, EntitySchema> = {
         minMireds: { fieldNumber: 9, valueType: "float", wireType: WireType.FIXED32 }
       },
       keyFieldNumber: 2,
-      messageType: MESSAGE_TYPES.LIST_ENTITIES_LIGHT_RESPONSE,
+      messageType: MessageType.LIST_ENTITIES_LIGHT_RESPONSE,
       nameFieldNumber: 3,
       objectIdFieldNumber: 1,
       repeatedFields: {
@@ -701,6 +900,10 @@ export const ENTITY_SCHEMAS: Record<string, EntitySchema> = {
     state: {
 
       deviceIdFieldNumber: 14,
+      enumMappings: {
+
+        colorMode: ColorMode
+      },
       fields: {
 
         blue: { fieldNumber: 6, valueType: "float", wireType: WireType.FIXED32 },
@@ -717,7 +920,7 @@ export const ENTITY_SCHEMAS: Record<string, EntitySchema> = {
         white: { fieldNumber: 7, valueType: "float", wireType: WireType.FIXED32 }
       },
       keyFieldNumber: 1,
-      messageType: MESSAGE_TYPES.LIGHT_STATE_RESPONSE
+      messageType: MessageType.LIGHT_STATE_RESPONSE
     },
     type: "light"
   },
@@ -740,11 +943,15 @@ export const ENTITY_SCHEMAS: Record<string, EntitySchema> = {
         code: { hasFieldNumber: 3, valueFieldNumber: 4, valueType: "string", wireType: WireType.LENGTH_DELIMITED }
       },
       keyFieldNumber: 1,
-      messageType: MESSAGE_TYPES.LOCK_COMMAND_REQUEST
+      messageType: MessageType.LOCK_COMMAND_REQUEST
     },
     listEntities: {
 
       deviceIdFieldNumber: 12,
+      enumMappings: {
+
+        entityCategory: EntityCategory
+      },
       fields: {
 
         assumedState: { fieldNumber: 8, valueType: "bool", wireType: WireType.VARINT },
@@ -756,19 +963,23 @@ export const ENTITY_SCHEMAS: Record<string, EntitySchema> = {
         supportsOpen: { fieldNumber: 9, valueType: "bool", wireType: WireType.VARINT }
       },
       keyFieldNumber: 2,
-      messageType: MESSAGE_TYPES.LIST_ENTITIES_LOCK_RESPONSE,
+      messageType: MessageType.LIST_ENTITIES_LOCK_RESPONSE,
       nameFieldNumber: 3,
       objectIdFieldNumber: 1
     },
     state: {
 
       deviceIdFieldNumber: 3,
+      enumMappings: {
+
+        state: LockState
+      },
       fields: {
 
         state: { fieldNumber: 2, valueType: "enum", wireType: WireType.VARINT }
       },
       keyFieldNumber: 1,
-      messageType: MESSAGE_TYPES.LOCK_STATE_RESPONSE
+      messageType: MessageType.LOCK_STATE_RESPONSE
     },
     type: "lock"
   },
@@ -787,11 +998,15 @@ export const ENTITY_SCHEMAS: Record<string, EntitySchema> = {
         volume: { hasFieldNumber: 4, valueFieldNumber: 5, valueType: "float", wireType: WireType.FIXED32 }
       },
       keyFieldNumber: 1,
-      messageType: MESSAGE_TYPES.MEDIA_PLAYER_COMMAND_REQUEST
+      messageType: MessageType.MEDIA_PLAYER_COMMAND_REQUEST
     },
     listEntities: {
 
       deviceIdFieldNumber: 10,
+      enumMappings: {
+
+        entityCategory: EntityCategory
+      },
       fields: {
 
         disabledByDefault: { fieldNumber: 6, valueType: "bool", wireType: WireType.VARINT },
@@ -801,13 +1016,36 @@ export const ENTITY_SCHEMAS: Record<string, EntitySchema> = {
         supportsPause: { fieldNumber: 8, valueType: "bool", wireType: WireType.VARINT }
       },
       keyFieldNumber: 2,
-      messageType: MESSAGE_TYPES.LIST_ENTITIES_MEDIA_PLAYER_RESPONSE,
+      messageType: MessageType.LIST_ENTITIES_MEDIA_PLAYER_RESPONSE,
       nameFieldNumber: 3,
-      objectIdFieldNumber: 1
+      objectIdFieldNumber: 1,
+      repeatedMessageFields: {
+
+        // Each MediaPlayerSupportedFormat sub-message describes one (codec, sample rate, channels, purpose, sample-byte width) tuple the device can accept. The
+        // device emits one occurrence per supported configuration; the decoder surfaces them as a structured array consumers can iterate without re-parsing bytes.
+        supportedFormats: {
+
+          enumMappings: { purpose: MediaPlayerFormatPurpose },
+          fieldNumber: 9,
+          fields: {
+
+            format: { fieldNumber: 1, valueType: "string", wireType: WireType.LENGTH_DELIMITED },
+            numChannels: { fieldNumber: 3, valueType: "varint", wireType: WireType.VARINT },
+            purpose: { fieldNumber: 4, valueType: "enum", wireType: WireType.VARINT },
+            sampleBytes: { fieldNumber: 5, valueType: "varint", wireType: WireType.VARINT },
+            sampleRate: { fieldNumber: 2, valueType: "varint", wireType: WireType.VARINT }
+          },
+          wireType: WireType.LENGTH_DELIMITED
+        }
+      }
     },
     state: {
 
       deviceIdFieldNumber: 5,
+      enumMappings: {
+
+        state: MediaPlayerState
+      },
       fields: {
 
         muted: { fieldNumber: 4, valueType: "bool", wireType: WireType.VARINT },
@@ -815,7 +1053,7 @@ export const ENTITY_SCHEMAS: Record<string, EntitySchema> = {
         volume: { fieldNumber: 3, valueType: "float", wireType: WireType.FIXED32 }
       },
       keyFieldNumber: 1,
-      messageType: MESSAGE_TYPES.MEDIA_PLAYER_STATE_RESPONSE
+      messageType: MessageType.MEDIA_PLAYER_STATE_RESPONSE
     },
     type: "media_player"
   },
@@ -831,11 +1069,16 @@ export const ENTITY_SCHEMAS: Record<string, EntitySchema> = {
       },
       hasPatternFields: {},
       keyFieldNumber: 1,
-      messageType: MESSAGE_TYPES.NUMBER_COMMAND_REQUEST
+      messageType: MessageType.NUMBER_COMMAND_REQUEST
     },
     listEntities: {
 
       deviceIdFieldNumber: 14,
+      enumMappings: {
+
+        entityCategory: EntityCategory,
+        mode: NumberMode
+      },
       fields: {
 
         deviceClass: { fieldNumber: 13, valueType: "string", wireType: WireType.LENGTH_DELIMITED },
@@ -849,7 +1092,7 @@ export const ENTITY_SCHEMAS: Record<string, EntitySchema> = {
         unitOfMeasurement: { fieldNumber: 11, valueType: "string", wireType: WireType.LENGTH_DELIMITED }
       },
       keyFieldNumber: 2,
-      messageType: MESSAGE_TYPES.LIST_ENTITIES_NUMBER_RESPONSE,
+      messageType: MessageType.LIST_ENTITIES_NUMBER_RESPONSE,
       nameFieldNumber: 3,
       objectIdFieldNumber: 1
     },
@@ -862,9 +1105,62 @@ export const ENTITY_SCHEMAS: Record<string, EntitySchema> = {
         state: { fieldNumber: 2, valueType: "float", wireType: WireType.FIXED32 }
       },
       keyFieldNumber: 1,
-      messageType: MESSAGE_TYPES.NUMBER_STATE_RESPONSE
+      messageType: MessageType.NUMBER_STATE_RESPONSE
     },
     type: "number"
+  },
+
+  radio_frequency: {
+
+    command: {
+
+      // Shared with infrared - see the infrared schema's command slot for the rationale; the wire bytes are identical.
+      deviceIdFieldNumber: 1,
+      fields: {
+
+        carrierFrequency: { fieldNumber: 3, valueType: "varint", wireType: WireType.VARINT },
+        modulation:       { fieldNumber: 6, valueType: "varint", wireType: WireType.VARINT },
+        repeatCount:      { fieldNumber: 4, valueType: "varint", wireType: WireType.VARINT },
+        timings:          { fieldNumber: 5, valueType: "sint32-packed", wireType: WireType.LENGTH_DELIMITED }
+      },
+      hasPatternFields: {},
+      keyFieldNumber: 2,
+      messageType: MessageType.INFRARED_RF_TRANSMIT_RAW_TIMINGS_REQUEST
+    },
+    listEntities: {
+
+      deviceIdFieldNumber: 7,
+      enumMappings: {
+
+        entityCategory: EntityCategory
+      },
+      fields: {
+
+        capabilities:         { fieldNumber: 8,  valueType: "varint", wireType: WireType.VARINT },
+        disabledByDefault:    { fieldNumber: 5,  valueType: "bool",   wireType: WireType.VARINT },
+        entityCategory:       { fieldNumber: 6,  valueType: "enum",   wireType: WireType.VARINT },
+        frequencyMax:         { fieldNumber: 10, valueType: "varint", wireType: WireType.VARINT },
+        frequencyMin:         { fieldNumber: 9,  valueType: "varint", wireType: WireType.VARINT },
+        icon:                 { fieldNumber: 4,  valueType: "string", wireType: WireType.LENGTH_DELIMITED },
+        supportedModulations: { fieldNumber: 11, valueType: "varint", wireType: WireType.VARINT }
+      },
+      keyFieldNumber: 2,
+      messageType: MessageType.LIST_ENTITIES_RADIO_FREQUENCY_RESPONSE,
+      nameFieldNumber: 3,
+      objectIdFieldNumber: 1
+    },
+    state: {
+
+      // Shared with infrared - see the infrared schema's state slot for the rationale.
+      deviceIdFieldNumber: 1,
+      fields: {
+
+        timings: { fieldNumber: 3, valueType: "sint32-packed", wireType: WireType.LENGTH_DELIMITED }
+      },
+      keyFieldNumber: 2,
+      messageType: MessageType.INFRARED_RF_RECEIVE_EVENT
+    },
+    type: "radio_frequency"
   },
 
   select: {
@@ -878,11 +1174,15 @@ export const ENTITY_SCHEMAS: Record<string, EntitySchema> = {
       },
       hasPatternFields: {},
       keyFieldNumber: 1,
-      messageType: MESSAGE_TYPES.SELECT_COMMAND_REQUEST
+      messageType: MessageType.SELECT_COMMAND_REQUEST
     },
     listEntities: {
 
       deviceIdFieldNumber: 9,
+      enumMappings: {
+
+        entityCategory: EntityCategory
+      },
       fields: {
 
         disabledByDefault: { fieldNumber: 7, valueType: "bool", wireType: WireType.VARINT },
@@ -890,7 +1190,7 @@ export const ENTITY_SCHEMAS: Record<string, EntitySchema> = {
         icon: { fieldNumber: 5, valueType: "string", wireType: WireType.LENGTH_DELIMITED }
       },
       keyFieldNumber: 2,
-      messageType: MESSAGE_TYPES.LIST_ENTITIES_SELECT_RESPONSE,
+      messageType: MessageType.LIST_ENTITIES_SELECT_RESPONSE,
       nameFieldNumber: 3,
       objectIdFieldNumber: 1,
       repeatedFields: {
@@ -907,7 +1207,7 @@ export const ENTITY_SCHEMAS: Record<string, EntitySchema> = {
         state: { fieldNumber: 2, valueType: "string", wireType: WireType.LENGTH_DELIMITED }
       },
       keyFieldNumber: 1,
-      messageType: MESSAGE_TYPES.SELECT_STATE_RESPONSE
+      messageType: MessageType.SELECT_STATE_RESPONSE
     },
     type: "select"
   },
@@ -917,6 +1217,11 @@ export const ENTITY_SCHEMAS: Record<string, EntitySchema> = {
     listEntities: {
 
       deviceIdFieldNumber: 14,
+      enumMappings: {
+
+        entityCategory: EntityCategory,
+        stateClass: SensorStateClass
+      },
       fields: {
 
         accuracyDecimals: { fieldNumber: 7, valueType: "varint", wireType: WireType.VARINT },
@@ -929,7 +1234,7 @@ export const ENTITY_SCHEMAS: Record<string, EntitySchema> = {
         unitOfMeasurement: { fieldNumber: 6, valueType: "string", wireType: WireType.LENGTH_DELIMITED }
       },
       keyFieldNumber: 2,
-      messageType: MESSAGE_TYPES.LIST_ENTITIES_SENSOR_RESPONSE,
+      messageType: MessageType.LIST_ENTITIES_SENSOR_RESPONSE,
       nameFieldNumber: 3,
       objectIdFieldNumber: 1
     },
@@ -942,7 +1247,7 @@ export const ENTITY_SCHEMAS: Record<string, EntitySchema> = {
         state: { fieldNumber: 2, valueType: "float", wireType: WireType.FIXED32 }
       },
       keyFieldNumber: 1,
-      messageType: MESSAGE_TYPES.SENSOR_STATE_RESPONSE
+      messageType: MessageType.SENSOR_STATE_RESPONSE
     },
     type: "sensor"
   },
@@ -961,11 +1266,15 @@ export const ENTITY_SCHEMAS: Record<string, EntitySchema> = {
         volume: { hasFieldNumber: 8, valueFieldNumber: 9, valueType: "float", wireType: WireType.FIXED32 }
       },
       keyFieldNumber: 1,
-      messageType: MESSAGE_TYPES.SIREN_COMMAND_REQUEST
+      messageType: MessageType.SIREN_COMMAND_REQUEST
     },
     listEntities: {
 
       deviceIdFieldNumber: 11,
+      enumMappings: {
+
+        entityCategory: EntityCategory
+      },
       fields: {
 
         disabledByDefault: { fieldNumber: 6, valueType: "bool", wireType: WireType.VARINT },
@@ -975,7 +1284,7 @@ export const ENTITY_SCHEMAS: Record<string, EntitySchema> = {
         supportsVolume: { fieldNumber: 9, valueType: "bool", wireType: WireType.VARINT }
       },
       keyFieldNumber: 2,
-      messageType: MESSAGE_TYPES.LIST_ENTITIES_SIREN_RESPONSE,
+      messageType: MessageType.LIST_ENTITIES_SIREN_RESPONSE,
       nameFieldNumber: 3,
       objectIdFieldNumber: 1,
       repeatedFields: {
@@ -991,7 +1300,7 @@ export const ENTITY_SCHEMAS: Record<string, EntitySchema> = {
         state: { fieldNumber: 2, valueType: "bool", wireType: WireType.VARINT }
       },
       keyFieldNumber: 1,
-      messageType: MESSAGE_TYPES.SIREN_STATE_RESPONSE
+      messageType: MessageType.SIREN_STATE_RESPONSE
     },
     type: "siren"
   },
@@ -1007,11 +1316,15 @@ export const ENTITY_SCHEMAS: Record<string, EntitySchema> = {
       },
       hasPatternFields: {},
       keyFieldNumber: 1,
-      messageType: MESSAGE_TYPES.SWITCH_COMMAND_REQUEST
+      messageType: MessageType.SWITCH_COMMAND_REQUEST
     },
     listEntities: {
 
       deviceIdFieldNumber: 10,
+      enumMappings: {
+
+        entityCategory: EntityCategory
+      },
       fields: {
 
         assumedState: { fieldNumber: 6, valueType: "bool", wireType: WireType.VARINT },
@@ -1021,7 +1334,7 @@ export const ENTITY_SCHEMAS: Record<string, EntitySchema> = {
         icon: { fieldNumber: 5, valueType: "string", wireType: WireType.LENGTH_DELIMITED }
       },
       keyFieldNumber: 2,
-      messageType: MESSAGE_TYPES.LIST_ENTITIES_SWITCH_RESPONSE,
+      messageType: MessageType.LIST_ENTITIES_SWITCH_RESPONSE,
       nameFieldNumber: 3,
       objectIdFieldNumber: 1
     },
@@ -1033,7 +1346,7 @@ export const ENTITY_SCHEMAS: Record<string, EntitySchema> = {
         state: { fieldNumber: 2, valueType: "bool", wireType: WireType.VARINT }
       },
       keyFieldNumber: 1,
-      messageType: MESSAGE_TYPES.SWITCH_STATE_RESPONSE
+      messageType: MessageType.SWITCH_STATE_RESPONSE
     },
     type: "switch"
   },
@@ -1049,11 +1362,16 @@ export const ENTITY_SCHEMAS: Record<string, EntitySchema> = {
       },
       hasPatternFields: {},
       keyFieldNumber: 1,
-      messageType: MESSAGE_TYPES.TEXT_COMMAND_REQUEST
+      messageType: MessageType.TEXT_COMMAND_REQUEST
     },
     listEntities: {
 
       deviceIdFieldNumber: 12,
+      enumMappings: {
+
+        entityCategory: EntityCategory,
+        mode: TextMode
+      },
       fields: {
 
         disabledByDefault: { fieldNumber: 6, valueType: "bool", wireType: WireType.VARINT },
@@ -1065,7 +1383,7 @@ export const ENTITY_SCHEMAS: Record<string, EntitySchema> = {
         pattern: { fieldNumber: 10, valueType: "string", wireType: WireType.LENGTH_DELIMITED }
       },
       keyFieldNumber: 2,
-      messageType: MESSAGE_TYPES.LIST_ENTITIES_TEXT_RESPONSE,
+      messageType: MessageType.LIST_ENTITIES_TEXT_RESPONSE,
       nameFieldNumber: 3,
       objectIdFieldNumber: 1
     },
@@ -1078,7 +1396,7 @@ export const ENTITY_SCHEMAS: Record<string, EntitySchema> = {
         state: { fieldNumber: 2, valueType: "string", wireType: WireType.LENGTH_DELIMITED }
       },
       keyFieldNumber: 1,
-      messageType: MESSAGE_TYPES.TEXT_STATE_RESPONSE
+      messageType: MessageType.TEXT_STATE_RESPONSE
     },
     type: "text"
   },
@@ -1088,6 +1406,10 @@ export const ENTITY_SCHEMAS: Record<string, EntitySchema> = {
     listEntities: {
 
       deviceIdFieldNumber: 9,
+      enumMappings: {
+
+        entityCategory: EntityCategory
+      },
       fields: {
 
         deviceClass: { fieldNumber: 8, valueType: "string", wireType: WireType.LENGTH_DELIMITED },
@@ -1096,7 +1418,7 @@ export const ENTITY_SCHEMAS: Record<string, EntitySchema> = {
         icon: { fieldNumber: 5, valueType: "string", wireType: WireType.LENGTH_DELIMITED }
       },
       keyFieldNumber: 2,
-      messageType: MESSAGE_TYPES.LIST_ENTITIES_TEXT_SENSOR_RESPONSE,
+      messageType: MessageType.LIST_ENTITIES_TEXT_SENSOR_RESPONSE,
       nameFieldNumber: 3,
       objectIdFieldNumber: 1
     },
@@ -1109,7 +1431,7 @@ export const ENTITY_SCHEMAS: Record<string, EntitySchema> = {
         state: { fieldNumber: 2, valueType: "string", wireType: WireType.LENGTH_DELIMITED }
       },
       keyFieldNumber: 1,
-      messageType: MESSAGE_TYPES.TEXT_SENSOR_STATE_RESPONSE
+      messageType: MessageType.TEXT_SENSOR_STATE_RESPONSE
     },
     type: "text_sensor"
   },
@@ -1127,11 +1449,15 @@ export const ENTITY_SCHEMAS: Record<string, EntitySchema> = {
       },
       hasPatternFields: {},
       keyFieldNumber: 1,
-      messageType: MESSAGE_TYPES.TIME_COMMAND_REQUEST
+      messageType: MessageType.TIME_COMMAND_REQUEST
     },
     listEntities: {
 
       deviceIdFieldNumber: 8,
+      enumMappings: {
+
+        entityCategory: EntityCategory
+      },
       fields: {
 
         disabledByDefault: { fieldNumber: 6, valueType: "bool", wireType: WireType.VARINT },
@@ -1139,7 +1465,7 @@ export const ENTITY_SCHEMAS: Record<string, EntitySchema> = {
         icon: { fieldNumber: 5, valueType: "string", wireType: WireType.LENGTH_DELIMITED }
       },
       keyFieldNumber: 2,
-      messageType: MESSAGE_TYPES.LIST_ENTITIES_TIME_RESPONSE,
+      messageType: MessageType.LIST_ENTITIES_TIME_RESPONSE,
       nameFieldNumber: 3,
       objectIdFieldNumber: 1
     },
@@ -1154,7 +1480,7 @@ export const ENTITY_SCHEMAS: Record<string, EntitySchema> = {
         second: { fieldNumber: 5, valueType: "varint", wireType: WireType.VARINT }
       },
       keyFieldNumber: 1,
-      messageType: MESSAGE_TYPES.TIME_STATE_RESPONSE
+      messageType: MessageType.TIME_STATE_RESPONSE
     },
     type: "time"
   },
@@ -1174,11 +1500,15 @@ export const ENTITY_SCHEMAS: Record<string, EntitySchema> = {
       },
       hasPatternFields: {},
       keyFieldNumber: 1,
-      messageType: MESSAGE_TYPES.UPDATE_COMMAND_REQUEST
+      messageType: MessageType.UPDATE_COMMAND_REQUEST
     },
     listEntities: {
 
       deviceIdFieldNumber: 9,
+      enumMappings: {
+
+        entityCategory: EntityCategory
+      },
       fields: {
 
         deviceClass: { fieldNumber: 8, valueType: "string", wireType: WireType.LENGTH_DELIMITED },
@@ -1187,7 +1517,7 @@ export const ENTITY_SCHEMAS: Record<string, EntitySchema> = {
         icon: { fieldNumber: 5, valueType: "string", wireType: WireType.LENGTH_DELIMITED }
       },
       keyFieldNumber: 2,
-      messageType: MESSAGE_TYPES.LIST_ENTITIES_UPDATE_RESPONSE,
+      messageType: MessageType.LIST_ENTITIES_UPDATE_RESPONSE,
       nameFieldNumber: 3,
       objectIdFieldNumber: 1
     },
@@ -1207,7 +1537,7 @@ export const ENTITY_SCHEMAS: Record<string, EntitySchema> = {
         title: { fieldNumber: 8, valueType: "string", wireType: WireType.LENGTH_DELIMITED }
       },
       keyFieldNumber: 1,
-      messageType: MESSAGE_TYPES.UPDATE_STATE_RESPONSE
+      messageType: MessageType.UPDATE_STATE_RESPONSE
     },
     type: "update"
   },
@@ -1226,11 +1556,15 @@ export const ENTITY_SCHEMAS: Record<string, EntitySchema> = {
         position: { hasFieldNumber: 2, valueFieldNumber: 3, valueType: "float", wireType: WireType.FIXED32 }
       },
       keyFieldNumber: 1,
-      messageType: MESSAGE_TYPES.VALVE_COMMAND_REQUEST
+      messageType: MessageType.VALVE_COMMAND_REQUEST
     },
     listEntities: {
 
       deviceIdFieldNumber: 12,
+      enumMappings: {
+
+        entityCategory: EntityCategory
+      },
       fields: {
 
         assumedState: { fieldNumber: 9, valueType: "bool", wireType: WireType.VARINT },
@@ -1242,43 +1576,155 @@ export const ENTITY_SCHEMAS: Record<string, EntitySchema> = {
         supportsStop: { fieldNumber: 11, valueType: "bool", wireType: WireType.VARINT }
       },
       keyFieldNumber: 2,
-      messageType: MESSAGE_TYPES.LIST_ENTITIES_VALVE_RESPONSE,
+      messageType: MessageType.LIST_ENTITIES_VALVE_RESPONSE,
       nameFieldNumber: 3,
       objectIdFieldNumber: 1
     },
     state: {
 
       deviceIdFieldNumber: 4,
+      enumMappings: {
+
+        currentOperation: ValveOperation
+      },
       fields: {
 
         currentOperation: { fieldNumber: 3, valueType: "enum", wireType: WireType.VARINT },
         position: { fieldNumber: 2, valueType: "float", wireType: WireType.FIXED32 }
       },
       keyFieldNumber: 1,
-      messageType: MESSAGE_TYPES.VALVE_STATE_RESPONSE
+      messageType: MessageType.VALVE_STATE_RESPONSE
     },
     type: "valve"
-  }
-};
+  },
 
+  water_heater: {
+
+    command: {
+
+      // Bitmask field that aggregates which value fields are set on this command. Each present option in `bitmaskFields` ORs its bit into the mask before encoding;
+      // each touched bit in `packedBitsFields.state.bits` also contributes its `hasFieldBit` to the same mask. Mirrors api.proto's `WaterHeaterCommandHasField`:
+      // HAS_MODE, HAS_TARGET_TEMPERATURE, HAS_TARGET_TEMPERATURE_LOW, HAS_TARGET_TEMPERATURE_HIGH, HAS_ON_STATE, HAS_AWAY_STATE - all sourced by reference from the
+      // named-constant SSOT in api-constants.ts. The deprecated HAS_STATE=4 is intentionally omitted (no encoder path touches it).
+      bitmaskFieldNumber: 2,
+      bitmaskFields: {
+
+        mode: { bit: WaterHeaterCommandHasField.MODE, fieldNumber: 3, valueType: "enum", wireType: WireType.VARINT },
+        targetTemperature: { bit: WaterHeaterCommandHasField.TARGET_TEMPERATURE, fieldNumber: 4, valueType: "float", wireType: WireType.FIXED32 },
+        targetTemperatureHigh: { bit: WaterHeaterCommandHasField.TARGET_TEMPERATURE_HIGH, fieldNumber: 8, valueType: "float", wireType: WireType.FIXED32 },
+        targetTemperatureLow: { bit: WaterHeaterCommandHasField.TARGET_TEMPERATURE_LOW, fieldNumber: 7, valueType: "float", wireType: WireType.FIXED32 }
+      },
+      deviceIdFieldNumber: 5,
+      enumMappings: {
+
+        mode: { eco: 1, electric: 2, gas: 6, heat_pump: 5, high_demand: 4, off: 0, performance: 3 }
+      },
+      fields: {},
+      hasPatternFields: {},
+      keyFieldNumber: 1,
+      messageType: MessageType.WATER_HEATER_COMMAND_REQUEST,
+      // Field 6 carries both packed state bits (bit 0 = away, bit 1 = on) per the proto's per-field comment. Each consumer-facing boolean (`awayState`, `onState`) maps
+      // to its bit position via WaterHeaterStateFlags AND OR-s the matching HAS_*_STATE bit into the has_fields carrier (field 2) via the named constants in
+      // WaterHeaterCommandHasField. The engine accepts independent set/clear for either bit - consumers can update only one packed bit without touching the other.
+      packedBitsFields: {
+
+        state: {
+
+          bits: WATER_HEATER_STATE_COMMAND_BITS,
+          fieldNumber: 6,
+          wireType: WireType.VARINT
+        }
+      }
+    },
+    listEntities: {
+
+      deviceIdFieldNumber: 7,
+      enumMappings: {
+
+        entityCategory: EntityCategory,
+        supportedModes: WaterHeaterMode,
+        temperatureUnit: TemperatureUnit
+      },
+      fields: {
+
+        disabledByDefault: { fieldNumber: 5, valueType: "bool", wireType: WireType.VARINT },
+        entityCategory: { fieldNumber: 6, valueType: "enum", wireType: WireType.VARINT },
+        icon: { fieldNumber: 4, valueType: "string", wireType: WireType.LENGTH_DELIMITED },
+        maxTemperature: { fieldNumber: 9, valueType: "float", wireType: WireType.FIXED32 },
+        minTemperature: { fieldNumber: 8, valueType: "float", wireType: WireType.FIXED32 },
+        supportedFeatures: { fieldNumber: 12, valueType: "varint", wireType: WireType.VARINT },
+        targetTemperatureStep: { fieldNumber: 10, valueType: "float", wireType: WireType.FIXED32 },
+        temperatureUnit: { fieldNumber: 13, valueType: "enum", wireType: WireType.VARINT }
+      },
+      keyFieldNumber: 2,
+      messageType: MessageType.LIST_ENTITIES_WATER_HEATER_RESPONSE,
+      nameFieldNumber: 3,
+      objectIdFieldNumber: 1,
+      repeatedFields: {
+
+        supportedModes: { fieldNumber: 11, valueType: "enum", wireType: WireType.VARINT }
+      }
+    },
+    state: {
+
+      deviceIdFieldNumber: 5,
+      enumMappings: {
+
+        mode: WaterHeaterMode
+      },
+      fields: {
+
+        currentTemperature: { fieldNumber: 2, valueType: "float", wireType: WireType.FIXED32 },
+        mode: { fieldNumber: 4, valueType: "enum", wireType: WireType.VARINT },
+        targetTemperature: { fieldNumber: 3, valueType: "float", wireType: WireType.FIXED32 },
+        targetTemperatureHigh: { fieldNumber: 8, valueType: "float", wireType: WireType.FIXED32 },
+        targetTemperatureLow: { fieldNumber: 7, valueType: "float", wireType: WireType.FIXED32 }
+      },
+      keyFieldNumber: 1,
+      messageType: MessageType.WATER_HEATER_STATE_RESPONSE,
+      // Field 6 is a packed uint32 (bit 0 = away, bit 1 = on) per the proto's per-field comment. The engine decodes each bit into a named consumer-facing boolean so
+      // exhaustive switches and instance-of comparisons stay type-safe. State-side decoding ignores `hasFieldBit` - it only applies on the command side.
+      packedBitsFields: {
+
+        state: {
+
+          bits: WATER_HEATER_STATE_INBOUND_BITS,
+          fieldNumber: 6,
+          wireType: WireType.VARINT
+        }
+      }
+    },
+    type: "water_heater"
+  }
+} as const satisfies Record<string, EntitySchema>;
+
+
+/**
+ * Look up an entity schema by its runtime entity-type string. Use this when the entity type is only known at runtime (for example, from a parsed message); for static
+ * lookups where the entity type is a known literal, prefer `ENTITY_SCHEMAS.foo` directly so consumers retain the literal types.
+ *
+ * The cast to `Record<string, EntitySchema>` is the single boundary where the literal-typed registry is widened back to the schema interface for generic dynamic
+ * access. Centralizing it here means consumers do not need to repeat the cast.
+ *
+ * @param type - The entity type string (e.g., "climate", "light").
+ * @returns The matching entity schema, or undefined if no schema is registered for that type.
+ * @internal
+ */
+export function getEntitySchema(type: string): EntitySchema | undefined {
+
+  return (ENTITY_SCHEMAS as Record<string, EntitySchema>)[type];
+}
 
 /**
  * Look up an entity schema by its state message type ID.
  *
  * @param messageType - The message type ID to look up.
  * @returns The matching entity schema, or undefined if not found.
+ * @internal
  */
 export function findSchemaByStateMessageType(messageType: number): EntitySchema | undefined {
 
-  for(const schema of Object.values(ENTITY_SCHEMAS)) {
-
-    if(schema.state.messageType === messageType) {
-
-      return schema;
-    }
-  }
-
-  return undefined;
+  return (Object.values(ENTITY_SCHEMAS) as EntitySchema[]).find((schema) => schema.state.messageType === messageType);
 }
 
 /**
@@ -1286,18 +1732,11 @@ export function findSchemaByStateMessageType(messageType: number): EntitySchema 
  *
  * @param messageType - The message type ID to look up.
  * @returns The matching entity schema, or undefined if not found.
+ * @internal
  */
 export function findSchemaByListEntitiesMessageType(messageType: number): EntitySchema | undefined {
 
-  for(const schema of Object.values(ENTITY_SCHEMAS)) {
-
-    if(schema.listEntities.messageType === messageType) {
-
-      return schema;
-    }
-  }
-
-  return undefined;
+  return (Object.values(ENTITY_SCHEMAS) as EntitySchema[]).find((schema) => schema.listEntities.messageType === messageType);
 }
 
 /**
@@ -1305,16 +1744,9 @@ export function findSchemaByListEntitiesMessageType(messageType: number): Entity
  *
  * @param messageType - The message type ID to look up.
  * @returns The matching entity schema, or undefined if not found.
+ * @internal
  */
 export function findSchemaByCommandMessageType(messageType: number): EntitySchema | undefined {
 
-  for(const schema of Object.values(ENTITY_SCHEMAS)) {
-
-    if(schema.command?.messageType === messageType) {
-
-      return schema;
-    }
-  }
-
-  return undefined;
+  return (Object.values(ENTITY_SCHEMAS) as EntitySchema[]).find((schema) => schema.command?.messageType === messageType);
 }
