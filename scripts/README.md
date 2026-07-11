@@ -7,7 +7,7 @@ Build-time and CI utilities. Two file extensions coexist by deliberate choice:
 Use TypeScript (`.ts`) for scripts that import from the project's source tree (e.g. `import { ENTITY_SCHEMAS } from "../src/schemas/entity-schemas.ts"`). The
 TypeScript compiler validates the import contract; refactors in `src/` break the script surface at typecheck time rather than at runtime.
 
-Invocation pattern: `node --strip-types scripts/<name>.ts`. Node's native type stripping (enabled by default on the project's Node 22.20+ floor) runs the TypeScript
+Invocation pattern: `node scripts/<name>.ts`. Node's native type stripping (enabled by default on the project's Node 22.20+ floor) runs the TypeScript
 source directly without a build step, and because relative imports across the codebase carry `.ts` extensions, Node resolves them natively - no loader hook required.
 
 Current consumers:

@@ -9,7 +9,7 @@
  *
  * Runtime requirement:
  *
- *   This script is invoked as `node --strip-types scripts/lint-proto-sync.ts`. It relies on Node's native type stripping (enabled by default on the project's Node
+ *   This script is invoked as `node scripts/lint-proto-sync.ts`. It relies on Node's native type stripping (enabled by default on the project's Node
  *   22.20+ floor) to run the TypeScript source directly. Relative imports across the codebase carry `.ts` extensions, so Node resolves them natively without a loader
  *   hook - the same mechanism the test suite uses, so this dependency is consistent with the codebase's wider commitment to running `.ts` sources directly, not
  *   specific to this lint.

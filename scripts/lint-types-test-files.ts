@@ -23,7 +23,7 @@
  * meaningful validation. In practice the codebase uses `assert.*` consistently and the codebase convention is to express runtime rules AS assert calls, so
  * the blind spot has zero incidence today; the rule prescribes the convention rather than tolerating an alternative one.
  *
- * Runtime requirement: invoked as `node --strip-types scripts/lint-types-test-files.ts`, relying on Node's native type stripping (default on the project's Node 22.20+
+ * Runtime requirement: invoked as `node scripts/lint-types-test-files.ts`, relying on Node's native type stripping (default on the project's Node 22.20+
  * floor). Relative imports carry `.ts` extensions, so Node resolves them without a loader. Same dependency as `lint-proto-sync.ts`.
  *
  * Run via `npm run lint:types-test-files`. Exit code 0 on clean, 1 on any violation.
