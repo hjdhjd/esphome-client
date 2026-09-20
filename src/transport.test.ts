@@ -11,13 +11,13 @@ import {
 } from "./errors.ts";
 import type { ClientMetrics, EspHomeLogging } from "./types.ts";
 import type { InboundMessage, NoiseCipherPair, TransportLike, TransportOpenOptions } from "./transport.ts";
+import { Transport, formatHostPort, unbracketHost } from "./transport.ts";
 import { describe, test } from "node:test";
 import { Buffer } from "node:buffer";
 import type { CipherState } from "./crypto-noise.ts";
 import { MessageType } from "./protocol/index.ts";
 import { MockSocket } from "./testing/mock-socket.ts";
 import type { Socket } from "node:net";
-import { Transport } from "./transport.ts";
 import assert from "node:assert/strict";
 import { defaultShouldRetry } from "./reconnect.ts";
 import { encodeVarint } from "./protocol/codec.ts";
@@ -267,6 +267,82 @@ describe("Transport - exports and structural compliance", () => {
   });
 });
 
+describe("formatHostPort", () => {
+
+  test("joins a hostname to the port with a plain colon", () => {
+
+    assert.equal(formatHostPort("garage.local", 6053), "garage.local:6053");
+  });
+
+  test("joins an IPv4 address to the port with a plain colon", () => {
+
+    assert.equal(formatHostPort("192.168.1.20", 6053), "192.168.1.20:6053");
+  });
+
+  test("wraps an IPv6 literal in square brackets", () => {
+
+    assert.equal(formatHostPort("2001:db8::5", 6053), "[2001:db8::5]:6053");
+  });
+
+  test("wraps the IPv6 loopback literal in square brackets", () => {
+
+    assert.equal(formatHostPort("::1", 6053), "[::1]:6053");
+  });
+
+  test("wraps a zone-suffixed IPv6 link-local literal in square brackets", () => {
+
+    assert.equal(formatHostPort("fe80::1%en0", 6053), "[fe80::1%en0]:6053");
+  });
+});
+
+describe("unbracketHost", () => {
+
+  test("passes a hostname through unchanged", () => {
+
+    assert.equal(unbracketHost("garage.local"), "garage.local");
+  });
+
+  test("passes an IPv4 address through unchanged", () => {
+
+    assert.equal(unbracketHost("192.168.1.20"), "192.168.1.20");
+  });
+
+  test("passes a bare IPv6 literal through unchanged", () => {
+
+    assert.equal(unbracketHost("2001:db8::5"), "2001:db8::5");
+  });
+
+  test("removes the brackets from an IPv6 literal written in URL notation", () => {
+
+    assert.equal(unbracketHost("[2001:db8::5]"), "2001:db8::5");
+  });
+
+  test("keeps the zone suffix of a bracketed link-local literal", () => {
+
+    assert.equal(unbracketHost("[fe80::1%en0]"), "fe80::1%en0");
+  });
+
+  // An empty bracket pair reduces to the empty string rather than being treated as a special case: the socket rejects an empty host exactly as it rejects any other
+  // unusable one, and a second opinion on host syntax here would only duplicate the platform's.
+  test("reduces an empty bracket pair to the empty string", () => {
+
+    assert.equal(unbracketHost("[]"), "");
+  });
+
+  // Only a matched pair comes off, so a half-bracketed host reaches the socket as the user typed it and fails with the address they can see in the error.
+  test("passes a host carrying only a leading bracket through unchanged", () => {
+
+    assert.equal(unbracketHost("[2001:db8::5"), "[2001:db8::5");
+    assert.equal(unbracketHost("["), "[");
+  });
+
+  test("passes a host carrying only a trailing bracket through unchanged", () => {
+
+    assert.equal(unbracketHost("2001:db8::5]"), "2001:db8::5]");
+    assert.equal(unbracketHost("]"), "]");
+  });
+});
+
 describe("Transport.open - happy path", () => {
 
   test("resolves once the socket emits `connect` and the transport reports plaintext phase", async () => {
@@ -411,6 +487,25 @@ describe("Transport.open - typed error paths", () => {
 
     await assert.rejects(promise);
     assert.equal(mock.destroyed, true);
+  });
+
+  // The rejection message reaches a consumer's error log, so it has to name the address unambiguously. An IPv6 host is the input under which a hand-rolled join and
+  // formatHostPort produce observably different text, which is what makes this assertion a check on the call site's wiring rather than on the helper alone.
+  test("brackets an IPv6 host in the rejection message so the port stays readable", async () => {
+
+    const mock = new MockSocket();
+    const promise = Transport.open(buildOpenOptions(mock, { host: "::1" }));
+    const cause: NodeJS.ErrnoException = Object.assign(new Error("connect ECONNREFUSED ::1:6053"), { code: "ECONNREFUSED" });
+
+    mock.simulateError(cause);
+
+    await assert.rejects(promise, (err) => {
+
+      assert.ok(err instanceof ConnectionRefusedError);
+      assert.ok(err.message.includes("[::1]:6053"), "the rejection message must bracket the IPv6 host, got: " + err.message);
+
+      return true;
+    });
   });
 });
 

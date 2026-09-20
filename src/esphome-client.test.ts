@@ -406,6 +406,39 @@ describe("EspHomeClient construction with injected MockTransport", () => {
     assert.equal(transport.outboundFrames.length, 0, "constructing the client must not send any outbound frame");
   });
 
+  /* The two ends of the bracketed-host contract in one test. The open options are where the unwrap is observable: `[::1]` is a hostname to the platform resolver and
+   * `::1` is an address, so the host the factory receives is the difference between a connection and a failed lookup. The summary is the other end, and it reads the
+   * same stored field, so both spellings of the option have to produce one pair of brackets in the display text.
+   */
+  test("unwraps a bracketed IPv6 host so the socket and the summary both see one address", async () => {
+
+    const transport = new MockTransport();
+    const observedHosts: string[] = [];
+    const client = new EspHomeClient({
+
+      host: "[::1]",
+      logger: quietLogger(),
+      reconnect: false,
+      transportFactory: (options): MockTransport => {
+
+        observedHosts.push(options.host);
+
+        return transport;
+      }
+    });
+    const inspectFn = (client as unknown as Record<symbol, (depth: number, options: { stylize: (text: string, style: string) => string }) => string>)[
+      Symbol.for("nodejs.util.inspect.custom")] as (depth: number, options: { stylize: (text: string, style: string) => string }) => string;
+    const summary = inspectFn.call(client, 2, { stylize: (s): string => s });
+
+    assert.ok(summary.includes("[::1]:6053"), "the summary must show the address with exactly one pair of brackets, got: " + summary);
+
+    await driveConnect(transport, client, { signal: AbortSignal.timeout(2000) });
+
+    assert.deepEqual(observedHosts, ["::1"], "the transport open options must carry the bare IPv6 literal, not the bracketed spelling");
+
+    client.disconnect();
+  });
+
   test("reports disconnected health before any connect", () => {
 
     const client = new EspHomeClient({ host: "test.local", logger: quietLogger(), transportFactory: (): MockTransport => new MockTransport() });
@@ -4898,6 +4931,16 @@ describe("EspHomeClient util.inspect support", () => {
     const out = inspectFn.call(client, -1, { stylize: (s): string => s });
 
     assert.equal(out, "[EspHomeClient]");
+  });
+
+  test("util.inspect brackets an IPv6 host so the summary's host field stays readable", () => {
+
+    const client = new EspHomeClient({ host: "2001:db8::5", logger: quietLogger(), transportFactory: (): MockTransport => new MockTransport() });
+    const inspectFn = (client as unknown as Record<symbol, (depth: number, options: { stylize: (text: string, style: string) => string }) => string>)[
+      Symbol.for("nodejs.util.inspect.custom")] as (depth: number, options: { stylize: (text: string, style: string) => string }) => string;
+    const out = inspectFn.call(client, 2, { stylize: (s): string => s });
+
+    assert.ok(out.includes("[2001:db8::5]:6053"), "the inspect summary must bracket the IPv6 host, got: " + out);
   });
 
   test("isEncrypted getter returns false for plaintext-only sessions", async () => {

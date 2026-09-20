@@ -36,6 +36,7 @@ import { InfraredCapabilityFlags, LogLevel } from "./api-constants.ts";
 import { MessageType, WireType, extractEntityKey, extractNumberField, extractStringField, extractTelemetryValue, messageTypeName } from "./protocol/index.ts";
 import type { SerialDataChunk, SerialProxyHost, SerialProxyInfo } from "./serial-proxy.ts";
 import { SerialProxyApi, extractSerialProxies } from "./serial-proxy.ts";
+import { Transport, formatHostPort, unbracketHost } from "./transport.ts";
 import type { VoiceAssistantHost, VoiceAssistantInboundContext } from "./voice-assistant.ts";
 import { authenticateIfNeeded, performDiscovery, performNoiseHandshake, performPlaintextHandshake } from "./lifecycle/handshake.ts";
 import { backoffDelay, nextBackoffDelay, resolveReconnectConfig } from "./reconnect.ts";
@@ -68,7 +69,6 @@ import { ServiceRegistry } from "./registries/service-registry.ts";
 import type { StreamOptions } from "./event-bus.ts";
 import type { SubDevice } from "./sub-device.ts";
 import type { SubscriptionLifecycle } from "./reissuable-subscription.ts";
-import { Transport } from "./transport.ts";
 import { UserServicesApi } from "./user-services.ts";
 import { VoiceAssistantApi } from "./voice-assistant.ts";
 import type { VoiceAssistantTimerEvent } from "./api-constants.ts";
@@ -452,7 +452,6 @@ export interface ServiceCallResult {
  *
  * @property clientId - Optional client identifier to announce when connecting (default: "esphome-client").
  * @property extraSchemas - Optional registry of additional entity schemas registered for this client instance only. See {@link ExtraSchemaSet} for the contract.
- * @property host - The hostname or IP address of the ESPHome device.
  * @property logger - Optional logging interface for debug and error messages.
  * @property port - The port number for the ESPHome API (default: 6053).
  * @property psk - Optional base64 encoded pre-shared key for Noise encryption.
@@ -503,6 +502,11 @@ export interface EspHomeClientOptions<Extras extends ExtraSchemaSet = {}> {
    */
   extraSchemas?: Extras;
 
+  /**
+   * Device address: a hostname, an IPv4 address, or an IPv6 literal. An IPv6 literal may be written with the surrounding square brackets of URL notation
+   * (`[2001:db8::5]`), the spelling a browser address bar and this library's own display text both use; the brackets come off before the address reaches the socket,
+   * so the bracketed and bare spellings address the same device.
+   */
   host: string;
 
   /**
@@ -957,7 +961,7 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
     this.latestCache = new LatestStateCache();
     this.capabilitiesCache = disconnectedCapabilities();
     this.subDeviceList = [];
-    this.host = options.host;
+    this.host = unbracketHost(options.host);
     this.transportFactory = options.transportFactory ?? null;
     this.clock = options.clock ?? Date.now;
     this.log = options.logger;
@@ -3483,7 +3487,7 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
 
       encrypted: this.isEncrypted,
       entities: this.registry.size,
-      host: this.host + ":" + String(this.port),
+      host: formatHostPort(this.host, this.port),
       state: this.transport ? "connected" : "disconnected"
     };
 

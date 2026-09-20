@@ -30,12 +30,12 @@ import {
   NoiseHandshakeError, PeerClosedDuringNoiseError, ProtocolError
 } from "./errors.ts";
 import type { ClientMetrics, EspHomeLogging, Nullable } from "./types.ts";
+import { createConnection, isIPv6 } from "node:net";
 import { encodeVarint, readVarint } from "./protocol/codec.ts";
 import { Buffer } from "node:buffer";
 import type { CipherState } from "./crypto-noise.ts";
 import { NOISE_MAX_MESSAGE_LEN } from "./crypto-noise.ts";
 import type { Socket } from "node:net";
-import { createConnection } from "node:net";
 import { messageTypeName } from "./protocol/message-types.ts";
 
 /**
@@ -213,6 +213,57 @@ export interface TransportLike extends AsyncDisposable, Disposable, AsyncIterabl
    * @returns The raw handshake frame bytes.
    */
   nextNoiseHandshakeFrame(signal?: AbortSignal): Promise<Buffer>;
+}
+
+/**
+ * Render a host and a port as one piece of display text. An IPv6 literal is wrapped in square brackets (`[2001:db8::5]:6053`); a hostname or an IPv4 address is
+ * joined to the port by a plain colon (`garage.local:6053`).
+ *
+ * An IPv6 literal carries colons of its own, so the plain join yields text a reader cannot split back into a host and a port...`2001:db8::5` on port 6053 reads as
+ * `2001:db8::5:6053`, whose last group could be either. Square brackets are the URI authority convention that resolves exactly that ambiguity. `node:net`'s
+ * `isIPv6` decides which hosts need them, because it is the platform's own answer and accepts zone-suffixed literals such as `fe80::1%en0` that a hand-rolled
+ * colon test would have to special-case. This is display only: the host reaches the socket as a separate field and is never rewritten.
+ *
+ * @param host - A hostname, an IPv4 address, or an IPv6 literal.
+ * @param port - The TCP port.
+ * @returns The host and port as display text.
+ *
+ * @internal
+ */
+export function formatHostPort(host: string, port: number): string {
+
+  if(isIPv6(host)) {
+
+    return "[" + host + "]:" + String(port);
+  }
+
+  return host + ":" + String(port);
+}
+
+/**
+ * Remove one surrounding pair of square brackets from a host. `[2001:db8::5]` yields `2001:db8::5`; a hostname, an IPv4 address, and a bare IPv6 literal pass through
+ * untouched. This is the input-side counterpart of {@link formatHostPort}.
+ *
+ * Brackets are accepted because they are the URL notation for an IPv6 address a user already has on hand...it is the spelling a browser address bar shows, and it is
+ * the spelling {@link formatHostPort} produces for this library's own display text, so text copied back out of a log or an inspect summary arrives bracketed. What the
+ * socket and the formatter both want is the bare literal: `node:net` resolves `::1` and treats `[::1]` as a hostname that never resolves, and `isIPv6` reads a
+ * bracketed literal as false, which leaves the formatter passing a user's own punctuation through instead of deciding for itself when an address needs brackets.
+ * Nothing checks that the brackets wrap an IPv6 literal before they come off, because brackets around any other host never named something reachable, and the
+ * platform owns the verdict on host syntax.
+ *
+ * @param host - A hostname, an IPv4 address, or an IPv6 literal, optionally wrapped in the square brackets of URL notation.
+ * @returns The host with one surrounding pair of square brackets removed, or the host unchanged when it carries no such pair.
+ *
+ * @internal
+ */
+export function unbracketHost(host: string): string {
+
+  if(host.startsWith("[") && host.endsWith("]")) {
+
+    return host.slice(1, -1);
+  }
+
+  return host;
 }
 
 /**
@@ -591,7 +642,7 @@ export class Transport implements TransportLike {
         this.socket = socket;
         this.attachSocketListeners(socket);
 
-        this.options.log.debug("Transport connected to " + this.options.host + ":" + String(this.options.port) + ".");
+        this.options.log.debug("Transport connected to " + formatHostPort(this.options.host, this.options.port) + ".");
         resolve();
       };
 
@@ -607,7 +658,7 @@ export class Transport implements TransportLike {
         signal?.removeEventListener("abort", onAbort);
 
         // Map well-known errno codes to typed errors with cause chain.
-        const message = "Connection to " + this.options.host + ":" + String(this.options.port) + " failed";
+        const message = "Connection to " + formatHostPort(this.options.host, this.options.port) + " failed";
 
         switch(err.code) {
 
