@@ -13,6 +13,7 @@
  *
  * @module esphome-client
  */
+import type { BackoffParameters, ReconnectConfig, ResolvedReconnectConfig } from "./reconnect.ts";
 import type {
   ConnectionStateData as BluetoothConnectionStateData, ConnectionsFreeData as BluetoothConnectionsFreeData, BluetoothLERawAdvertisement,
   NotifyDataChunk as BluetoothNotifyDataChunk, BluetoothProxyHost, BluetoothScannerStateData
@@ -33,15 +34,14 @@ import type { HomeAssistantApiHost, HomeAssistantServiceEvent, HomeAssistantStat
 import type { InboundMessage, TransportLike, TransportOpenOptions } from "./transport.ts";
 import { InfraredCapabilityFlags, LogLevel } from "./api-constants.ts";
 import { MessageType, WireType, extractEntityKey, extractNumberField, extractStringField, extractTelemetryValue, messageTypeName } from "./protocol/index.ts";
-import type { ReconnectConfig, ResolvedReconnectConfig } from "./reconnect.ts";
 import type { SerialDataChunk, SerialProxyHost, SerialProxyInfo } from "./serial-proxy.ts";
 import { SerialProxyApi, extractSerialProxies } from "./serial-proxy.ts";
 import type { VoiceAssistantHost, VoiceAssistantInboundContext } from "./voice-assistant.ts";
 import { authenticateIfNeeded, performDiscovery, performNoiseHandshake, performPlaintextHandshake } from "./lifecycle/handshake.ts";
+import { backoffDelay, nextBackoffDelay, resolveReconnectConfig } from "./reconnect.ts";
 import { decodeEntityFromSchema, decodeServiceEntity, getEntityTypeLabel } from "./discovery.ts";
 import { decodeProtobuf, encodeProtoFields } from "./protocol/codec.ts";
 import { disconnectedCapabilities, parseCapabilities } from "./capabilities.ts";
-import { nextBackoffDelay, reconnectDelay, resolveReconnectConfig } from "./reconnect.ts";
 import { runCommand, runCommandAndAwait } from "./command-runner.ts";
 import { BluetoothProxyApi } from "./bluetooth-proxy.ts";
 import { Buffer } from "node:buffer";
@@ -76,7 +76,6 @@ import { ZWaveProxyApi } from "./zwave-proxy.ts";
 import type { ZWaveProxyHost } from "./zwave-proxy.ts";
 import { buildRunPhaseHandlers } from "./run-phase-handlers.ts";
 import { decodeStateFromSchema } from "./telemetry.ts";
-import { setTimeout as delay } from "node:timers/promises";
 import { extractSubDevices } from "./sub-device.ts";
 import { entityId as mintEntityId } from "./entity-id.ts";
 
@@ -626,7 +625,8 @@ export interface EspHomeClientOpenOptions<Extras extends ExtraSchemaSet = {}> ex
   maxConstructionRetries?: number;
 
   /**
-   * Cancellation signal applied to the entire factory call - both the initial attempt and any retries. Aborting rejects with the signal's reason.
+   * Cancellation signal applied to the entire factory call - both the initial attempt and any retries. Aborting rejects with the signal's reason, unless the
+   * interrupted attempt failed permanently; see {@link openEspHomeClient}.
    */
   signal?: AbortSignal;
 }
@@ -1937,7 +1937,7 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
         this.log.debug("Reconnect attempt " + String(this.reconnectAttempts) + " in " + String(delayMs) + " ms.");
 
         // eslint-disable-next-line no-await-in-loop -- Reconnect loop is intrinsically sequential: wait the backoff, then try to connect, then maybe loop.
-        await reconnectDelay(delayMs, signal);
+        await backoffDelay(delayMs, signal);
 
         // Either field can flip async (signal abort, disconnect()) during the awaited delay above, so the recheck is required; TS's narrowing from the
         // while-condition doesn't account for that.
@@ -3499,7 +3499,10 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
 
 /**
  * Factory function. Creates a new {@link EspHomeClient}, connects, and resolves the connected client. Permanent errors ({@link PermanentError} subclasses) reject
- * immediately; transient errors retry up to {@link EspHomeClientOpenOptions.maxConstructionRetries} times with backoff.
+ * immediately; transient errors retry up to {@link EspHomeClientOpenOptions.maxConstructionRetries} times with backoff. Every rejection disposes the client before
+ * the error reaches the caller, so a failed construction leaves nothing to clean up. A caller-supplied {@link EspHomeClientOpenOptions.signal} rejects with the
+ * signal's own reason and settles promptly whichever phase the abort interrupts - before an attempt, during a connect, or during a backoff. The one exception is an
+ * attempt that fails permanently as the abort lands: the permanent error is reported, because it names a misconfiguration the abort reason would hide.
  *
  * Usage:
  *
@@ -3514,54 +3517,61 @@ export async function openEspHomeClient<Extras extends ExtraSchemaSet = {}>(opti
 
   const client = new EspHomeClient<Extras>(options);
   const maxRetries = options.maxConstructionRetries ?? 3;
-  const initialDelayMs = options.constructionRetry?.initialDelayMs ?? 500;
-  const maxDelayMs = options.constructionRetry?.maxDelayMs ?? 5000;
-  const backoffMultiplier = options.constructionRetry?.backoffMultiplier ?? 2;
-  const jitter = options.constructionRetry?.jitter ?? 0.2;
 
-  let attempt = 0;
+  // Construction retry uses the same exponential-backoff-with-jitter formula as the reconnect supervisor, differing only in its cap: a consumer waiting on a factory
+  // call wants failure reported in seconds, where a background supervisor can afford a far longer ceiling. Resolving the parameters into the shape
+  // nextBackoffDelay reads keeps the formula in one place.
+  const backoff: BackoffParameters = {
 
-  // The factory keeps trying until either: success, a permanent error, the user signal aborts, or the retry budget is exhausted.
-  for(;;) {
+    backoffMultiplier: options.constructionRetry?.backoffMultiplier ?? 2,
+    initialDelayMs: options.constructionRetry?.initialDelayMs ?? 500,
+    jitter: options.constructionRetry?.jitter ?? 0.2,
+    maxDelayMs: options.constructionRetry?.maxDelayMs ?? 5000
+  };
 
-    options.signal?.throwIfAborted();
+  // Every attempt is handed the caller's signal, so connect() tears down its own in-progress handshake on abort rather than running to its timeout.
+  const connectOptions = options.signal !== undefined ? { signal: options.signal } : undefined;
 
-    try {
+  /* One chokepoint for what every rejection owes the caller: the client is disposed exactly once, and an aborted caller gets the signal's own reason rather than
+   * whatever error the interrupted await happened to produce. A permanent error is the exception and is reported even under an aborted signal...it is the device's
+   * own verdict on the configuration, and an abort reason says "try again" where the permanent error says "fix this first". Those duties live in the outer catch,
+   * which no exit from the loop can bypass...the loop body is left to decide one thing only, whether another attempt is worth making.
+   */
+  try {
 
-      const connectOptions = options.signal !== undefined ? { signal: options.signal } : undefined;
+    // Keep trying until either success, a permanent error, an abort, or the retry budget is spent. With a budget of N the factory makes N+1 connect attempts.
+    for(let attempt = 1; ; attempt++) {
 
-      // eslint-disable-next-line no-await-in-loop -- Construction-retry loop is intrinsically sequential: try connect, on failure wait the backoff, then maybe retry.
-      await client.connect(connectOptions);
+      options.signal?.throwIfAborted();
 
-      return client;
+      try {
 
-    } catch(err) {
+        // eslint-disable-next-line no-await-in-loop -- Construction-retry loop is intrinsically sequential: try connect, on failure wait the backoff, then maybe retry.
+        await client.connect(connectOptions);
 
-      // Permanent errors do not benefit from retry. Surface immediately so the consumer sees the misconfiguration without waiting for the retry budget to drain.
-      if(err instanceof PermanentError) {
+        return client;
+      } catch(err) {
 
-        client[Symbol.dispose]();
+        // Two conditions end the retry budget early: a permanent error describes a misconfiguration no retry can fix, and a spent budget has nothing left to
+        // spend. Every other failure is worth one more attempt once the backoff below has elapsed.
+        if((err instanceof PermanentError) || (attempt > maxRetries)) {
 
-        throw err;
+          throw err;
+        }
       }
 
-      attempt++;
-
-      if(attempt > maxRetries) {
-
-        client[Symbol.dispose]();
-
-        throw err;
-      }
-
-      // Exponential backoff with jitter. The jitter widens the delay window by +/-jitter to prevent thundering-herd reconnects across multiple clients.
-      const baseDelay = Math.min(initialDelayMs * (backoffMultiplier ** (attempt - 1)), maxDelayMs);
-      const jitterFactor = 1 + ((Math.random() * 2 - 1) * jitter);
-      const delayMs = Math.max(0, Math.floor(baseDelay * jitterFactor));
-
+      /* The sleep abandons an aborted wait the moment the signal fires, and rejects at once when the signal has already aborted. That one behavior is what makes an
+       * abort prompt in every phase...an abort landing during an attempt turns that attempt's failure into a backoff that ends immediately rather than one the
+       * caller waits out, so the retry condition above never has to test the signal itself.
+       */
       // eslint-disable-next-line no-await-in-loop -- Backoff delay between retry attempts is sequential by design.
-      await delay(delayMs);
+      await backoffDelay(nextBackoffDelay(attempt, backoff), options.signal);
     }
+  } catch(err) {
+
+    client[Symbol.dispose]();
+
+    throw (options.signal?.aborted && !(err instanceof PermanentError)) ? options.signal.reason : err;
   }
 }
 

@@ -24,6 +24,7 @@ import type { DeviceInfo } from "./esphome-client.ts";
 import { MessageType } from "./protocol/message-types.ts";
 import { MockTransport } from "./testing/mock-transport.ts";
 import type { ProtoField } from "./protocol/codec.ts";
+import type { TestContext } from "node:test";
 import { WaterHeaterMode } from "./api-constants.ts";
 import { WireType } from "./protocol/wire-types.ts";
 import assert from "node:assert/strict";
@@ -3947,11 +3948,41 @@ describe("EspHomeClient.setNoiseEncryptionKey", () => {
 
 // 16. openEspHomeClient factory.
 
+/* Count `[Symbol.dispose]()` calls on every EspHomeClient for the duration of one test, calling through to the real disposal. The factory never hands a failing
+ * client to its caller and the retry configuration carries no per-attempt hook, so the prototype is the only vantage point on how often construction disposed.
+ *
+ * `t.mock.method` is the natural tool and is what the string-keyed `connect` counting below uses. It cannot serve here: Node's mock `restore()` reinstates only
+ * string-keyed properties, and a symbol key takes its bare-function branch, so the property is never reinstated - the stub stays on the prototype with no
+ * implementation and every later call in the file throws. Saving the descriptor and reinstating it from an `after` hook gives the same vantage point and restores
+ * cleanly.
+ */
+function countClientDisposals(t: TestContext): { count: number } {
+
+  const descriptor = Object.getOwnPropertyDescriptor(EspHomeClient.prototype, Symbol.dispose)!;
+  const original = descriptor.value as () => void;
+  const counter = { count: 0 };
+  const counting = function(this: unknown): void {
+
+    counter.count++;
+    Reflect.apply(original, this, []);
+  };
+
+  Object.defineProperty(EspHomeClient.prototype, Symbol.dispose, { ...descriptor, value: counting });
+  t.after((): void => {
+
+    Object.defineProperty(EspHomeClient.prototype, Symbol.dispose, descriptor);
+  });
+
+  return counter;
+}
+
 describe("openEspHomeClient factory", () => {
 
-  test("openEspHomeClient resolves a connected client when the transport drives connect successfully", async () => {
+  test("openEspHomeClient resolves a connected client when the transport drives connect successfully", async (t) => {
 
     const transport = new MockTransport();
+    // The success-path disposal count is the other half of the rejection-path assertions below: the caller is handed a live client, so nothing disposes it here.
+    const disposals = countClientDisposals(t);
     const opener = openEspHomeClient({
 
       host: "test.local", logger: quietLogger(), maxConstructionRetries: 0, reconnect: false, transportFactory: (): MockTransport => transport
@@ -3967,6 +3998,7 @@ describe("openEspHomeClient factory", () => {
     const client = await opener;
 
     assert.equal(client.health().state, "connected");
+    assert.equal(disposals.count, 0, "the success path returns a live client without disposing it");
     client.disconnect();
   });
 
@@ -3986,14 +4018,21 @@ describe("openEspHomeClient factory", () => {
     await assert.rejects(opener, (err: unknown) => err instanceof PermanentError);
   });
 
-  test("openEspHomeClient honors a pre-aborted signal", async () => {
+  test("openEspHomeClient honors a pre-aborted signal", async (t) => {
 
     const controller = new AbortController();
+    const reason = new Error("Construction abandoned before the first attempt.");
+    // Stubbing `connect` with no implementation leaves the real method in place and adds only a call count, which is all this test needs from it.
+    const connectCalls = t.mock.method(EspHomeClient.prototype, "connect");
+    const disposals = countClientDisposals(t);
 
-    controller.abort();
+    controller.abort(reason);
 
     await assert.rejects(openEspHomeClient({ host: "test.local", logger: quietLogger(), maxConstructionRetries: 0, signal: controller.signal,
-      transportFactory: (): MockTransport => new MockTransport() }));
+      transportFactory: (): MockTransport => new MockTransport() }), (err: unknown) => err === reason);
+
+    assert.equal(connectCalls.mock.callCount(), 0, "an already-aborted signal must reject before any connect attempt");
+    assert.equal(disposals.count, 1, "the pre-abort rejection path disposes the client exactly once");
   });
 
   test("openEspHomeClient retries on transient failures up to maxConstructionRetries", async () => {
@@ -4012,6 +4051,141 @@ describe("openEspHomeClient factory", () => {
 
     // Don't push anything - both attempts will fail with handshake timeout. After maxConstructionRetries+1 attempts, the factory rejects.
     await assert.rejects(opener);
+  });
+
+  /* The latency tests below time the interval from abort to rejection with `process.hrtime.bigint()` against real timers rather than a mocked clock. The timer the
+   * abort has to cut short IS the mechanism under test, so measuring it through a clock the test controls would only restate the thing being checked. Each
+   * configures a 5000 ms jitter-free backoff, which makes the reading unambiguous: a rejection inside the 1000 ms bound can only have come from the abort, never
+   * from the sleep elapsing.
+   */
+
+  test("openEspHomeClient rejects with the signal's reason when the abort lands during a connect attempt", async (t) => {
+
+    const controller = new AbortController();
+    const reason = new Error("Construction abandoned during a connect attempt.");
+    const connectCalls = t.mock.method(EspHomeClient.prototype, "connect", async (connectOptions?: { signal?: AbortSignal }): Promise<void> => {
+
+      // Park the attempt until the factory's threaded signal aborts, then fail the way connectInternal does - a wrapped transient ConnectionError, not the signal's
+      // own reason. That distinction is what gives the rejection-identity assertion below something to prove.
+      await new Promise<void>((resolve) => {
+
+        connectOptions?.signal?.addEventListener("abort", () => resolve(), { once: true });
+      });
+
+      throw new ConnectionError("Connect failed: the caller abandoned the attempt.", "CONNECT_FAILED");
+    });
+    const disposals = countClientDisposals(t);
+    const opener = openEspHomeClient({
+
+      constructionRetry: { initialDelayMs: 5000, jitter: 0, maxDelayMs: 5000 },
+      host: "test.local",
+      logger: quietLogger(),
+      maxConstructionRetries: 3,
+      reconnect: false,
+      signal: controller.signal,
+      transportFactory: (): MockTransport => new MockTransport()
+    });
+
+    // Abort only once the first attempt is genuinely in flight, so the abort interrupts the connect rather than the loop top.
+    while(connectCalls.mock.callCount() < 1) {
+
+      await delay(5);
+    }
+
+    const abortedAt = process.hrtime.bigint();
+
+    controller.abort(reason);
+
+    await assert.rejects(opener, (err: unknown) => err === reason);
+
+    const elapsedMs = Number(process.hrtime.bigint() - abortedAt) / 1000000;
+
+    assert.ok(elapsedMs < 1000, "an abort during a connect attempt must not pay a backoff sleep; elapsed " + String(elapsedMs) + " ms");
+    assert.equal(connectCalls.mock.callCount(), 1, "a failed attempt must not be retried once the signal has aborted");
+    assert.equal(disposals.count, 1, "the mid-connect rejection path disposes the client exactly once");
+  });
+
+  test("openEspHomeClient rejects with the signal's reason when the abort lands during the backoff sleep", async (t) => {
+
+    const controller = new AbortController();
+    const reason = new Error("Construction abandoned during the backoff sleep.");
+    const connectCalls = t.mock.method(EspHomeClient.prototype, "connect", async (): Promise<void> => {
+
+      // Fail instantly with a transient error so the factory spends effectively the whole test parked in the backoff sleep.
+      throw new ConnectionError("Connect failed: the device refused the connection.", "CONNECT_FAILED");
+    });
+    const disposals = countClientDisposals(t);
+    const opener = openEspHomeClient({
+
+      constructionRetry: { initialDelayMs: 5000, jitter: 0, maxDelayMs: 5000 },
+      host: "test.local",
+      logger: quietLogger(),
+      maxConstructionRetries: 3,
+      reconnect: false,
+      signal: controller.signal,
+      transportFactory: (): MockTransport => new MockTransport()
+    });
+
+    // Wait for the first attempt to fail, then leave a real-time margin so the factory is demonstrably inside the sleep rather than still unwinding the catch.
+    while(connectCalls.mock.callCount() < 1) {
+
+      await delay(5);
+    }
+
+    await delay(50);
+
+    const abortedAt = process.hrtime.bigint();
+
+    controller.abort(reason);
+
+    await assert.rejects(opener, (err: unknown) => err === reason);
+
+    const elapsedMs = Number(process.hrtime.bigint() - abortedAt) / 1000000;
+
+    assert.ok(elapsedMs < 1000, "an abort during the backoff sleep must abandon the sleep; elapsed " + String(elapsedMs) + " ms");
+    assert.equal(connectCalls.mock.callCount(), 1, "the abort must land inside the sleep, with no second connect attempt");
+    assert.equal(disposals.count, 1, "the mid-backoff rejection path disposes the client exactly once");
+  });
+
+  test("openEspHomeClient rejects with the permanent error when an abort and a permanent error land on the same attempt", async (t) => {
+
+    const controller = new AbortController();
+    const reason = new Error("Construction abandoned as the attempt failed permanently.");
+    const permanent = new NegotiationFailedError("Device API major version 2 is outside the supported range.", "API_MAJOR_OUT_OF_RANGE");
+    const connectCalls = t.mock.method(EspHomeClient.prototype, "connect", async (connectOptions?: { signal?: AbortSignal }): Promise<void> => {
+
+      // Park the attempt until the signal aborts, then fail it permanently, so both endings arrive together. The permanent error takes precedence: it names a
+      // misconfiguration the caller has to fix, which the abort reason would hide.
+      await new Promise<void>((resolve) => {
+
+        connectOptions?.signal?.addEventListener("abort", () => resolve(), { once: true });
+      });
+
+      throw permanent;
+    });
+    const disposals = countClientDisposals(t);
+    const opener = openEspHomeClient({
+
+      constructionRetry: { initialDelayMs: 5000, jitter: 0, maxDelayMs: 5000 },
+      host: "test.local",
+      logger: quietLogger(),
+      maxConstructionRetries: 3,
+      reconnect: false,
+      signal: controller.signal,
+      transportFactory: (): MockTransport => new MockTransport()
+    });
+
+    while(connectCalls.mock.callCount() < 1) {
+
+      await delay(5);
+    }
+
+    controller.abort(reason);
+
+    await assert.rejects(opener, (err: unknown) => err === permanent);
+
+    assert.equal(connectCalls.mock.callCount(), 1, "a permanent failure must not be retried");
+    assert.equal(disposals.count, 1, "the abort-plus-permanent-error path disposes the client exactly once");
   });
 });
 

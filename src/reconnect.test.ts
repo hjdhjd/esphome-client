@@ -4,7 +4,7 @@
  */
 import { AuthenticationError, ConnectionError } from "./errors.ts";
 import { HealthState, disconnectedHealth } from "./health.ts";
-import { defaultShouldRetry, nextBackoffDelay, reconnectDelay, resolveReconnectConfig, withReconnect } from "./reconnect.ts";
+import { backoffDelay, defaultShouldRetry, nextBackoffDelay, resolveReconnectConfig, withReconnect } from "./reconnect.ts";
 import { describe, test } from "node:test";
 import type { ConnectionHealth } from "./health.ts";
 import type { LifecycleEvent } from "./lifecycle.ts";
@@ -125,7 +125,7 @@ describe("nextBackoffDelay", () => {
   });
 });
 
-describe("reconnectDelay", () => {
+describe("backoffDelay", () => {
 
   test("resolves after the requested delay (with abort signal honored)", async () => {
 
@@ -133,12 +133,12 @@ describe("reconnectDelay", () => {
 
     setImmediate(() => controller.abort());
 
-    await assert.rejects(reconnectDelay(60000, controller.signal), { name: "AbortError" }, "abort during reconnect delay must reject");
+    await assert.rejects(backoffDelay(60000, controller.signal), { name: "AbortError" }, "abort during the backoff delay must reject");
   });
 
   test("resolves cleanly when no abort signal is supplied", async () => {
 
-    await reconnectDelay(0);
+    await backoffDelay(0);
   });
 });
 

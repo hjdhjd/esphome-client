@@ -146,18 +146,27 @@ export function resolveReconnectConfig(config: ReconnectConfig | undefined): Res
 }
 
 /**
- * Compute the next backoff delay for a reconnect attempt. The base delay is a deterministic exponential backoff - `initialDelayMs * backoffMultiplier^(attempt - 1)`,
+ * The fields {@link nextBackoffDelay} reads. Naming them as their own type lets a caller that has no reconnect supervisor at all - the construction-retry loop in the
+ * client factory, which resolves its own defaults - share the formula by passing a plain object, without inventing values for the supervisor-only fields of
+ * {@link ResolvedReconnectConfig}. A full resolved config satisfies this shape, so the supervisor passes its own config unchanged.
+ *
+ * @internal
+ */
+export type BackoffParameters = Pick<ResolvedReconnectConfig, "backoffMultiplier" | "initialDelayMs" | "jitter" | "maxDelayMs">;
+
+/**
+ * Compute the next backoff delay for a retry attempt. The base delay is a deterministic exponential backoff - `initialDelayMs * backoffMultiplier^(attempt - 1)`,
  * capped at `maxDelayMs`. The returned value then applies up to +/- `config.jitter` of random jitter via `Math.random()`, so it is deterministic given the inputs only
  * when `config.jitter` is 0... otherwise repeated calls with the same arguments return different values by design, since the jitter spreads reconnect storms across
  * many clients rather than synchronizing them.
  *
  * @param attempt - 1-based attempt index.
- * @param config - Resolved config.
+ * @param config - The backoff parameters.
  * @returns The delay in milliseconds to wait before the next attempt.
  *
  * @internal
  */
-export function nextBackoffDelay(attempt: number, config: ResolvedReconnectConfig): number {
+export function nextBackoffDelay(attempt: number, config: BackoffParameters): number {
 
   const baseDelay = Math.min(config.initialDelayMs * (config.backoffMultiplier ** (attempt - 1)), config.maxDelayMs);
   const jitterFactor = 1 + (((Math.random() * 2) - 1) * config.jitter);
@@ -166,15 +175,16 @@ export function nextBackoffDelay(attempt: number, config: ResolvedReconnectConfi
 }
 
 /**
- * Sleep for the given number of milliseconds, honoring an abort signal. A thin wrapper around `node:timers/promises` `setTimeout` that pins a fixed `(ms, signal)`
- * signature so the supervisor doesn't have to thread the native `(delay, value, options)` shape directly.
+ * Sleep for the given number of milliseconds, abandoning the wait as soon as an abort signal fires. A thin wrapper around `node:timers/promises` `setTimeout` that
+ * fixes an `(ms, signal)` signature, so neither backoff loop - the reconnect supervisor's nor the construction-retry loop in the client factory - has to thread the
+ * native `(delay, value, options)` shape itself.
  *
  * @param ms - The delay in milliseconds.
  * @param signal - Optional cancellation signal.
  *
  * @internal
  */
-export async function reconnectDelay(ms: number, signal?: AbortSignal): Promise<void> {
+export async function backoffDelay(ms: number, signal?: AbortSignal): Promise<void> {
 
   await delay(ms, undefined, { signal });
 }
