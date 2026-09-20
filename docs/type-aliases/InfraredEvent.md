@@ -30,7 +30,7 @@ export async function infraredReceiveExample(client: EspHomeClient): Promise<voi
     // event.timings is the schema-typed `number[]` decoded from the packed sint32 wire payload.
     const samples = event.timings?.length ?? 0;
 
-    void samples;
+    log.info("The infrared receiver captured a pattern.", samples);
 
     break;
   }

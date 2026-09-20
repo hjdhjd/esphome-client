@@ -43,13 +43,13 @@ export function cryptoNoiseHandshakeBasicExample(): void {
   const encrypted = initiatorSend.EncryptWithAd(Buffer.alloc(0), Buffer.from("Hello World"));
   const decrypted = responderReceive.DecryptWithAd(Buffer.alloc(0), encrypted);
 
-  void decrypted;
+  log.info("The responder recovered the initiator's plaintext.", decrypted);
 
   // The responder can reply through its sendCipher.
   const response = responderSend.EncryptWithAd(Buffer.alloc(0), Buffer.from("Hello back!"));
   const responseDecrypted = initiatorReceive.DecryptWithAd(Buffer.alloc(0), response);
 
-  void responseDecrypted;
+  log.info("The initiator recovered the responder's reply.", responseDecrypted);
 }
 ```
 

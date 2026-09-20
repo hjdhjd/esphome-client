@@ -23,7 +23,7 @@ export function cryptoNoiseEsphomeConnectionExample(psk: Buffer): void {
   // First wire frame the client sends after the TCP connect: the ephemeral-key carrying handshake message.
   const clientHello = handshake.writeMessage();
 
-  void clientHello;
+  log.debug("The first handshake frame is ready for the transport to send.", clientHello);
 
   // The transport feeds the device's response back into readMessage; once isComplete becomes true, send/receive ciphers are ready for the API layer.
   // handshake.readMessage(deviceResponse);
@@ -37,17 +37,20 @@ Usage (with logging):
 ```ts
 export function cryptoNoiseWithLoggingExample(psk: Buffer): void {
 
+  // The adapter forwards every level to the logging backend the consumer already owns. The handshake calls it on each key exchange, hash update, and cipher
+  // transition, so a debug-enabled backend gets a step-by-step trace of the negotiation.
   const logger: EspHomeLogging = {
 
-    debug: (message): void => { void message; },
-    error: (message): void => { void message; },
-    info: (message): void => { void message; },
-    warn: (message): void => { void message; }
+    debug: (message, ...parameters): void => log.debug(message, ...parameters),
+    error: (message, ...parameters): void => log.error(message, ...parameters),
+    info: (message, ...parameters): void => log.info(message, ...parameters),
+    warn: (message, ...parameters): void => log.warn(message, ...parameters)
   };
 
   const handshake = createESPHomeHandshake({ logger, psk, role: "initiator" });
 
-  void handshake;
+  // The handshake reports incomplete until the device's response has been read back into it...the trace above narrates each step along the way.
+  log.debug("The traced handshake is ready to drive against the device socket.", handshake.isComplete);
 }
 ```
 

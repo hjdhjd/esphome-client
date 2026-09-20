@@ -58,7 +58,7 @@ export async function voiceAssistantAnnounceExample(client: EspHomeClient): Prom
     text: "Someone is at the front door"
   }, { signal: AbortSignal.timeout(8000) });
 
-  void success;
+  log.info("The device finished the announcement.", success);
 }
 ```
 
@@ -88,8 +88,7 @@ export async function voiceAssistantExample(client: EspHomeClient): Promise<void
 
   for await (const audio of va.audio({ signal: AbortSignal.timeout(30000) })) {
 
-    void audio.data;
-    void audio.end;
+    log.debug("Received an audio chunk from the device.", audio.data, audio.end);
   }
 
   await va.announce({ text: "Doorbell rang" }, { timeoutMs: 5000 });
@@ -126,7 +125,12 @@ export function webStreamsInteropExample(client: EspHomeClient): void {
   // Telemetry as a ReadableStream consumable by any Web Streams pipeline (compression, batching, fan-out via tee()).
   const stream: ReadableStream = client.telemetryReadable({ backpressure: "dropOldest", highWaterMark: 256 });
 
-  void stream;
+  // Drive the stream into a sink that handles each event as it arrives. The pipeTo promise is deliberately discarded because this example returns
+  // synchronously...a consumer that needs to observe the pipeline's completion or failure awaits it instead.
+  void stream.pipeTo(new WritableStream({
+
+    write: (event: TelemetryEvent): void => log.debug("Received a state event through the Web Streams pipeline.", event)
+  }));
 
   // Lifecycle, logs, voice-assistant audio, and per-camera images all expose matching readable adapters.
   void client.lifecycleReadable();
@@ -212,9 +216,7 @@ export async function voiceAssistantConfigurationExample(client: EspHomeClient):
 
   for(const wakeWord of config.availableWakeWords) {
 
-    void wakeWord.id;
-    void wakeWord.wakeWord;
-    void wakeWord.trainedLanguages;
+    log.info("The device offers a wake word.", wakeWord.id, wakeWord.wakeWord, wakeWord.trainedLanguages);
   }
 
   // Activate at most `maxActiveWakeWords` ids. An empty array clears all active wake words.
@@ -318,8 +320,7 @@ export async function voiceAssistantRespondExample(client: EspHomeClient): Promi
 
     for await (const chunk of va.audio({ signal: AbortSignal.timeout(60000) })) {
 
-      void chunk.data;
-      void chunk.end;
+      log.debug("Received an audio chunk from the device.", chunk.data, chunk.end);
     }
   })();
 
@@ -377,8 +378,7 @@ export async function voiceAssistantRespondExample(client: EspHomeClient): Promi
 
     for await (const chunk of va.audio({ signal: AbortSignal.timeout(60000) })) {
 
-      void chunk.data;
-      void chunk.end;
+      log.debug("Received an audio chunk from the device.", chunk.data, chunk.end);
     }
   })();
 
@@ -437,8 +437,7 @@ export async function voiceAssistantStreamingExample(client: EspHomeClient, gene
 
     for await (const chunk of va.audio({ signal: AbortSignal.timeout(60000) })) {
 
-      void chunk.data;
-      void chunk.end;
+      log.debug("Received an audio chunk bound for the speech-to-text pipeline.", chunk.data, chunk.end);
     }
   })();
 
@@ -488,8 +487,7 @@ export async function voiceAssistantStreamingExample(client: EspHomeClient, gene
 
     for await (const chunk of va.audio({ signal: AbortSignal.timeout(60000) })) {
 
-      void chunk.data;
-      void chunk.end;
+      log.debug("Received an audio chunk bound for the speech-to-text pipeline.", chunk.data, chunk.end);
     }
   })();
 
@@ -572,9 +570,7 @@ export async function voiceAssistantConfigurationExample(client: EspHomeClient):
 
   for(const wakeWord of config.availableWakeWords) {
 
-    void wakeWord.id;
-    void wakeWord.wakeWord;
-    void wakeWord.trainedLanguages;
+    log.info("The device offers a wake word.", wakeWord.id, wakeWord.wakeWord, wakeWord.trainedLanguages);
   }
 
   // Activate at most `maxActiveWakeWords` ids. An empty array clears all active wake words.
@@ -629,8 +625,7 @@ export async function voiceAssistantExample(client: EspHomeClient): Promise<void
 
   for await (const audio of va.audio({ signal: AbortSignal.timeout(30000) })) {
 
-    void audio.data;
-    void audio.end;
+    log.debug("Received an audio chunk from the device.", audio.data, audio.end);
   }
 
   await va.announce({ text: "Doorbell rang" }, { timeoutMs: 5000 });

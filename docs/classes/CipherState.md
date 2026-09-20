@@ -37,7 +37,7 @@ export function cryptoNoiseAssociatedDataExample(): void {
   const encrypted = sendCipher.EncryptWithAd(sequenceNumber, Buffer.from("payload"));
   const decrypted = receiveCipher.DecryptWithAd(sequenceNumber, encrypted);
 
-  void decrypted;
+  log.info("The responder authenticated the sequence number and recovered the payload.", decrypted);
 }
 ```
 
@@ -104,7 +104,7 @@ destroy(): void;
 ```
 
 Zero out the key material and reset state. The key Buffer is filled with zeros before the reference is dropped, ensuring sensitive material does not linger in
-memory waiting on garbage collection. Idempotent - safe to call multiple times.
+memory waiting on garbage collection. Safe to call more than once.
 
 #### Returns
 

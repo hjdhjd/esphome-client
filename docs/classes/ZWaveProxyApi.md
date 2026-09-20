@@ -75,7 +75,7 @@ export async function zwaveBytePipeExample(client: EspHomeClient): Promise<void>
   // Capability gate: surface a friendly skip rather than attempting a frame subscription that will yield nothing.
   if(!client.zwave.available) {
 
-    void "this device firmware does not include the Z-Wave proxy component";
+    log.warn("The device firmware does not include the Z-Wave proxy component.");
 
     return;
   }
@@ -83,7 +83,7 @@ export async function zwaveBytePipeExample(client: EspHomeClient): Promise<void>
   // The home id is seeded from `DeviceInfo.zwaveHomeId` at discovery and updated when the device pushes a HOME_ID_CHANGE. `null` means no network is currently joined.
   const initialHomeId = client.zwave.homeId();
 
-  void initialHomeId;
+  log.info("Read the radio's Z-Wave home id.", initialHomeId);
 
   // Stream inbound frames as a backpressured async iterable. The first iterator issues SUBSCRIBE on the wire; the last to detach issues UNSUBSCRIBE. Concurrent iterators
   // share one wire-side subscription. The subscription survives reconnect; iterators alive across the cycle resume yielding once the new connection is up.
@@ -95,7 +95,7 @@ export async function zwaveBytePipeExample(client: EspHomeClient): Promise<void>
     for await (const homeId of client.zwave.homeIdChanges({ signal: controller.signal })) {
 
       // Route the change into a Z-Wave-aware library, or log it for diagnostics.
-      void homeId;
+      log.info("The radio joined, left, or re-keyed a Z-Wave network.", homeId);
     }
   })();
 
@@ -110,7 +110,7 @@ export async function zwaveBytePipeExample(client: EspHomeClient): Promise<void>
     //   driver.serialApi.write(frame); // or however the library's bridge surface is wired
     //
     // The library produces outbound frames; route them back via client.zwave.send(buffer).
-    void frame;
+    log.debug("Received a Z-Wave Serial API frame from the radio.", frame);
 
     observations++;
 
@@ -232,7 +232,7 @@ export async function zwaveBytePipeExample(client: EspHomeClient): Promise<void>
   // Capability gate: surface a friendly skip rather than attempting a frame subscription that will yield nothing.
   if(!client.zwave.available) {
 
-    void "this device firmware does not include the Z-Wave proxy component";
+    log.warn("The device firmware does not include the Z-Wave proxy component.");
 
     return;
   }
@@ -240,7 +240,7 @@ export async function zwaveBytePipeExample(client: EspHomeClient): Promise<void>
   // The home id is seeded from `DeviceInfo.zwaveHomeId` at discovery and updated when the device pushes a HOME_ID_CHANGE. `null` means no network is currently joined.
   const initialHomeId = client.zwave.homeId();
 
-  void initialHomeId;
+  log.info("Read the radio's Z-Wave home id.", initialHomeId);
 
   // Stream inbound frames as a backpressured async iterable. The first iterator issues SUBSCRIBE on the wire; the last to detach issues UNSUBSCRIBE. Concurrent iterators
   // share one wire-side subscription. The subscription survives reconnect; iterators alive across the cycle resume yielding once the new connection is up.
@@ -252,7 +252,7 @@ export async function zwaveBytePipeExample(client: EspHomeClient): Promise<void>
     for await (const homeId of client.zwave.homeIdChanges({ signal: controller.signal })) {
 
       // Route the change into a Z-Wave-aware library, or log it for diagnostics.
-      void homeId;
+      log.info("The radio joined, left, or re-keyed a Z-Wave network.", homeId);
     }
   })();
 
@@ -267,7 +267,7 @@ export async function zwaveBytePipeExample(client: EspHomeClient): Promise<void>
     //   driver.serialApi.write(frame); // or however the library's bridge surface is wired
     //
     // The library produces outbound frames; route them back via client.zwave.send(buffer).
-    void frame;
+    log.debug("Received a Z-Wave Serial API frame from the radio.", frame);
 
     observations++;
 

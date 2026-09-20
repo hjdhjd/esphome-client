@@ -41,7 +41,7 @@ export function entityIdConstructionExample(client: EspHomeClient): void {
 
 | Parameter | Type | Description |
 | ------ | ------ | ------ |
-| `type` | `T` | The entity type discriminant. Accepts any string (not just built-in [EntityType](../type-aliases/EntityType.md) members) so callers using extras-registered schemas can mint branded ids for them; the type-system narrowing carries the literal through, so a typo's brand still fails to assign to a method expecting the correct brand. |
+| `type` | `T` | The entity type tag. Accepts any string (not just built-in [EntityType](../type-aliases/EntityType.md) members) so callers using extras-registered schemas can mint branded ids for them; the type-system narrowing carries the literal through, so a typo's brand still fails to assign to a method expecting the correct brand. |
 | `objectId` | `string` | The ESPHome object identifier (typically the YAML key). |
 
 ## Returns

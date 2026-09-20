@@ -10,7 +10,7 @@
 type CameraStreamClosedErrorCode = "STREAM_CLOSED";
 ```
 
-Discriminated codes for [CameraStreamClosedError](../classes/CameraStreamClosedError.md).
+Tagged codes for [CameraStreamClosedError](../classes/CameraStreamClosedError.md).
 
 ## Remarks
 

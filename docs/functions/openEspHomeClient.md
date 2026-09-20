@@ -11,7 +11,10 @@ function openEspHomeClient<Extras>(options): Promise<EspHomeClient<Extras>>;
 ```
 
 Factory function. Creates a new [EspHomeClient](../classes/EspHomeClient.md), connects, and resolves the connected client. Permanent errors ([PermanentError](../classes/PermanentError.md) subclasses) reject
-immediately; transient errors retry up to [EspHomeClientOpenOptions.maxConstructionRetries](../interfaces/EspHomeClientOpenOptions.md#maxconstructionretries) times with backoff.
+immediately; transient errors retry up to [EspHomeClientOpenOptions.maxConstructionRetries](../interfaces/EspHomeClientOpenOptions.md#maxconstructionretries) times with backoff. Every rejection disposes the client before
+the error reaches the caller, so a failed construction leaves nothing to clean up. A caller-supplied [EspHomeClientOpenOptions.signal](../interfaces/EspHomeClientOpenOptions.md#signal) rejects with the
+signal's own reason and settles promptly whichever phase the abort interrupts - before an attempt, during a connect, or during a backoff. The one exception is an
+attempt that fails permanently as the abort lands: the permanent error is reported, because it names a misconfiguration the abort reason would hide.
 
 Usage:
 
@@ -26,7 +29,6 @@ export async function openAndDisposeExample(): Promise<void> {
 
   // The async-dispose path sends DISCONNECT_REQUEST and awaits the matching response; if the server doesn't respond within `gracefulDisconnectTimeoutMs` (default
   // 1000ms), the client falls through to immediate teardown.
-  void client;
 }
 ```
 

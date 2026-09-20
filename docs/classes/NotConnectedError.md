@@ -26,7 +26,8 @@ consumer-supplied wrappers that want stricter pre-flight enforcement.
 new NotConnectedError(
    message, 
    code?, 
-   options?): NotConnectedError;
+   options?
+): NotConnectedError;
 ```
 
 Creates a new EspHomeError.
@@ -36,7 +37,7 @@ Creates a new EspHomeError.
 | Parameter | Type | Description |
 | ------ | ------ | ------ |
 | `message` | `string` | Human-readable error description. |
-| `code?` | `string` | Optional machine-readable error code. Subclasses narrow this to discriminated unions. |
+| `code?` | `string` | Optional machine-readable error code. Subclasses narrow this to tagged string unions. |
 | `options?` | `ErrorOptions` | Standard ErrorOptions; pass `{ cause }` to preserve an underlying error. |
 
 #### Returns
@@ -51,4 +52,4 @@ Creates a new EspHomeError.
 
 | Property | Modifier | Type | Description | Inherited from |
 | ------ | ------ | ------ | ------ | ------ |
-| <a id="code"></a> `code` | `readonly` | `string` \| `undefined` | Optional machine-readable error code. Subclasses narrow this to discriminated string unions. | [`EspHomeError`](EspHomeError.md).[`code`](EspHomeError.md#code) |
+| <a id="code"></a> `code` | `readonly` | `string` \| `undefined` | Optional machine-readable error code. Subclasses narrow this to tagged string unions. | [`EspHomeError`](EspHomeError.md).[`code`](EspHomeError.md#code) |

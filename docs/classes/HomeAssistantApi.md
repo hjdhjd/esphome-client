@@ -125,7 +125,8 @@ fields per `api.proto`'s `HomeassistantActionResponse`: field 1 `call_id` (varin
 sendState(
    entityId, 
    state, 
-   attribute?): void;
+   attribute?
+): void;
 ```
 
 Send a Home Assistant entity state to the ESPHome device. The consumer typically calls this in response to a `homeassistantStateRequest` event whose `entityId` and
@@ -145,8 +146,6 @@ export function homeAssistantStateBridgeExample(client: EspHomeClient, lookup: (
 
     client.homeAssistant.sendState(request.entityId, value, request.attribute);
   });
-
-  void sub;
 }
 ```
 
@@ -183,14 +182,8 @@ export function homeAssistantServicesExample(client: EspHomeClient): void {
 
   using sub = client.on("homeassistantService", (event) => {
 
-    void event.service;
-    void event.data;
-    void event.dataTemplate;
-    void event.variables;
-    void event.isEvent;
+    log.info("The device called a Home Assistant action.", event.service, event.data, event.dataTemplate, event.variables, event.isEvent);
   });
-
-  void sub;
 }
 ```
 
@@ -222,8 +215,6 @@ export function homeAssistantStateBridgeExample(client: EspHomeClient, lookup: (
 
     client.homeAssistant.sendState(request.entityId, value, request.attribute);
   });
-
-  void sub;
 }
 ```
 

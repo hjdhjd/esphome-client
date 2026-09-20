@@ -23,16 +23,13 @@ export async function reconnectWithPermanentErrorExample(): Promise<void> {
       maxDelayMs: 30000,
       onAttempt: (attempt, delayMs): void => {
 
-        void attempt;
-        void delayMs;
+        log.info("Scheduling a reconnect attempt.", attempt, delayMs);
       },
 
       // Default predicate: skip permanent errors. Layer additional filtering by calling the default first, then your own check.
       shouldRetry: (error, attempts): boolean => !(error instanceof PermanentError) && (attempts < 50)
     }
   });
-
-  void client;
 }
 ```
 

@@ -11,7 +11,7 @@ Base class for every library-emitted error.
 ## Remarks
 
 Carries an optional machine-readable [code](#code) alongside the human-readable message so consumers can `switch` on the code for exhaustive handling.
-Subclasses narrow the code to a discriminated string union where appropriate. The class name is automatically copied from `this.constructor.name`, which keeps
+Subclasses narrow the code to a tagged string union where appropriate. The class name is automatically copied from `this.constructor.name`, which keeps
 stack traces and `util.inspect` output readable.
 
 Usage:
@@ -50,7 +50,7 @@ export async function errorClassEnumerationExample(): Promise<void> {
       return;
     }
 
-    // Noise-handshake-specific failures. Order matters: the timeout and peer-closed subclasses must come before the NoiseHandshakeError parent so the discriminated
+    // Noise-handshake-specific failures. Order matters: the timeout and peer-closed subclasses must come before the NoiseHandshakeError parent so the tagged
     // `code` field on those subclasses (HANDSHAKE_TIMEOUT / PEER_CLOSED_NOISE / PEER_PLAINTEXT_DURING_NOISE) does not collapse into the parent branch.
     if(error instanceof NoiseHandshakeTimeoutError) {
 
@@ -61,7 +61,7 @@ export async function errorClassEnumerationExample(): Promise<void> {
     if(error instanceof PeerClosedDuringNoiseError) {
 
       // Peer closed mid-handshake or sent a plaintext indicator byte.
-      void error.code;
+      log.error("The peer abandoned the noise handshake.", error.code);
 
       return;
     }
@@ -69,7 +69,7 @@ export async function errorClassEnumerationExample(): Promise<void> {
     if(error instanceof NoiseHandshakeError) {
 
       // Generic noise-protocol failure; inspect `code` for the specific cause.
-      void error.code;
+      log.error("The noise handshake failed.", error.code);
 
       return;
     }
@@ -139,17 +139,16 @@ export async function errorClassEnumerationExample(): Promise<void> {
     // Backpressure on a stream subscriber operating in `backpressure: "throw"` mode. Carries `dropped` for diagnostics.
     if(error instanceof BackpressureError) {
 
-      void error.dropped;
+      log.error("A stream subscriber fell behind and dropped events.", error.dropped);
 
       return;
     }
 
     // Operational stream-closed: the bus stream backing `camera(id).snapshot()` ended (transport dropped) before an image arrived. Carries the branded `cameraId`
-    // and the discriminated `STREAM_CLOSED` code so a consumer awaiting multiple cameras can correlate which snapshot failed.
+    // and the tagged `STREAM_CLOSED` code so a consumer awaiting multiple cameras can correlate which snapshot failed.
     if(error instanceof CameraStreamClosedError) {
 
-      void error.cameraId;
-      void error.code;
+      log.error("The camera stream closed before an image arrived.", error.cameraId, error.code);
 
       return;
     }
@@ -189,7 +188,8 @@ export async function errorClassEnumerationExample(): Promise<void> {
 new EspHomeError(
    message, 
    code?, 
-   options?): EspHomeError;
+   options?
+): EspHomeError;
 ```
 
 Creates a new EspHomeError.
@@ -199,7 +199,7 @@ Creates a new EspHomeError.
 | Parameter | Type | Description |
 | ------ | ------ | ------ |
 | `message` | `string` | Human-readable error description. |
-| `code?` | `string` | Optional machine-readable error code. Subclasses narrow this to discriminated unions. |
+| `code?` | `string` | Optional machine-readable error code. Subclasses narrow this to tagged string unions. |
 | `options?` | `ErrorOptions` | Standard ErrorOptions; pass `{ cause }` to preserve an underlying error. |
 
 #### Returns
@@ -216,4 +216,4 @@ Error.constructor
 
 | Property | Modifier | Type | Description |
 | ------ | ------ | ------ | ------ |
-| <a id="code"></a> `code` | `readonly` | `string` \| `undefined` | Optional machine-readable error code. Subclasses narrow this to discriminated string unions. |
+| <a id="code"></a> `code` | `readonly` | `string` \| `undefined` | Optional machine-readable error code. Subclasses narrow this to tagged string unions. |

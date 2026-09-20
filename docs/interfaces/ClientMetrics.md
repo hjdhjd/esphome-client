@@ -41,7 +41,8 @@ Library-emitted metric names (the contract; additive only across minor versions,
 gauge(
    name, 
    value, 
-   tags?): void;
+   tags?
+): void;
 ```
 
 Set a gauge to a specific value.
@@ -66,7 +67,8 @@ Set a gauge to a specific value.
 increment(
    name, 
    by?, 
-   tags?): void;
+   tags?
+): void;
 ```
 
 Increment a counter. Tag values should be low-cardinality strings; the library never emits high-cardinality tags.
@@ -91,7 +93,8 @@ Increment a counter. Tag values should be low-cardinality strings; the library n
 timing(
    name, 
    durationMs, 
-   tags?): void;
+   tags?
+): void;
 ```
 
 Record a timing measurement.

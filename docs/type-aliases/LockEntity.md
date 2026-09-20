@@ -80,13 +80,10 @@ export async function lockCommandExample(client: EspHomeClient): Promise<LockEve
         // through whatever fallback the consumer prefers (typically logging the unknown numeric value for diagnosis).
         const _exhaustive: never = event.state;
 
-        void _exhaustive;
+        log.warn("The lock reported a state this build does not recognize.", _exhaustive);
       }
     }
   });
-
-  // Discard the Disposable explicitly so the type-checker stops complaining about an unused binding. The `using` keyword above does the real disposal at scope exit.
-  void subscription;
 
   // Unlock with a code, then await the next state event the device emits. We `await` here so the `using` subscription above stays installed across the round-trip; the
   // ESLint rule that enforces `return await` in a using-scope confirms this is the canonical shape.

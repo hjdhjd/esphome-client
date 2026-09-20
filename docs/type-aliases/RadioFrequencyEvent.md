@@ -29,7 +29,7 @@ export async function radioFrequencyReceiveExample(client: EspHomeClient): Promi
 
     const samples = event.timings?.length ?? 0;
 
-    void samples;
+    log.info("The radio-frequency receiver captured a pattern.", samples);
 
     break;
   }

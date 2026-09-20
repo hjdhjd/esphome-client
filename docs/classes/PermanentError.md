@@ -30,7 +30,7 @@ export async function permanentVsTransientExample(): Promise<void> {
       // eslint-disable-next-line no-await-in-loop
       const client = await openEspHomeClient({ host: "lab.local", psk: null });
 
-      void client;
+      log.info("The device accepted the connection.", client.isEncrypted);
 
       return;
 
@@ -73,7 +73,8 @@ export async function permanentVsTransientExample(): Promise<void> {
 new PermanentError(
    message, 
    code?, 
-   options?): PermanentError;
+   options?
+): PermanentError;
 ```
 
 Creates a new EspHomeError.
@@ -83,7 +84,7 @@ Creates a new EspHomeError.
 | Parameter | Type | Description |
 | ------ | ------ | ------ |
 | `message` | `string` | Human-readable error description. |
-| `code?` | `string` | Optional machine-readable error code. Subclasses narrow this to discriminated unions. |
+| `code?` | `string` | Optional machine-readable error code. Subclasses narrow this to tagged string unions. |
 | `options?` | `ErrorOptions` | Standard ErrorOptions; pass `{ cause }` to preserve an underlying error. |
 
 #### Returns
@@ -98,4 +99,4 @@ Creates a new EspHomeError.
 
 | Property | Modifier | Type | Description | Inherited from |
 | ------ | ------ | ------ | ------ | ------ |
-| <a id="code"></a> `code` | `readonly` | `string` \| `undefined` | Optional machine-readable error code. Subclasses narrow this to discriminated string unions. | [`EspHomeError`](EspHomeError.md).[`code`](EspHomeError.md#code) |
+| <a id="code"></a> `code` | `readonly` | `string` \| `undefined` | Optional machine-readable error code. Subclasses narrow this to tagged string unions. | [`EspHomeError`](EspHomeError.md).[`code`](EspHomeError.md#code) |

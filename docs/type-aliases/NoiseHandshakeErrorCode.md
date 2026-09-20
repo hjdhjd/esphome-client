@@ -24,7 +24,7 @@ type NoiseHandshakeErrorCode =
   | "UNSUPPORTED_TOKEN";
 ```
 
-Discriminated codes for noise-handshake failure modes that consumers can pattern-match on.
+Tagged codes for noise-handshake failure modes that consumers can pattern-match on.
 
 ## Remarks
 

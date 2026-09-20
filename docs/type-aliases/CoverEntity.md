@@ -52,12 +52,10 @@ export async function coverCommandExample(client: EspHomeClient): Promise<CoverE
 
         const _exhaustive: never = event.currentOperation;
 
-        void _exhaustive;
+        log.warn("The cover reported an operation this build does not recognize.", _exhaustive);
       }
     }
   });
-
-  void subscription;
 
   // Drive to half-open, then await the IDLE state event that signals motion completion. We compare against the named CoverOperation.IDLE constant rather than the raw
   // wire number so the predicate stays readable and survives future ESPHome wire-enum additions.

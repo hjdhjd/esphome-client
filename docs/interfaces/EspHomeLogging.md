@@ -14,12 +14,14 @@ Usage:
 ```ts
 export async function customLoggerInjectionExample(): Promise<void> {
 
+  // The adapter is usually this thin: forward every level to the logging backend the consumer already owns, message first and the structured context
+  // parameters after it.
   const logger: EspHomeClientOptions["logger"] = {
 
-    debug: (message, ...args): void => { void message; void args; },
-    error: (message, ...args): void => { void message; void args; },
-    info: (message, ...args): void => { void message; void args; },
-    warn: (message, ...args): void => { void message; void args; }
+    debug: (message, ...parameters): void => log.debug(message, ...parameters),
+    error: (message, ...parameters): void => log.error(message, ...parameters),
+    info: (message, ...parameters): void => log.info(message, ...parameters),
+    warn: (message, ...parameters): void => log.warn(message, ...parameters)
   };
 
   await using client = await openEspHomeClient({
@@ -28,8 +30,6 @@ export async function customLoggerInjectionExample(): Promise<void> {
     logger,
     psk: null
   });
-
-  void client;
 }
 ```
 

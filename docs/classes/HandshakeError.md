@@ -31,7 +31,8 @@ Narrowing parent. The library does not throw this class directly - every handsha
 new HandshakeError(
    message, 
    code?, 
-   options?): HandshakeError;
+   options?
+): HandshakeError;
 ```
 
 Creates a new EspHomeError.
@@ -41,7 +42,7 @@ Creates a new EspHomeError.
 | Parameter | Type | Description |
 | ------ | ------ | ------ |
 | `message` | `string` | Human-readable error description. |
-| `code?` | `string` | Optional machine-readable error code. Subclasses narrow this to discriminated unions. |
+| `code?` | `string` | Optional machine-readable error code. Subclasses narrow this to tagged string unions. |
 | `options?` | `ErrorOptions` | Standard ErrorOptions; pass `{ cause }` to preserve an underlying error. |
 
 #### Returns
@@ -56,4 +57,4 @@ Creates a new EspHomeError.
 
 | Property | Modifier | Type | Description | Inherited from |
 | ------ | ------ | ------ | ------ | ------ |
-| <a id="code"></a> `code` | `readonly` | `string` \| `undefined` | Optional machine-readable error code. Subclasses narrow this to discriminated string unions. | [`ConnectionError`](ConnectionError.md).[`code`](ConnectionError.md#code) |
+| <a id="code"></a> `code` | `readonly` | `string` \| `undefined` | Optional machine-readable error code. Subclasses narrow this to tagged string unions. | [`ConnectionError`](ConnectionError.md).[`code`](ConnectionError.md#code) |

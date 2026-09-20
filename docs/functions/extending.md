@@ -42,14 +42,14 @@ A byte-equality test in `src/esphome-client.test.ts` is the canonical runtime an
 threads `addedCommandFields` through the encode path fails loudly at test time.
 
 If you need to extend the command spec for a vendor type, fork the schema directly rather than threading a third slot through [SchemaExtensions](../interfaces/SchemaExtensions.md)...the
-read-side-only constraint is load-bearing for the encoder-stability guarantee.
+read-side-only constraint is required for the encoder-stability guarantee.
 
 Usage:
 
 ```ts
 export async function schemaExtensionExample(): Promise<void> {
 
-  // As an illustrative custom type, we alias "cover" to a distinct "door_cover" discriminant - the pattern a consumer reaches for when it wants an upstream type
+  // As an illustrative custom type, we alias "cover" to a distinct "door_cover" tag - the pattern a consumer reaches for when it wants an upstream type
   // routed under its own type key for its own dispatch. (A real garage door, Konnected included, exposes a standard "cover"; this is a teaching example, not a
   // required registration.) Quoted keys keep the entity-type strings honest to ESPHome's snake_case convention without tripping the camelCase identifier rule.
   const extras = {

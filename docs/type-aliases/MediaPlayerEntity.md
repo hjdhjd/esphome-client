@@ -64,12 +64,10 @@ export async function mediaPlayerCommandExample(client: EspHomeClient): Promise<
 
         const _exhaustive: never = event.state;
 
-        void _exhaustive;
+        log.warn("The media player reported a state this build does not recognize.", _exhaustive);
       }
     }
   });
-
-  void subscription;
 
   // Play a URL at half volume.
   client.command(speaker, {

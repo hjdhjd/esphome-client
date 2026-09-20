@@ -10,7 +10,7 @@ Schema extension shape supplied to [extending](../functions/extending.md). Allow
 
 ## Remarks
 
-This interface deliberately carries no `addedCommandFields` slot. The omission is the encoder-stability invariant documented in [extending](../functions/extending.md)'s
+This interface deliberately carries no `addedCommandFields` slot. The omission is the encoder-stability guarantee documented in [extending](../functions/extending.md)'s
 `@remarks`...command encoding stays anchored to the upstream's pristine `command.fields` map, so consumers can swap an extending-built type for its upstream
 sibling without changing encode-side logic. Read-side additions only.
 

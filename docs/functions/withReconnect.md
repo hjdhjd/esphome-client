@@ -10,7 +10,8 @@
 function withReconnect(
    client, 
    body, 
-options?): Promise<void>;
+   options?
+): Promise<void>;
 ```
 
 Run a body callback once per successful connect. The helper subscribes to [WithReconnectClient.lifecycle](../interfaces/WithReconnectClient.md#lifecycle), fires the body on the first observed `connect`
@@ -32,7 +33,7 @@ export async function withReconnectExample(client: EspHomeClient): Promise<void>
 
     for await (const audio of client.voiceAssistant.audio({ signal })) {
 
-      void audio;
+      log.debug("Received a voice-assistant audio chunk.", audio);
     }
   }, { signal: AbortSignal.timeout(60000) });
 }

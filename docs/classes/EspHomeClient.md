@@ -167,12 +167,10 @@ export async function manualConstructionExample(): Promise<EspHomeClient> {
   // Subscriptions installed before connect() fire on the discovery handshake too.
   using deviceSub = client.on("deviceInfo", (info) => {
 
-    void info.name;
+    log.info("The device identified itself.", info.name);
   });
 
   await client.connect({ signal: AbortSignal.timeout(15000) });
-
-  void deviceSub;
 
   return client;
 }
@@ -204,12 +202,12 @@ export function bluetoothAvailabilityExample(client: EspHomeClient): void {
   if(!client.bluetooth.available) {
 
     // The device does not expose a Bluetooth proxy. Surface a friendly capability gate instead of attempting an advertisement subscription that will yield nothing.
-    void "this device firmware does not include the Bluetooth proxy component";
+    log.warn("The device firmware does not include the Bluetooth proxy component.");
 
     return;
   }
 
-  void "Bluetooth proxy is available; we can subscribe to advertisements and set the scanner mode";
+  log.info("The Bluetooth proxy is available, so advertisement subscriptions and scanner-mode changes will reach the radio.");
 }
 ```
 
@@ -249,14 +247,8 @@ export function homeAssistantServicesExample(client: EspHomeClient): void {
 
   using sub = client.on("homeassistantService", (event) => {
 
-    void event.service;
-    void event.data;
-    void event.dataTemplate;
-    void event.variables;
-    void event.isEvent;
+    log.info("The device called a Home Assistant action.", event.service, event.data, event.dataTemplate, event.variables, event.isEvent);
   });
-
-  void sub;
 }
 ```
 
@@ -308,27 +300,25 @@ export function serialListExample(client: EspHomeClient): void {
 
   for(const proxy of client.serial.list()) {
 
-    void proxy.name;
-
     switch(proxy.portType) {
 
       case SerialProxyPortType.TTL: {
 
-        void "ttl-only port; no modem-control pins to fuss with";
+        log.info("Discovered a TTL-only serial port, which carries no modem-control lines to manage.", proxy.name);
 
         break;
       }
 
       case SerialProxyPortType.RS232: {
 
-        void "rs232 - RTS / DTR available via setModemPins / getModemPins";
+        log.info("Discovered an RS232 serial port, whose RTS and DTR lines are reachable through setModemPins and getModemPins.", proxy.name);
 
         break;
       }
 
       case SerialProxyPortType.RS485: {
 
-        void "rs485 - half-duplex; manage the transceiver enable line as needed";
+        log.info("Discovered a half-duplex RS485 serial port, whose transceiver enable line the consumer drives itself.", proxy.name);
 
         break;
       }
@@ -370,9 +360,7 @@ export function serviceExecutionExample(client: EspHomeClient): void {
   // Enumerate the discovered services.
   for(const service of client.services.list()) {
 
-    void service.key;
-    void service.name;
-    void service.args;
+    log.info("Discovered a user-defined service.", service.key, service.name, service.args);
   }
 
   // Argument shape mirrors the service definition - one of bool, int, float, string, or their array equivalents per slot.
@@ -418,8 +406,7 @@ export async function voiceAssistantExample(client: EspHomeClient): Promise<void
 
   for await (const audio of va.audio({ signal: AbortSignal.timeout(30000) })) {
 
-    void audio.data;
-    void audio.end;
+    log.debug("Received an audio chunk from the device.", audio.data, audio.end);
   }
 
   await va.announce({ text: "Doorbell rang" }, { timeoutMs: 5000 });
@@ -459,7 +446,7 @@ export async function zwaveBytePipeExample(client: EspHomeClient): Promise<void>
   // Capability gate: surface a friendly skip rather than attempting a frame subscription that will yield nothing.
   if(!client.zwave.available) {
 
-    void "this device firmware does not include the Z-Wave proxy component";
+    log.warn("The device firmware does not include the Z-Wave proxy component.");
 
     return;
   }
@@ -467,7 +454,7 @@ export async function zwaveBytePipeExample(client: EspHomeClient): Promise<void>
   // The home id is seeded from `DeviceInfo.zwaveHomeId` at discovery and updated when the device pushes a HOME_ID_CHANGE. `null` means no network is currently joined.
   const initialHomeId = client.zwave.homeId();
 
-  void initialHomeId;
+  log.info("Read the radio's Z-Wave home id.", initialHomeId);
 
   // Stream inbound frames as a backpressured async iterable. The first iterator issues SUBSCRIBE on the wire; the last to detach issues UNSUBSCRIBE. Concurrent iterators
   // share one wire-side subscription. The subscription survives reconnect; iterators alive across the cycle resume yielding once the new connection is up.
@@ -479,7 +466,7 @@ export async function zwaveBytePipeExample(client: EspHomeClient): Promise<void>
     for await (const homeId of client.zwave.homeIdChanges({ signal: controller.signal })) {
 
       // Route the change into a Z-Wave-aware library, or log it for diagnostics.
-      void homeId;
+      log.info("The radio joined, left, or re-keyed a Z-Wave network.", homeId);
     }
   })();
 
@@ -494,7 +481,7 @@ export async function zwaveBytePipeExample(client: EspHomeClient): Promise<void>
     //   driver.serialApi.write(frame); // or however the library's bridge surface is wired
     //
     // The library produces outbound frames; route them back via client.zwave.send(buffer).
-    void frame;
+    log.debug("Received a Z-Wave Serial API frame from the radio.", frame);
 
     observations++;
 
@@ -609,9 +596,8 @@ export async function cameraSnapshotExample(client: EspHomeClient): Promise<Null
 
     if(error instanceof CameraStreamClosedError) {
 
-      // Transport disconnected mid-snapshot. The `code` discriminant is `STREAM_CLOSED`; `cameraId` names the failing camera for log correlation.
-      void error.code;
-      void error.cameraId;
+      // Transport disconnected mid-snapshot. The `code` tag is `STREAM_CLOSED`; `cameraId` names the failing camera for log correlation.
+      log.error("The transport disconnected before the snapshot arrived.", error.code, error.cameraId);
 
       return null;
     }
@@ -727,7 +713,7 @@ export async function commandAndAwaitExample(client: EspHomeClient): Promise<voi
 
   const result = await client.commandAndAwait(lampId, { brightness: 0.6, state: true });
 
-  void result.brightness;
+  log.info("The light confirmed the command.", result.brightness);
 }
 ```
 
@@ -739,7 +725,8 @@ export async function commandAndAwaitExample(client: EspHomeClient): Promise<voi
 commandAndAwait<T>(
    id, 
    options, 
-awaitOptions?): Promise<StateEventFor<SchemaForExtended<T, Extras>>>;
+   awaitOptions?
+): Promise<StateEventFor<SchemaForExtended<T, Extras>>>;
 ```
 
 Send a command and resolve with the next matching state event for the same entity. Useful for "set the light, await confirmation" patterns where the caller
@@ -749,7 +736,7 @@ wants the post-command state in one await rather than wiring up a separate subsc
 
 | Type Parameter | Description |
 | ------ | ------ |
-| `T` *extends* `string` | Entity type discriminant carried by the branded id. |
+| `T` *extends* `string` | Entity type tag carried by the branded id. |
 
 #### Parameters
 
@@ -784,7 +771,7 @@ export async function commandAndAwaitExample(client: EspHomeClient): Promise<voi
 
   const result = await client.commandAndAwait(lampId, { brightness: 0.6, state: true });
 
-  void result.brightness;
+  log.info("The light confirmed the command.", result.brightness);
 }
 ```
 
@@ -831,12 +818,10 @@ export async function manualConstructionExample(): Promise<EspHomeClient> {
   // Subscriptions installed before connect() fire on the discovery handshake too.
   using deviceSub = client.on("deviceInfo", (info) => {
 
-    void info.name;
+    log.info("The device identified itself.", info.name);
   });
 
   await client.connect({ signal: AbortSignal.timeout(15000) });
-
-  void deviceSub;
 
   return client;
 }
@@ -874,10 +859,7 @@ export function deviceInfoExample(client: EspHomeClient): void {
 
   if(info) {
 
-    void info.name;
-    void info.esphomeVersion;
-    void info.macAddress;
-    void info.apiEncryptionSupported;
+    log.info("Read the device's metadata.", info.name, info.esphomeVersion, info.macAddress, info.apiEncryptionSupported);
   }
 }
 ```
@@ -897,7 +879,7 @@ disconnect(): void;
 ```
 
 Synchronous disconnect: tear down the transport immediately so the device observes a TCP close. Cancels any in-flight reconnect loop and marks the client as
-explicitly closed so auto-reconnect does not pick the connection up again. Idempotent. Use [EspHomeClient.disconnectAsync](#disconnectasync) when a graceful
+explicitly closed so auto-reconnect does not pick the connection up again. Safe to call more than once. Use [EspHomeClient.disconnectAsync](#disconnectasync) when a graceful
 `DISCONNECT_REQUEST`/`DISCONNECT_RESPONSE` handshake is preferable.
 
 Usage:
@@ -975,20 +957,18 @@ export function subDeviceEnumerationExample(client: EspHomeClient): void {
 
   for(const subDevice of client.subDevices()) {
 
-    void subDevice.id;
-    void subDevice.name;
-    void subDevice.areaId;
+    log.info("Discovered a sub-device.", subDevice.id, subDevice.name, subDevice.areaId);
 
     // Entities scoped to this sub-device. Single-device configurations report subDevices() as an empty array, so the loop body never runs.
     const entities = client.entitiesByDevice(subDevice.id);
 
-    void entities.length;
+    log.info("The sub-device owns entities.", entities.length);
   }
 
   // The parent ESP itself is device id 0 when sub-devices exist.
   const parentEntities = client.entitiesByDevice(0);
 
-  void parentEntities.length;
+  log.info("The parent ESP owns entities of its own.", parentEntities.length);
 }
 ```
 
@@ -1022,7 +1002,7 @@ export async function discoveryWalkthroughExample(client: EspHomeClient): Promis
   // Wait for the next discovery batch. After connect() resolves, the `entities` event has typically already fired; on subsequent reconnects, the event re-fires.
   const entities = await client.once("entities", { signal: AbortSignal.timeout(10000) });
 
-  void entities.length;
+  log.info("Discovery reported the device's entities.", entities.length);
 
   // Group-by-type snapshot keyed by entity type, useful for menu construction.
   const grouped = client.getAvailableEntityIds();
@@ -1034,7 +1014,7 @@ export async function discoveryWalkthroughExample(client: EspHomeClient): Promis
 
     if(entity?.type === "light") {
 
-      void entity.effects;
+      log.info("The light advertises the effects it supports.", entity.effects);
     }
   }
 }
@@ -1067,7 +1047,7 @@ export async function discoveryWalkthroughExample(client: EspHomeClient): Promis
   // Wait for the next discovery batch. After connect() resolves, the `entities` event has typically already fired; on subsequent reconnects, the event re-fires.
   const entities = await client.once("entities", { signal: AbortSignal.timeout(10000) });
 
-  void entities.length;
+  log.info("Discovery reported the device's entities.", entities.length);
 
   // Group-by-type snapshot keyed by entity type, useful for menu construction.
   const grouped = client.getAvailableEntityIds();
@@ -1079,7 +1059,7 @@ export async function discoveryWalkthroughExample(client: EspHomeClient): Promis
 
     if(entity?.type === "light") {
 
-      void entity.effects;
+      log.info("The light advertises the effects it supports.", entity.effects);
     }
   }
 }
@@ -1112,7 +1092,7 @@ export async function discoveryWalkthroughExample(client: EspHomeClient): Promis
   // Wait for the next discovery batch. After connect() resolves, the `entities` event has typically already fired; on subsequent reconnects, the event re-fires.
   const entities = await client.once("entities", { signal: AbortSignal.timeout(10000) });
 
-  void entities.length;
+  log.info("Discovery reported the device's entities.", entities.length);
 
   // Group-by-type snapshot keyed by entity type, useful for menu construction.
   const grouped = client.getAvailableEntityIds();
@@ -1124,7 +1104,7 @@ export async function discoveryWalkthroughExample(client: EspHomeClient): Promis
 
     if(entity?.type === "light") {
 
-      void entity.effects;
+      log.info("The light advertises the effects it supports.", entity.effects);
     }
   }
 }
@@ -1162,7 +1142,7 @@ export function entityKeyResolutionExample(client: EspHomeClient, lightId: Entit
 
   if(key !== null) {
 
-    void key;
+    log.debug("Resolved the branded id to its protocol key.", key);
   }
 }
 ```
@@ -1203,7 +1183,7 @@ export function entityIdNarrowingExample(client: EspHomeClient, untrusted: strin
     return;
   }
 
-  // Path 2: "I don't know which type". Parse first, then dispatch on the discriminant. The id field is EntityId<EntityType> at this stage; switch on `type` to narrow
+  // Path 2: "I don't know which type". Parse first, then dispatch on the tag. The id field is EntityId<EntityType> at this stage; switch on `type` to narrow
   // to a specific id brand if the next call site needs it.
   const parsed = parseEntityId(untrusted);
 
@@ -1265,13 +1245,13 @@ export async function lifecycleAndHealthExample(client: EspHomeClient): Promise<
 
         case "connect":
 
-          void event.encrypted;
+          log.info("The client connected to the device.", event.encrypted);
 
           break;
 
         case "disconnect":
 
-          void event.cause;
+          log.warn("The client lost its connection to the device.", event.cause);
 
           break;
       }
@@ -1306,16 +1286,14 @@ export async function healthStreamExample(client: EspHomeClient): Promise<void> 
 
     if(health.state === "stalled") {
 
-      void health.consecutiveStalls;
+      log.warn("The connection has stalled.", health.consecutiveStalls);
     }
   });
-
-  void sub;
 
   // Stream rail: same data, async-iterable shape for `for await` consumption.
   for await (const health of client.healthStream({ signal: AbortSignal.timeout(30000) })) {
 
-    void health.lastPingRttMs;
+    log.debug("Received a health update.", health.lastPingRttMs);
 
     // Uptime is derived from the snapshot via the free helper, which reads `connectedAtMs` while the socket is up (connected or stalled) and returns 0 while it is down.
     void connectionUptimeMs(health);
@@ -1349,7 +1327,7 @@ Read the most recent state event for an entity, narrowed to the entity's type.
 
 | Type Parameter | Description |
 | ------ | ------ |
-| `T` *extends* `string` | Entity type discriminant carried by the branded id. |
+| `T` *extends* `string` | Entity type tag carried by the branded id. |
 
 #### Parameters
 
@@ -1366,7 +1344,7 @@ The state event, or `null` when no state has been recorded since the most recent
 #### Remarks
 
 Cache contract: the latest-state cache is updated **before** listeners are notified. A `client.latest(id)` read from inside an `on("telemetry")` or
-per-type listener sees the event that fired the listener. The same invariant holds for the [snapshot](#snapshot) and [snapshotFor](#snapshotfor) views.
+per-type listener sees the event that fired the listener. The same guarantee holds for the [snapshot](#snapshot) and [snapshotFor](#snapshotfor) views.
 
 Usage:
 
@@ -1378,8 +1356,7 @@ export function latestStateLookupExample(client: EspHomeClient, lightId: EntityI
   if(latest?.state === true) {
 
     // The entity's last-known on/off state. brightness, colorTemperature, rgb fields are typed against the schema.
-    void latest.brightness;
-    void latest.effect;
+    log.info("The light is on.", latest.brightness, latest.effect);
   }
 }
 ```
@@ -1411,13 +1388,13 @@ export async function lifecycleAndHealthExample(client: EspHomeClient): Promise<
 
         case "connect":
 
-          void event.encrypted;
+          log.info("The client connected to the device.", event.encrypted);
 
           break;
 
         case "disconnect":
 
-          void event.cause;
+          log.warn("The client lost its connection to the device.", event.cause);
 
           break;
       }
@@ -1456,7 +1433,12 @@ export function webStreamsInteropExample(client: EspHomeClient): void {
   // Telemetry as a ReadableStream consumable by any Web Streams pipeline (compression, batching, fan-out via tee()).
   const stream: ReadableStream = client.telemetryReadable({ backpressure: "dropOldest", highWaterMark: 256 });
 
-  void stream;
+  // Drive the stream into a sink that handles each event as it arrives. The pipeTo promise is deliberately discarded because this example returns
+  // synchronously...a consumer that needs to observe the pipeline's completion or failure awaits it instead.
+  void stream.pipeTo(new WritableStream({
+
+    write: (event: TelemetryEvent): void => log.debug("Received a state event through the Web Streams pipeline.", event)
+  }));
 
   // Lifecycle, logs, voice-assistant audio, and per-camera images all expose matching readable adapters.
   void client.lifecycleReadable();
@@ -1508,11 +1490,11 @@ Usage:
 ```ts
 export async function logSubscriptionExample(client: EspHomeClient): Promise<void> {
 
-  for await (const log of client.logs(LogLevel.DEBUG, { signal: AbortSignal.timeout(60000) })) {
+  for await (const entry of client.logs(LogLevel.DEBUG, { signal: AbortSignal.timeout(60000) })) {
 
-    if(log.level <= LogLevel.WARN) {
+    if(entry.level <= LogLevel.WARN) {
 
-      void log.message;
+      log.warn("The device reported a warning or worse.", entry.message);
     }
   }
 }
@@ -1549,7 +1531,12 @@ export function webStreamsInteropExample(client: EspHomeClient): void {
   // Telemetry as a ReadableStream consumable by any Web Streams pipeline (compression, batching, fan-out via tee()).
   const stream: ReadableStream = client.telemetryReadable({ backpressure: "dropOldest", highWaterMark: 256 });
 
-  void stream;
+  // Drive the stream into a sink that handles each event as it arrives. The pipeTo promise is deliberately discarded because this example returns
+  // synchronously...a consumer that needs to observe the pipeline's completion or failure awaits it instead.
+  void stream.pipeTo(new WritableStream({
+
+    write: (event: TelemetryEvent): void => log.debug("Received a state event through the Web Streams pipeline.", event)
+  }));
 
   // Lifecycle, logs, voice-assistant audio, and per-camera images all expose matching readable adapters.
   void client.lifecycleReadable();
@@ -1588,19 +1575,18 @@ Usage:
 export async function typedEventBusExample(client: EspHomeClient): Promise<void> {
 
   // Disposable callback. The `using` keyword removes the listener on scope exit.
-  using sub = client.on("deviceInfo", (info) => { void info.name; });
+  using sub = client.on("deviceInfo", (info) => log.info("The device identified itself.", info.name));
 
   // One-shot Promise. Resolves on the next emission; rejects on caller signal abort.
   const services = await client.once("services", { signal: AbortSignal.timeout(5000) });
 
+  log.info("Received the device's user-defined services.", services);
+
   // AsyncIterable stream with backpressure policy. Each call produces an independent subscription.
   for await (const event of client.stream("entities", { signal: AbortSignal.timeout(60000) })) {
 
-    void event.length;
+    log.info("Discovery re-ran and reported the device's entities.", event.length);
   }
-
-  void sub;
-  void services;
 }
 ```
 
@@ -1640,19 +1626,18 @@ Usage:
 export async function typedEventBusExample(client: EspHomeClient): Promise<void> {
 
   // Disposable callback. The `using` keyword removes the listener on scope exit.
-  using sub = client.on("deviceInfo", (info) => { void info.name; });
+  using sub = client.on("deviceInfo", (info) => log.info("The device identified itself.", info.name));
 
   // One-shot Promise. Resolves on the next emission; rejects on caller signal abort.
   const services = await client.once("services", { signal: AbortSignal.timeout(5000) });
 
+  log.info("Received the device's user-defined services.", services);
+
   // AsyncIterable stream with backpressure policy. Each call produces an independent subscription.
   for await (const event of client.stream("entities", { signal: AbortSignal.timeout(60000) })) {
 
-    void event.length;
+    log.info("Discovery re-ran and reported the device's entities.", event.length);
   }
-
-  void sub;
-  void services;
 }
 ```
 
@@ -1696,16 +1681,14 @@ export async function healthStreamExample(client: EspHomeClient): Promise<void> 
 
     if(health.state === "stalled") {
 
-      void health.consecutiveStalls;
+      log.warn("The connection has stalled.", health.consecutiveStalls);
     }
   });
-
-  void sub;
 
   // Stream rail: same data, async-iterable shape for `for await` consumption.
   for await (const health of client.healthStream({ signal: AbortSignal.timeout(30000) })) {
 
-    void health.lastPingRttMs;
+    log.debug("Received a health update.", health.lastPingRttMs);
 
     // Uptime is derived from the snapshot via the free helper, which reads `connectedAtMs` while the socket is up (connected or stalled) and returns 0 while it is down.
     void connectionUptimeMs(health);
@@ -1769,7 +1752,7 @@ export async function connectionWithNoiseExample(): Promise<void> {
   // reconnect, so the consumer is responsible for updating any persisted configuration.
   const rotated = await client.setNoiseEncryptionKey(process.env["ESPHOME_NEW_PSK"] ?? "", { signal: AbortSignal.timeout(10000) });
 
-  void rotated;
+  log.info("The device accepted the rotated pre-shared key.", rotated);
 }
 ```
 
@@ -1825,12 +1808,12 @@ export function snapshotExample(client: EspHomeClient): void {
   // Full snapshot: every entity that has emitted at least one state event since the most recent connect.
   const all = client.snapshot();
 
-  void all.size;
+  log.info("The snapshot covers every entity that has reported state.", all.size);
 
   // Type-narrowed snapshot: only light entities, returned as a fresh `Map<EntityId<"light">, StateEventFor<typeof ENTITY_SCHEMAS["light"]>>`.
   const lights = client.snapshotFor("light");
 
-  void lights.size;
+  log.info("The light-only snapshot is a smaller view of the same data.", lights.size);
 }
 ```
 
@@ -1848,7 +1831,7 @@ Read-only snapshot of the latest-state cache, narrowed to one entity type.
 
 | Type Parameter | Description |
 | ------ | ------ |
-| `T` *extends* `string` | Entity type discriminant. |
+| `T` *extends* `string` | Entity type tag. |
 
 #### Parameters
 
@@ -1875,12 +1858,12 @@ export function snapshotExample(client: EspHomeClient): void {
   // Full snapshot: every entity that has emitted at least one state event since the most recent connect.
   const all = client.snapshot();
 
-  void all.size;
+  log.info("The snapshot covers every entity that has reported state.", all.size);
 
   // Type-narrowed snapshot: only light entities, returned as a fresh `Map<EntityId<"light">, StateEventFor<typeof ENTITY_SCHEMAS["light"]>>`.
   const lights = client.snapshotFor("light");
 
-  void lights.size;
+  log.info("The light-only snapshot is a smaller view of the same data.", lights.size);
 }
 ```
 
@@ -1901,19 +1884,18 @@ Usage:
 export async function typedEventBusExample(client: EspHomeClient): Promise<void> {
 
   // Disposable callback. The `using` keyword removes the listener on scope exit.
-  using sub = client.on("deviceInfo", (info) => { void info.name; });
+  using sub = client.on("deviceInfo", (info) => log.info("The device identified itself.", info.name));
 
   // One-shot Promise. Resolves on the next emission; rejects on caller signal abort.
   const services = await client.once("services", { signal: AbortSignal.timeout(5000) });
 
+  log.info("Received the device's user-defined services.", services);
+
   // AsyncIterable stream with backpressure policy. Each call produces an independent subscription.
   for await (const event of client.stream("entities", { signal: AbortSignal.timeout(60000) })) {
 
-    void event.length;
+    log.info("Discovery re-ran and reported the device's entities.", event.length);
   }
-
-  void sub;
-  void services;
 }
 ```
 
@@ -1954,20 +1936,18 @@ export function subDeviceEnumerationExample(client: EspHomeClient): void {
 
   for(const subDevice of client.subDevices()) {
 
-    void subDevice.id;
-    void subDevice.name;
-    void subDevice.areaId;
+    log.info("Discovered a sub-device.", subDevice.id, subDevice.name, subDevice.areaId);
 
     // Entities scoped to this sub-device. Single-device configurations report subDevices() as an empty array, so the loop body never runs.
     const entities = client.entitiesByDevice(subDevice.id);
 
-    void entities.length;
+    log.info("The sub-device owns entities.", entities.length);
   }
 
   // The parent ESP itself is device id 0 when sub-devices exist.
   const parentEntities = client.entitiesByDevice(0);
 
-  void parentEntities.length;
+  log.info("The parent ESP owns entities of its own.", parentEntities.length);
 }
 ```
 
@@ -2009,11 +1989,11 @@ Usage:
 ```ts
 export async function logSubscriptionExample(client: EspHomeClient): Promise<void> {
 
-  for await (const log of client.logs(LogLevel.DEBUG, { signal: AbortSignal.timeout(60000) })) {
+  for await (const entry of client.logs(LogLevel.DEBUG, { signal: AbortSignal.timeout(60000) })) {
 
-    if(log.level <= LogLevel.WARN) {
+    if(entry.level <= LogLevel.WARN) {
 
-      void log.message;
+      log.warn("The device reported a warning or worse.", entry.message);
     }
   }
 }
@@ -2027,8 +2007,8 @@ export async function logSubscriptionExample(client: EspHomeClient): Promise<voi
 telemetry(options?): AsyncIterable<TelemetryEvent>;
 ```
 
-Async-iterable view of every state update across every entity. Yields the discriminated [TelemetryEvent](../type-aliases/TelemetryEvent.md) union; consumers narrow on the event's `type`
-discriminant.
+Async-iterable view of every state update across every entity. Yields the [TelemetryEvent](../type-aliases/TelemetryEvent.md) discriminated union; consumers narrow on the event's `type`
+tag.
 
 Usage:
 
@@ -2037,8 +2017,7 @@ export async function telemetryStreamExample(client: EspHomeClient): Promise<voi
 
   for await (const event of client.telemetry({ signal: AbortSignal.timeout(60000) })) {
 
-    void event.type;
-    void event.entity;
+    log.debug("Received a state event.", event.type, event.entity);
   }
 }
 ```
@@ -2072,10 +2051,8 @@ export async function telemetryStreamPerTypeExample(client: EspHomeClient): Prom
 
   for await (const event of client.telemetryFor("light", { signal: AbortSignal.timeout(60000) })) {
 
-    // Each event is a LightEvent; the discriminated-union narrowing happens at the channel boundary.
-    void event.brightness;
-    void event.effect;
-    void event.state;
+    // Each event is a LightEvent; the discriminated union narrowing happens at the channel boundary.
+    log.debug("Received a light state event.", event.brightness, event.effect, event.state);
   }
 }
 ```
@@ -2084,7 +2061,7 @@ export async function telemetryStreamPerTypeExample(client: EspHomeClient): Prom
 
 | Type Parameter | Description |
 | ------ | ------ |
-| `T` *extends* `string` | Entity type discriminant. |
+| `T` *extends* `string` | Entity type tag. |
 
 #### Parameters
 
@@ -2119,8 +2096,7 @@ export async function telemetryStreamPerIdExample(client: EspHomeClient): Promis
 
   for await (const event of client.telemetryForId(sensor, { signal: AbortSignal.timeout(60000) })) {
 
-    void event.state;
-    void event.missingState;
+    log.debug("Received a reading from the temperature sensor.", event.state, event.missingState);
   }
 }
 ```
@@ -2129,7 +2105,7 @@ export async function telemetryStreamPerIdExample(client: EspHomeClient): Promis
 
 | Type Parameter | Description |
 | ------ | ------ |
-| `T` *extends* `string` | Entity type discriminant carried by the branded id. |
+| `T` *extends* `string` | Entity type tag carried by the branded id. |
 
 #### Parameters
 
@@ -2163,7 +2139,12 @@ export function webStreamsInteropExample(client: EspHomeClient): void {
   // Telemetry as a ReadableStream consumable by any Web Streams pipeline (compression, batching, fan-out via tee()).
   const stream: ReadableStream = client.telemetryReadable({ backpressure: "dropOldest", highWaterMark: 256 });
 
-  void stream;
+  // Drive the stream into a sink that handles each event as it arrives. The pipeTo promise is deliberately discarded because this example returns
+  // synchronously...a consumer that needs to observe the pipeline's completion or failure awaits it instead.
+  void stream.pipeTo(new WritableStream({
+
+    write: (event: TelemetryEvent): void => log.debug("Received a state event through the Web Streams pipeline.", event)
+  }));
 
   // Lifecycle, logs, voice-assistant audio, and per-camera images all expose matching readable adapters.
   void client.lifecycleReadable();
@@ -2200,7 +2181,7 @@ field layout are shared across both physical layers.
 
 | Type Parameter | Description |
 | ------ | ------ |
-| `T` *extends* `"infrared"` \| `"radio_frequency"` | The branded entity-type discriminant; must resolve to `"infrared"` or `"radio_frequency"`. |
+| `T` *extends* `"infrared"` \| `"radio_frequency"` | The branded entity-type tag; must resolve to `"infrared"` or `"radio_frequency"`. |
 
 #### Parameters
 

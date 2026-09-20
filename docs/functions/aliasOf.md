@@ -11,7 +11,7 @@ function aliasOf(base): EntitySchema;
 ```
 
 Builds a schema that aliases an existing entity type under a different name. The returned schema is a fresh shallow copy that reuses the upstream type's wire
-format verbatim and keeps the upstream `type` discriminant unchanged; the caller overrides the `type` field at registration time when the alias should surface
+format verbatim and keeps the upstream `type` tag unchanged; the caller overrides the `type` field at registration time when the alias should surface
 under a new name (as the extras examples and routing tests do).
 
 Usage:
@@ -19,7 +19,7 @@ Usage:
 ```ts
 export async function schemaExtensionExample(): Promise<void> {
 
-  // As an illustrative custom type, we alias "cover" to a distinct "door_cover" discriminant - the pattern a consumer reaches for when it wants an upstream type
+  // As an illustrative custom type, we alias "cover" to a distinct "door_cover" tag - the pattern a consumer reaches for when it wants an upstream type
   // routed under its own type key for its own dispatch. (A real garage door, Konnected included, exposes a standard "cover"; this is a teaching example, not a
   // required registration.) Quoted keys keep the entity-type strings honest to ESPHome's snake_case convention without tripping the camelCase identifier rule.
   const extras = {
@@ -56,5 +56,5 @@ export async function schemaExtensionExample(): Promise<void> {
 
 [`EntitySchema`](../interfaces/EntitySchema.md)
 
-A new EntitySchema reusing the upstream wire format with the original type discriminant. Consumers should override the type field at registration time if
+A new EntitySchema reusing the upstream wire format with the original type tag. Consumers should override the type field at registration time if
 they need it to surface as the alias name.

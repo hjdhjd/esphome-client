@@ -31,9 +31,7 @@ export function serviceExecutionExample(client: EspHomeClient): void {
   // Enumerate the discovered services.
   for(const service of client.services.list()) {
 
-    void service.key;
-    void service.name;
-    void service.args;
+    log.info("Discovered a user-defined service.", service.key, service.name, service.args);
   }
 
   // Argument shape mirrors the service definition - one of bool, int, float, string, or their array equivalents per slot.
@@ -79,9 +77,7 @@ export function serviceExecutionExample(client: EspHomeClient): void {
   // Enumerate the discovered services.
   for(const service of client.services.list()) {
 
-    void service.key;
-    void service.name;
-    void service.args;
+    log.info("Discovered a user-defined service.", service.key, service.name, service.args);
   }
 
   // Argument shape mirrors the service definition - one of bool, int, float, string, or their array equivalents per slot.
@@ -128,9 +124,7 @@ export function serviceExecutionExample(client: EspHomeClient): void {
   // Enumerate the discovered services.
   for(const service of client.services.list()) {
 
-    void service.key;
-    void service.name;
-    void service.args;
+    log.info("Discovered a user-defined service.", service.key, service.name, service.args);
   }
 
   // Argument shape mirrors the service definition - one of bool, int, float, string, or their array equivalents per slot.

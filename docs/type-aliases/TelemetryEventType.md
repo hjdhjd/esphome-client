@@ -10,4 +10,4 @@
 type TelemetryEventType = EntityType;
 ```
 
-Telemetry-event type discriminant union. Derived directly from [ENTITY\_SCHEMAS](../variables/ENTITY_SCHEMAS.md) so the literal-string union extends automatically as new entity types are added.
+Telemetry-event type tag union. Derived directly from [ENTITY\_SCHEMAS](../variables/ENTITY_SCHEMAS.md) so the literal-string union extends automatically as new entity types are added.

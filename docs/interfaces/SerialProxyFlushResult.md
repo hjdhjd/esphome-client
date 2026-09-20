@@ -6,7 +6,7 @@
 
 # Interface: SerialProxyFlushResult
 
-Result of [SerialProxyApi.flush](../classes/SerialProxyApi.md#flush). The numeric `status` discriminates success (`OK` or `ASSUMED_SUCCESS`) from failure (`ERROR`, `TIMEOUT`, `NOT_SUPPORTED`); the
+Result of [SerialProxyApi.flush](../classes/SerialProxyApi.md#flush). The numeric `status` distinguishes success (`OK` or `ASSUMED_SUCCESS`) from failure (`ERROR`, `TIMEOUT`, `NOT_SUPPORTED`); the
 optional `errorMessage` accompanies failure variants when the device supplies one. The `type` field always echoes `SerialProxyRequestType.FLUSH` for results
 surfaced by this method; it is included so the result shape parallels future request-types that may share the same response message.
 

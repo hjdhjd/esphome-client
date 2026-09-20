@@ -25,7 +25,8 @@ Failure during the Noise NNpsk0 handshake itself. Carries a narrowed [NoiseHands
 new NoiseHandshakeError(
    message, 
    code, 
-   options?): NoiseHandshakeError;
+   options?
+): NoiseHandshakeError;
 ```
 
 Creates a new NoiseHandshakeError.
@@ -50,4 +51,4 @@ Creates a new NoiseHandshakeError.
 
 | Property | Modifier | Type | Description | Overrides |
 | ------ | ------ | ------ | ------ | ------ |
-| <a id="code"></a> `code` | `readonly` | [`NoiseHandshakeErrorCode`](../type-aliases/NoiseHandshakeErrorCode.md) | Narrowed handshake error code. Overrides the base class's optional `code` to make it required and discriminated. | [`HandshakeError`](HandshakeError.md).[`code`](HandshakeError.md#code) |
+| <a id="code"></a> `code` | `readonly` | [`NoiseHandshakeErrorCode`](../type-aliases/NoiseHandshakeErrorCode.md) | Narrowed handshake error code. Overrides the base class's optional `code` to make it required and narrowed. | [`HandshakeError`](HandshakeError.md).[`code`](HandshakeError.md#code) |

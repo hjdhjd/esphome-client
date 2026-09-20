@@ -26,7 +26,12 @@ export function webStreamsInteropExample(client: EspHomeClient): void {
   // Telemetry as a ReadableStream consumable by any Web Streams pipeline (compression, batching, fan-out via tee()).
   const stream: ReadableStream = client.telemetryReadable({ backpressure: "dropOldest", highWaterMark: 256 });
 
-  void stream;
+  // Drive the stream into a sink that handles each event as it arrives. The pipeTo promise is deliberately discarded because this example returns
+  // synchronously...a consumer that needs to observe the pipeline's completion or failure awaits it instead.
+  void stream.pipeTo(new WritableStream({
+
+    write: (event: TelemetryEvent): void => log.debug("Received a state event through the Web Streams pipeline.", event)
+  }));
 
   // Lifecycle, logs, voice-assistant audio, and per-camera images all expose matching readable adapters.
   void client.lifecycleReadable();
@@ -92,9 +97,8 @@ export async function cameraSnapshotExample(client: EspHomeClient): Promise<Null
 
     if(error instanceof CameraStreamClosedError) {
 
-      // Transport disconnected mid-snapshot. The `code` discriminant is `STREAM_CLOSED`; `cameraId` names the failing camera for log correlation.
-      void error.code;
-      void error.cameraId;
+      // Transport disconnected mid-snapshot. The `code` tag is `STREAM_CLOSED`; `cameraId` names the failing camera for log correlation.
+      log.error("The transport disconnected before the snapshot arrived.", error.code, error.cameraId);
 
       return null;
     }
@@ -144,7 +148,8 @@ export async function cameraStreamExample(client: EspHomeClient): Promise<void> 
 
   for await (const image of cam.stream({ signal: AbortSignal.timeout(30000) })) {
 
-    void image.byteLength;
+    log.debug("Received a camera frame.", image.byteLength);
+
     frameCount++;
 
     if(frameCount >= 30) {

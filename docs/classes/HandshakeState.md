@@ -25,8 +25,7 @@ export function cryptoNoiseErrorHandlingExample(psk: Buffer, incoming: Buffer): 
 
     if(error instanceof NoiseHandshakeError) {
 
-      void error.code;
-      void error.message;
+      log.error("The noise handshake rejected the incoming message.", error.code, error.message);
     }
 
     throw error;
@@ -43,7 +42,8 @@ new HandshakeState(
    initiator, 
    psk, 
    log?, 
-   prologue?): HandshakeState;
+   prologue?
+): HandshakeState;
 ```
 
 Constructs a new handshake state for the NNpsk0 pattern.
@@ -115,8 +115,8 @@ key - while LEAVING the post-handshake [sendCipher](#sendcipher) / [receiveCiphe
 transport, so the live session keys survive while the now-spent handshake inputs (the PSK and the HKDF chaining material that derived the session keys) do not linger
 in memory. The cipher references are relinquished (set to undefined, NOT destroyed) because ownership has transferred to the transport via `installCipher`; this also
 makes a later [destroy](#destroy) on this spent handshake a safe no-op that can never zero the transport's live keys. Contrast [destroy](#destroy), which additionally
-cascades into the cipher states and is the correct teardown for a FAILED handshake (no ciphers in use). Idempotent. Best-effort: Node Buffer zeroization cannot
-guarantee the GC made no prior copy.
+cascades into the cipher states and is the correct teardown for a FAILED handshake (no ciphers in use). Safe to call more than once. Best-effort: Node Buffer
+zeroization cannot guarantee the GC made no prior copy.
 
 #### Returns
 

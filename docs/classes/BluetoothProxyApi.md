@@ -34,12 +34,12 @@ export function bluetoothAvailabilityExample(client: EspHomeClient): void {
   if(!client.bluetooth.available) {
 
     // The device does not expose a Bluetooth proxy. Surface a friendly capability gate instead of attempting an advertisement subscription that will yield nothing.
-    void "this device firmware does not include the Bluetooth proxy component";
+    log.warn("The device firmware does not include the Bluetooth proxy component.");
 
     return;
   }
 
-  void "Bluetooth proxy is available; we can subscribe to advertisements and set the scanner mode";
+  log.info("The Bluetooth proxy is available, so advertisement subscriptions and scanner-mode changes will reach the radio.");
 }
 ```
 
@@ -98,8 +98,7 @@ export async function bluetoothAdvertisementsExample(client: EspHomeClient): Pro
 
     observations++;
 
-    void advertisement.rssi;
-    void advertisement.data;
+    log.debug("Observed the peripheral we are watching for.", advertisement.rssi, advertisement.data);
 
     if(observations >= 10) {
 
@@ -186,7 +185,7 @@ connect(address, options?): Promise<ConnectionStateData>;
 ```
 
 Connect to a peripheral. Sends `BluetoothDeviceRequest(CONNECT_V3_WITH_CACHE | CONNECT_V3_WITHOUT_CACHE)` and awaits `BluetoothDeviceConnectionResponse` with the
-`connected=true` discriminator. The deprecated `CONNECT=0` variant is never used - this client uses the V3 variants unconditionally; the cached/uncached choice is
+`connected=true` tag. The deprecated `CONNECT=0` variant is never used - this client uses the V3 variants unconditionally; the cached/uncached choice is
 the caller's via the `useCache` option.
 
 Usage:
@@ -199,7 +198,7 @@ export async function bluetoothConnectExample(client: EspHomeClient): Promise<vo
   // Connect with the GATT cache enabled (the default). Pass `useCache: false` to bypass the cache.
   const state = await client.bluetooth.connect(address, { timeoutMs: 30000 });
 
-  void state.mtu;
+  log.info("Connected to the peripheral.", state.mtu);
 
   // Synchronous probe: returns true between connect and disconnect, false otherwise.
   if(client.bluetooth.isConnected(address)) {
@@ -207,7 +206,7 @@ export async function bluetoothConnectExample(client: EspHomeClient): Promise<vo
     // Issue a read against a known handle (acquired from an earlier getServices call in real workflows).
     const value = await client.bluetooth.readCharacteristic(address, 0x002a);
 
-    void value;
+    log.info("Read the characteristic.", value);
   }
 
   await client.bluetooth.disconnect(address);
@@ -259,9 +258,7 @@ export async function bluetoothConnectionsFreeExample(client: EspHomeClient): Pr
 
   for await (const update of client.bluetooth.connectionsFree({ signal: controller.signal })) {
 
-    void update.free;
-    void update.limit;
-    void update.allocated;
+    log.debug("The device reported its BLE connection-slot capacity.", update.free, update.limit, update.allocated);
 
     if(update.free === 0) {
 
@@ -277,7 +274,7 @@ export async function bluetoothConnectionsFreeExample(client: EspHomeClient): Pr
   // Synchronous snapshot for callers that want the current state without iterating.
   const snapshot = client.bluetooth.lastConnectionsFree();
 
-  void snapshot;
+  log.debug("Read the cached connection-slot capacity.", snapshot);
 }
 ```
 
@@ -359,7 +356,7 @@ export async function bluetoothConnectExample(client: EspHomeClient): Promise<vo
   // Connect with the GATT cache enabled (the default). Pass `useCache: false` to bypass the cache.
   const state = await client.bluetooth.connect(address, { timeoutMs: 30000 });
 
-  void state.mtu;
+  log.info("Connected to the peripheral.", state.mtu);
 
   // Synchronous probe: returns true between connect and disconnect, false otherwise.
   if(client.bluetooth.isConnected(address)) {
@@ -367,7 +364,7 @@ export async function bluetoothConnectExample(client: EspHomeClient): Promise<vo
     // Issue a read against a known handle (acquired from an earlier getServices call in real workflows).
     const value = await client.bluetooth.readCharacteristic(address, 0x002a);
 
-    void value;
+    log.info("Read the characteristic.", value);
   }
 
   await client.bluetooth.disconnect(address);
@@ -412,19 +409,16 @@ export async function bluetoothGetServicesExample(client: EspHomeClient): Promis
 
   for(const service of services) {
 
-    void service.handle;
-    void service.uuid;
-    void service.shortUuid;
+    log.info("Discovered a GATT service.", service.handle, service.uuid, service.shortUuid);
 
     for(const characteristic of service.characteristics) {
 
-      void characteristic.handle;
       // The properties bitmask encodes Read (0x02), Write (0x08), Notify (0x10), etc. - bit-test to gate UI affordances.
-      void characteristic.properties;
+      log.info("The service exposes a characteristic.", characteristic.handle, characteristic.properties);
 
       for(const descriptor of characteristic.descriptors) {
 
-        void descriptor.handle;
+        log.info("The characteristic carries a descriptor.", descriptor.handle);
       }
     }
   }
@@ -471,7 +465,7 @@ export async function bluetoothConnectExample(client: EspHomeClient): Promise<vo
   // Connect with the GATT cache enabled (the default). Pass `useCache: false` to bypass the cache.
   const state = await client.bluetooth.connect(address, { timeoutMs: 30000 });
 
-  void state.mtu;
+  log.info("Connected to the peripheral.", state.mtu);
 
   // Synchronous probe: returns true between connect and disconnect, false otherwise.
   if(client.bluetooth.isConnected(address)) {
@@ -479,7 +473,7 @@ export async function bluetoothConnectExample(client: EspHomeClient): Promise<vo
     // Issue a read against a known handle (acquired from an earlier getServices call in real workflows).
     const value = await client.bluetooth.readCharacteristic(address, 0x002a);
 
-    void value;
+    log.info("Read the characteristic.", value);
   }
 
   await client.bluetooth.disconnect(address);
@@ -518,9 +512,7 @@ export async function bluetoothConnectionsFreeExample(client: EspHomeClient): Pr
 
   for await (const update of client.bluetooth.connectionsFree({ signal: controller.signal })) {
 
-    void update.free;
-    void update.limit;
-    void update.allocated;
+    log.debug("The device reported its BLE connection-slot capacity.", update.free, update.limit, update.allocated);
 
     if(update.free === 0) {
 
@@ -536,7 +528,7 @@ export async function bluetoothConnectionsFreeExample(client: EspHomeClient): Pr
   // Synchronous snapshot for callers that want the current state without iterating.
   const snapshot = client.bluetooth.lastConnectionsFree();
 
-  void snapshot;
+  log.debug("Read the cached connection-slot capacity.", snapshot);
 }
 ```
 
@@ -569,7 +561,7 @@ export async function bluetoothScannerStateExample(client: EspHomeClient): Promi
 
     if((state.mode === BluetoothScannerMode.ACTIVE) && (state.state === BluetoothScannerState.RUNNING)) {
 
-      void "scanner is now in active mode and running; safe to depend on scan-response data";
+      log.info("The scanner is running in active mode, so scan-response data is available.");
 
       break;
     }
@@ -578,7 +570,7 @@ export async function bluetoothScannerStateExample(client: EspHomeClient): Promi
   // Synchronous snapshot of the cached state without iterating; null if no push has been observed on the current connection.
   const snapshot = client.bluetooth.lastScannerState();
 
-  void snapshot;
+  log.debug("Read the cached scanner state.", snapshot);
 }
 ```
 
@@ -596,7 +588,8 @@ The cached [BluetoothScannerStateData](../interfaces/BluetoothScannerStateData.m
 notify(
    address, 
    handle, 
-options?): AsyncIterable<NotifyDataChunk>;
+   options?
+): AsyncIterable<NotifyDataChunk>;
 ```
 
 Iterate notification data for a (address, handle) pair. The iterator filters the global `bluetoothNotifyData` bus event so each consumer only sees notifications
@@ -624,7 +617,7 @@ export async function bluetoothNotifyExample(client: EspHomeClient): Promise<voi
 
   for await (const chunk of client.bluetooth.notify(address, handle, { signal: controller.signal })) {
 
-    void chunk.data;
+    log.debug("Received a characteristic notification.", chunk.data);
 
     if(++chunks >= 10) {
 
@@ -698,7 +691,7 @@ export async function bluetoothPairUnpairExample(client: EspHomeClient): Promise
 
     if((error instanceof ConnectionError) && (error.code === "GATT_PAIR_FAILED")) {
 
-      void "pairing rejected by the device or the peripheral";
+      log.error("The device or the peripheral rejected the pairing request.");
 
       return;
     }
@@ -740,7 +733,8 @@ export async function bluetoothPairUnpairExample(client: EspHomeClient): Promise
 readCharacteristic(
    address, 
    handle, 
-options?): Promise<Buffer<ArrayBufferLike>>;
+   options?
+): Promise<Buffer<ArrayBufferLike>>;
 ```
 
 Read a characteristic value. Sends `BluetoothGATTReadRequest` and awaits the matching `BluetoothGATTReadResponse`. A `BluetoothGATTErrorResponse` for the same
@@ -757,7 +751,7 @@ export async function bluetoothReadWriteExample(client: EspHomeClient): Promise<
   // Read with the default 10s timeout.
   const current = await client.bluetooth.readCharacteristic(address, valueHandle);
 
-  void current;
+  log.info("Read the characteristic's current value.", current);
 
   // Write a fresh value and await the write acknowledgment.
   await client.bluetooth.writeCharacteristic(address, valueHandle, Buffer.from([ 0x01, 0x02, 0x03 ]), { response: true });
@@ -799,7 +793,8 @@ The characteristic value bytes.
 readDescriptor(
    address, 
    handle, 
-options?): Promise<Buffer<ArrayBufferLike>>;
+   options?
+): Promise<Buffer<ArrayBufferLike>>;
 ```
 
 Read a descriptor value. Sends `BluetoothGATTReadDescriptorRequest` and awaits the matching `BluetoothGATTReadResponse` (shared with characteristic reads at the
@@ -816,7 +811,7 @@ export async function bluetoothDescriptorsExample(client: EspHomeClient): Promis
   // Read the current CCCD value.
   const current = await client.bluetooth.readDescriptor(address, cccdHandle);
 
-  void current;
+  log.info("Read the descriptor's current value.", current);
 
   // Write a new value - here, enable notifications by writing 0x01 0x00 to the CCCD.
   await client.bluetooth.writeDescriptor(address, cccdHandle, Buffer.from([ 0x01, 0x00 ]));
@@ -922,7 +917,7 @@ export async function bluetoothScannerStateExample(client: EspHomeClient): Promi
 
     if((state.mode === BluetoothScannerMode.ACTIVE) && (state.state === BluetoothScannerState.RUNNING)) {
 
-      void "scanner is now in active mode and running; safe to depend on scan-response data";
+      log.info("The scanner is running in active mode, so scan-response data is available.");
 
       break;
     }
@@ -931,7 +926,7 @@ export async function bluetoothScannerStateExample(client: EspHomeClient): Promi
   // Synchronous snapshot of the cached state without iterating; null if no push has been observed on the current connection.
   const snapshot = client.bluetooth.lastScannerState();
 
-  void snapshot;
+  log.debug("Read the cached scanner state.", snapshot);
 }
 ```
 
@@ -943,7 +938,8 @@ export async function bluetoothScannerStateExample(client: EspHomeClient): Promi
 setConnectionParams(
    address, 
    params, 
-options?): Promise<void>;
+   options?
+): Promise<void>;
 ```
 
 Set per-link connection parameters on a connected peripheral. Sends `BluetoothSetConnectionParamsRequest` and awaits `BluetoothSetConnectionParamsResponse`.
@@ -997,7 +993,8 @@ setNotify(
    address, 
    handle, 
    enable, 
-options?): Promise<void>;
+   options?
+): Promise<void>;
 ```
 
 Enable or disable device-side notifications for a (address, handle) pair. Sends `BluetoothGATTNotifyRequest` and awaits `BluetoothGATTNotifyResponse`. This sets up
@@ -1020,7 +1017,7 @@ export async function bluetoothNotifyExample(client: EspHomeClient): Promise<voi
 
   for await (const chunk of client.bluetooth.notify(address, handle, { signal: controller.signal })) {
 
-    void chunk.data;
+    log.debug("Received a characteristic notification.", chunk.data);
 
     if(++chunks >= 10) {
 
@@ -1132,7 +1129,7 @@ export async function bluetoothPairUnpairExample(client: EspHomeClient): Promise
 
     if((error instanceof ConnectionError) && (error.code === "GATT_PAIR_FAILED")) {
 
-      void "pairing rejected by the device or the peripheral";
+      log.error("The device or the peripheral rejected the pairing request.");
 
       return;
     }
@@ -1175,7 +1172,8 @@ writeCharacteristic(
    address, 
    handle, 
    data, 
-options?): Promise<void>;
+   options?
+): Promise<void>;
 ```
 
 Write a characteristic value. By default fire-and-forget at the wire level (`response=false`); pass `options.response=true` to await
@@ -1192,7 +1190,7 @@ export async function bluetoothReadWriteExample(client: EspHomeClient): Promise<
   // Read with the default 10s timeout.
   const current = await client.bluetooth.readCharacteristic(address, valueHandle);
 
-  void current;
+  log.info("Read the characteristic's current value.", current);
 
   // Write a fresh value and await the write acknowledgment.
   await client.bluetooth.writeCharacteristic(address, valueHandle, Buffer.from([ 0x01, 0x02, 0x03 ]), { response: true });
@@ -1235,7 +1233,8 @@ writeDescriptor(
    address, 
    handle, 
    data, 
-options?): Promise<void>;
+   options?
+): Promise<void>;
 ```
 
 Write a descriptor value. Sends `BluetoothGATTWriteDescriptorRequest` and awaits the matching `BluetoothGATTWriteResponse` (shared with characteristic writes).
@@ -1251,7 +1250,7 @@ export async function bluetoothDescriptorsExample(client: EspHomeClient): Promis
   // Read the current CCCD value.
   const current = await client.bluetooth.readDescriptor(address, cccdHandle);
 
-  void current;
+  log.info("Read the descriptor's current value.", current);
 
   // Write a new value - here, enable notifications by writing 0x01 0x00 to the CCCD.
   await client.bluetooth.writeDescriptor(address, cccdHandle, Buffer.from([ 0x01, 0x00 ]));

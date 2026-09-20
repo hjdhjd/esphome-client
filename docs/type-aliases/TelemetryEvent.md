@@ -24,21 +24,19 @@ export async function telemetryEventNarrowingExample(client: EspHomeClient): Pro
 
       case "light":
 
-        void event.brightness;
-        void event.effect;
+        log.debug("A light changed state.", event.brightness, event.effect);
 
         break;
 
       case "climate":
 
-        void event.currentTemperature;
-        void event.mode;
+        log.debug("A thermostat changed state.", event.currentTemperature, event.mode);
 
         break;
 
       case "binary_sensor":
 
-        void event.state;
+        log.debug("A binary sensor changed state.", event.state);
 
         break;
 
@@ -46,8 +44,7 @@ export async function telemetryEventNarrowingExample(client: EspHomeClient): Pro
 
         // Camera state events surface the reassembled multi-packet image: `image` is the concatenated payload, `name` is the friendly entity name. The wire-level
         // chunk fields (`data`, `done`) are stripped by the EventOverrides table since consumers receive only the assembled result.
-        void event.image;
-        void event.name;
+        log.debug("A camera delivered an image.", event.image, event.name);
 
         break;
     }

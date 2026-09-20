@@ -16,7 +16,7 @@ export async function backpressurePolicyExample(client: EspHomeClient): Promise<
   // Default: drop the oldest item under load. Optimized for "I want a recent sample, not the full backlog."
   for await (const event of client.telemetry({ backpressure: "dropOldest", highWaterMark: 64 })) {
 
-    void event;
+    log.debug("Received the freshest available state event.", event);
   }
 
   // Throw on overflow. Pair with a try/catch that responds to BackpressureError specifically.
@@ -24,12 +24,12 @@ export async function backpressurePolicyExample(client: EspHomeClient): Promise<
 
     for await (const event of client.telemetry({ backpressure: "throw", highWaterMark: 32 })) {
 
-      void event;
+      log.debug("Received a state event with no loss permitted.", event);
     }
 
   } catch(error) {
 
-    void error;
+    log.error("The telemetry stream overflowed before the consumer could drain it.", error);
   }
 }
 ```
@@ -46,7 +46,8 @@ export async function backpressurePolicyExample(client: EspHomeClient): Promise<
 new BackpressureError(
    message, 
    dropped, 
-   options?): BackpressureError;
+   options?
+): BackpressureError;
 ```
 
 Creates a new BackpressureError.
@@ -71,5 +72,5 @@ Creates a new BackpressureError.
 
 | Property | Modifier | Type | Description | Inherited from |
 | ------ | ------ | ------ | ------ | ------ |
-| <a id="code"></a> `code` | `readonly` | `string` \| `undefined` | Optional machine-readable error code. Subclasses narrow this to discriminated string unions. | [`EspHomeError`](EspHomeError.md).[`code`](EspHomeError.md#code) |
+| <a id="code"></a> `code` | `readonly` | `string` \| `undefined` | Optional machine-readable error code. Subclasses narrow this to tagged string unions. | [`EspHomeError`](EspHomeError.md).[`code`](EspHomeError.md#code) |
 | <a id="dropped"></a> `dropped` | `readonly` | `number` | Number of items the stream dropped before the high-water-mark throw fired. | - |

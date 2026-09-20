@@ -160,7 +160,7 @@ Blocks until the device confirms drain (status `OK` / `ASSUMED_SUCCESS`) or fail
 
 `Promise`\<[`SerialProxyFlushResult`](../interfaces/SerialProxyFlushResult.md)\>
 
-A promise that resolves with the [SerialProxyFlushResult](../interfaces/SerialProxyFlushResult.md). Consumers switch on `status` to discriminate success from failure.
+A promise that resolves with the [SerialProxyFlushResult](../interfaces/SerialProxyFlushResult.md). Consumers switch on `status` to distinguish success from failure.
 
 #### Remarks
 
@@ -180,28 +180,28 @@ export async function serialFlushExample(client: EspHomeClient): Promise<void> {
     case SerialProxyStatus.ASSUMED_SUCCESS: {
 
       // The device confirms the TX buffer drained successfully. Safe to issue the next write.
-      void "drained";
+      log.info("The device drained its serial transmit buffer.");
 
       break;
     }
 
     case SerialProxyStatus.ERROR: {
 
-      void result.errorMessage;
+      log.error("The device failed to drain its serial transmit buffer.", result.errorMessage);
 
       break;
     }
 
     case SerialProxyStatus.TIMEOUT: {
 
-      void "device-side drain timed out; retry or back off";
+      log.warn("The device-side drain timed out, so the caller retries or backs off.");
 
       break;
     }
 
     case SerialProxyStatus.NOT_SUPPORTED: {
 
-      void "this device cannot drain its TX buffer on demand; treat writes as best-effort";
+      log.warn("The device cannot drain its transmit buffer on demand, so writes are best-effort.");
 
       break;
     }
@@ -258,7 +258,7 @@ export async function serialModemPinsExample(client: EspHomeClient): Promise<voi
   const lineStates = await client.serial.getModemPins(0, { timeoutMs: 1000 });
   const dtrAsserted = (lineStates & SerialProxyLineStateFlags.DTR) !== 0;
 
-  void dtrAsserted;
+  log.debug("Read the modem-control lines back before dropping DTR.", dtrAsserted);
 
   client.serial.setModemPins(0, SerialProxyLineStateFlags.RTS);
 }
@@ -291,27 +291,25 @@ export function serialListExample(client: EspHomeClient): void {
 
   for(const proxy of client.serial.list()) {
 
-    void proxy.name;
-
     switch(proxy.portType) {
 
       case SerialProxyPortType.TTL: {
 
-        void "ttl-only port; no modem-control pins to fuss with";
+        log.info("Discovered a TTL-only serial port, which carries no modem-control lines to manage.", proxy.name);
 
         break;
       }
 
       case SerialProxyPortType.RS232: {
 
-        void "rs232 - RTS / DTR available via setModemPins / getModemPins";
+        log.info("Discovered an RS232 serial port, whose RTS and DTR lines are reachable through setModemPins and getModemPins.", proxy.name);
 
         break;
       }
 
       case SerialProxyPortType.RS485: {
 
-        void "rs485 - half-duplex; manage the transceiver enable line as needed";
+        log.info("Discovered a half-duplex RS485 serial port, whose transceiver enable line the consumer drives itself.", proxy.name);
 
         break;
       }
@@ -370,7 +368,7 @@ export async function serialModemPinsExample(client: EspHomeClient): Promise<voi
   const lineStates = await client.serial.getModemPins(0, { timeoutMs: 1000 });
   const dtrAsserted = (lineStates & SerialProxyLineStateFlags.DTR) !== 0;
 
-  void dtrAsserted;
+  log.debug("Read the modem-control lines back before dropping DTR.", dtrAsserted);
 
   client.serial.setModemPins(0, SerialProxyLineStateFlags.RTS);
 }

@@ -7,7 +7,7 @@
 # Interface: ConnectionStateData
 
 Connection-state snapshot pushed by the device via `BluetoothDeviceConnectionResponse` (id 69). One message shape covers both the connect-completed and
-disconnect-completed transitions; the `connected` boolean is the discriminant. `mtu` carries the negotiated GATT MTU (only meaningful on `connected=true`); `error`
+disconnect-completed transitions; the `connected` boolean is the tag. `mtu` carries the negotiated GATT MTU (only meaningful on `connected=true`); `error`
 carries a nonzero firmware-level error code when the transition failed (typical on `connected=false` for a failed connection attempt).
 
 ## Properties

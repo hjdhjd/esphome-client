@@ -14,4 +14,4 @@ number used in every subsequent serial-proxy wire message. Empty (or undefined) 
 | Property | Modifier | Type | Description |
 | ------ | ------ | ------ | ------ |
 | <a id="name"></a> `name` | `readonly` | `string` | Human-readable port name (e.g., "uart_0"). |
-| <a id="porttype"></a> `portType` | `readonly` | [`SerialProxyPortType`](../type-aliases/SerialProxyPortType.md) | Port type discriminant - mirrors [SerialProxyPortType](../variables/SerialProxyPortType.md). |
+| <a id="porttype"></a> `portType` | `readonly` | [`SerialProxyPortType`](../type-aliases/SerialProxyPortType.md) | Port type tag - mirrors [SerialProxyPortType](../variables/SerialProxyPortType.md). |

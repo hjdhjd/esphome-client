@@ -20,7 +20,8 @@ Noise handshake aborted because the per-step timeout elapsed.
 new NoiseHandshakeTimeoutError(
    message, 
    code, 
-   options?): NoiseHandshakeTimeoutError;
+   options?
+): NoiseHandshakeTimeoutError;
 ```
 
 Creates a new NoiseHandshakeError.
@@ -45,4 +46,4 @@ Creates a new NoiseHandshakeError.
 
 | Property | Modifier | Type | Description | Inherited from |
 | ------ | ------ | ------ | ------ | ------ |
-| <a id="code"></a> `code` | `readonly` | [`NoiseHandshakeErrorCode`](../type-aliases/NoiseHandshakeErrorCode.md) | Narrowed handshake error code. Overrides the base class's optional `code` to make it required and discriminated. | [`NoiseHandshakeError`](NoiseHandshakeError.md).[`code`](NoiseHandshakeError.md#code) |
+| <a id="code"></a> `code` | `readonly` | [`NoiseHandshakeErrorCode`](../type-aliases/NoiseHandshakeErrorCode.md) | Narrowed handshake error code. Overrides the base class's optional `code` to make it required and narrowed. | [`NoiseHandshakeError`](NoiseHandshakeError.md).[`code`](NoiseHandshakeError.md#code) |

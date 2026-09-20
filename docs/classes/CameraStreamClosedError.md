@@ -28,7 +28,8 @@ new CameraStreamClosedError(
    message, 
    code, 
    cameraId, 
-   options?): CameraStreamClosedError;
+   options?
+): CameraStreamClosedError;
 ```
 
 Creates a new CameraStreamClosedError.
@@ -55,4 +56,4 @@ Creates a new CameraStreamClosedError.
 | Property | Modifier | Type | Description | Overrides |
 | ------ | ------ | ------ | ------ | ------ |
 | <a id="cameraid"></a> `cameraId` | `readonly` | `string` | Branded camera id (the `${type}-${objectId}` form) whose snapshot was awaiting an image when the bus stream closed. | - |
-| <a id="code"></a> `code` | `readonly` | `"STREAM_CLOSED"` | Narrowed code. Overrides the base class's optional `code` to make it required and discriminated. | [`EspHomeError`](EspHomeError.md).[`code`](EspHomeError.md#code) |
+| <a id="code"></a> `code` | `readonly` | `"STREAM_CLOSED"` | Narrowed code. Overrides the base class's optional `code` to make it required and narrowed. | [`EspHomeError`](EspHomeError.md).[`code`](EspHomeError.md#code) |
