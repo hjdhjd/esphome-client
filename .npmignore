@@ -6,3 +6,15 @@
 !README.md
 !dist/**
 !package.json
+!src/**/*.ts
+
+# Ship the source alongside dist so the emitted declaration maps (.d.ts.map) and source maps (.js.map) resolve to readable TypeScript - "go to definition" and
+# debugger step-into land on the real source rather than on generated output. The allow rule names TypeScript specifically, because TypeScript is the only thing a
+# shipped map can point at, so whatever else lands under src stays out by construction rather than by a rule someone has to remember to add. The dev-only source
+# shapes the build keeps out of dist are then re-ignored below, mirroring tsconfig.build.json's exclusions. `npm run lint:pack` is the arbiter of the result.
+src/**/*.fixtures.ts
+src/**/*.helpers.ts
+src/**/*.test.ts
+src/**/*.types.test.ts
+src/**/*.types.ts
+src/internal/**

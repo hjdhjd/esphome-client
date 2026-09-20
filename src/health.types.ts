@@ -50,7 +50,7 @@ type DownStateIsSocketDown = Assert<Extends<DownConnectionHealth["state"], typeo
  * A valid live record: carries the connect epoch and a socket-up state. The directive-free construction must compile, pinning the positive case alongside the negative
  * ones below (a regression that made `connectedAtMs` accidentally forbidden everywhere would break this).
  */
-const validLive: LiveConnectionHealth = {
+const _validLive: LiveConnectionHealth = {
 
   connectedAtMs: 1000,
   consecutiveStalls: 0,
@@ -62,7 +62,7 @@ const validLive: LiveConnectionHealth = {
 /**
  * A valid down record: no connect epoch, `encrypted: false`, a socket-down state. The directive-free construction must compile.
  */
-const validDown: DownConnectionHealth = {
+const _validDown: DownConnectionHealth = {
 
   consecutiveStalls: 0,
   encrypted: false,
@@ -74,7 +74,7 @@ const validDown: DownConnectionHealth = {
  * Illegal: a down record may NOT carry `connectedAtMs`. The `?: never` on {@link DownConnectionHealth} makes the connect epoch unrepresentable on a down record, so the
  * object literal fails the excess-property / never-assignability check. Removing the directive turns this construction into a real typecheck error.
  */
-const downWithEpoch: DownConnectionHealth = {
+const _downWithEpoch: DownConnectionHealth = {
 
   // @ts-expect-error - connectedAtMs is forbidden on a down record by `connectedAtMs?: never`; a stale connect epoch can never leak onto a down record.
   connectedAtMs: 1000,
@@ -88,7 +88,7 @@ const downWithEpoch: DownConnectionHealth = {
  * Illegal: a down record may NOT be on an encrypted wire. {@link DownConnectionHealth} narrows `encrypted` to the literal `false`, so `encrypted: true` is not
  * assignable.
  */
-const downEncrypted: DownConnectionHealth = {
+const _downEncrypted: DownConnectionHealth = {
 
   consecutiveStalls: 0,
   // @ts-expect-error - encrypted is narrowed to the literal `false` on a down record; a disconnected/reconnecting record is never on an encrypted wire.
@@ -101,7 +101,7 @@ const downEncrypted: DownConnectionHealth = {
  * Illegal: a live record REQUIRES `connectedAtMs`. Omitting it leaves the required property unsatisfied, so the construction fails to compile.
  */
 // @ts-expect-error - connectedAtMs is required on a live record; omitting it leaves the live variant's epoch SSOT unsatisfied.
-const liveMissingEpoch: LiveConnectionHealth = {
+const _liveMissingEpoch: LiveConnectionHealth = {
 
   consecutiveStalls: 0,
   encrypted: true,
@@ -114,24 +114,21 @@ const liveMissingEpoch: LiveConnectionHealth = {
  * `number | undefined` (the down variant's `connectedAtMs?: never` collapses to `undefined` in the union), so assigning the un-narrowed read to a `number` fails - the
  * epoch is not safely usable until {@link isConnectionLive} narrows the union. After narrowing, the read is a plain `number` and assigns cleanly.
  */
-function epochAccessRequiresNarrowing(health: ConnectionHealth): void {
+function _epochAccessRequiresNarrowing(health: ConnectionHealth): void {
 
   // @ts-expect-error - on the un-narrowed union connectedAtMs is `number | undefined`; assigning it to a `number` fails because the down variant cannot supply the epoch.
-  const unguarded: number = health.connectedAtMs;
-
-  void unguarded;
+  const _unguarded: number = health.connectedAtMs;
 
   if(isConnectionLive(health)) {
 
     // After narrowing to the live variant, the epoch is a plain `number` and reads cleanly.
-    const epoch: number = health.connectedAtMs;
-
-    void epoch;
+    const _epoch: number = health.connectedAtMs;
   }
 }
 
-// Export every sentinel-assertion type alias and reference the typecheck-only constants and function so neither the unused-locals lint nor any future tree-shaking
-// optimization elides them. None of these are consumed at runtime; their value is purely the compile-time validation they trigger.
+// Every sentinel-assertion type alias is exported so the module carries its rules as a surface a reader can find. The typecheck-only constants and the function above
+// take the leading underscore that the unused-variable lint reads as "declared for its compile-time effect alone", which is what keeps them from being reported while
+// their declarations still trigger the checks. None of them are consumed at runtime; their value is purely the compile-time validation they produce.
 export type {
 
   DownExtendsUnion,
@@ -139,10 +136,3 @@ export type {
   LiveExtendsUnion,
   LiveStateIsSocketUp
 };
-
-void downEncrypted;
-void downWithEpoch;
-void epochAccessRequiresNarrowing;
-void liveMissingEpoch;
-void validDown;
-void validLive;

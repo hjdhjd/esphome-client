@@ -6,6 +6,7 @@
 import type {
   BluetoothGATTService,
   BluetoothLERawAdvertisement,
+  BluetoothProxyApi,
   BluetoothScannerStateData,
   ConnectionParams,
   ConnectionStateData,
@@ -14,7 +15,6 @@ import type {
 } from "./bluetooth-proxy.ts";
 import { BluetoothScannerMode, BluetoothScannerState } from "./api-constants.ts";
 import { describe, test } from "node:test";
-import type { BluetoothProxyApi } from "./bluetooth-proxy.ts";
 import { Buffer } from "node:buffer";
 import { EspHomeClient } from "./esphome-client.ts";
 import assert from "node:assert/strict";
@@ -38,9 +38,7 @@ describe("BluetoothProxyApi - public-surface narrowing", () => {
   test("client.bluetooth.advertisements() returns AsyncIterable<BluetoothLERawAdvertisement>", () => {
 
     const client = new EspHomeClient({ host: "localhost" });
-    const iterable: AsyncIterable<BluetoothLERawAdvertisement> = client.bluetooth.advertisements();
-
-    void iterable;
+    const _iterable: AsyncIterable<BluetoothLERawAdvertisement> = client.bluetooth.advertisements();
 
     client.disconnect();
   });
@@ -48,9 +46,7 @@ describe("BluetoothProxyApi - public-surface narrowing", () => {
   test("client.bluetooth.scannerState() returns AsyncIterable<BluetoothScannerStateData>", () => {
 
     const client = new EspHomeClient({ host: "localhost" });
-    const iterable: AsyncIterable<BluetoothScannerStateData> = client.bluetooth.scannerState();
-
-    void iterable;
+    const _iterable: AsyncIterable<BluetoothScannerStateData> = client.bluetooth.scannerState();
 
     client.disconnect();
   });
@@ -93,8 +89,6 @@ describe("BluetoothLERawAdvertisement.address is bigint (not number)", () => {
 
     // @ts-expect-error - address requires bigint; a plain number is not assignable.
     const _wrongType: BluetoothLERawAdvertisement = { address: 0x123, addressType: 0, data: Buffer.alloc(0), rssi: 0 };
-
-    void _wrongType;
   });
 });
 
@@ -123,12 +117,9 @@ describe("ClientEventsMap - bluetoothAdvertisement and bluetoothScannerState typ
   test("client.on(\"bluetoothAdvertisement\", cb) types the callback parameter as BluetoothLERawAdvertisement", () => {
 
     const client = new EspHomeClient({ host: "localhost" });
-    let seen: BluetoothLERawAdvertisement | null = null;
+    let _seen: BluetoothLERawAdvertisement | null = null;
 
-    using sub = client.on("bluetoothAdvertisement", (ad): void => { seen = ad; });
-
-    void seen;
-    void sub;
+    using sub = client.on("bluetoothAdvertisement", (ad): void => { _seen = ad; });
 
     client.disconnect();
   });
@@ -136,12 +127,9 @@ describe("ClientEventsMap - bluetoothAdvertisement and bluetoothScannerState typ
   test("client.on(\"bluetoothScannerState\", cb) types the callback parameter as BluetoothScannerStateData", () => {
 
     const client = new EspHomeClient({ host: "localhost" });
-    let seen: BluetoothScannerStateData | null = null;
+    let _seen: BluetoothScannerStateData | null = null;
 
-    using sub = client.on("bluetoothScannerState", (state): void => { seen = state; });
-
-    void seen;
-    void sub;
+    using sub = client.on("bluetoothScannerState", (state): void => { _seen = state; });
 
     client.disconnect();
   });
@@ -162,8 +150,6 @@ describe("BluetoothScannerStateData - field types", () => {
 
     // @ts-expect-error - the state field rejects arbitrary numbers; only BluetoothScannerState members are assignable.
     const _wrongState: BluetoothScannerStateData = { configuredMode: 0, mode: 0, state: 99 };
-
-    void _wrongState;
   });
 });
 
@@ -270,9 +256,7 @@ describe("BluetoothProxyApi - GATT method argument typing", () => {
   test("notify returns AsyncIterable<NotifyDataChunk>", () => {
 
     const client = new EspHomeClient({ host: "localhost" });
-    const stream: AsyncIterable<NotifyDataChunk> = client.bluetooth.notify(0xaan, 0x2a);
-
-    void stream;
+    const _stream: AsyncIterable<NotifyDataChunk> = client.bluetooth.notify(0xaan, 0x2a);
 
     client.disconnect();
   });
@@ -280,9 +264,7 @@ describe("BluetoothProxyApi - GATT method argument typing", () => {
   test("connectionsFree returns AsyncIterable<ConnectionsFreeData>", () => {
 
     const client = new EspHomeClient({ host: "localhost" });
-    const stream: AsyncIterable<ConnectionsFreeData> = client.bluetooth.connectionsFree();
-
-    void stream;
+    const _stream: AsyncIterable<ConnectionsFreeData> = client.bluetooth.connectionsFree();
 
     client.disconnect();
   });
@@ -290,9 +272,7 @@ describe("BluetoothProxyApi - GATT method argument typing", () => {
   test("connectionStates returns AsyncIterable<ConnectionStateData>", () => {
 
     const client = new EspHomeClient({ host: "localhost" });
-    const stream: AsyncIterable<ConnectionStateData> = client.bluetooth.connectionStates();
-
-    void stream;
+    const _stream: AsyncIterable<ConnectionStateData> = client.bluetooth.connectionStates();
 
     client.disconnect();
   });
@@ -325,12 +305,9 @@ describe("ClientEventsMap - new GATT event payloads", () => {
   test("client.on(\"bluetoothConnectionState\", cb) types the callback as ConnectionStateData", () => {
 
     const client = new EspHomeClient({ host: "localhost" });
-    let seen: ConnectionStateData | null = null;
+    let _seen: ConnectionStateData | null = null;
 
-    using sub = client.on("bluetoothConnectionState", (state): void => { seen = state; });
-
-    void seen;
-    void sub;
+    using sub = client.on("bluetoothConnectionState", (state): void => { _seen = state; });
 
     client.disconnect();
   });
@@ -338,12 +315,9 @@ describe("ClientEventsMap - new GATT event payloads", () => {
   test("client.on(\"bluetoothNotifyData\", cb) types the callback as NotifyDataChunk", () => {
 
     const client = new EspHomeClient({ host: "localhost" });
-    let seen: NotifyDataChunk | null = null;
+    let _seen: NotifyDataChunk | null = null;
 
-    using sub = client.on("bluetoothNotifyData", (chunk): void => { seen = chunk; });
-
-    void seen;
-    void sub;
+    using sub = client.on("bluetoothNotifyData", (chunk): void => { _seen = chunk; });
 
     client.disconnect();
   });
@@ -351,12 +325,9 @@ describe("ClientEventsMap - new GATT event payloads", () => {
   test("client.on(\"bluetoothConnectionsFree\", cb) types the callback as ConnectionsFreeData", () => {
 
     const client = new EspHomeClient({ host: "localhost" });
-    let seen: ConnectionsFreeData | null = null;
+    let _seen: ConnectionsFreeData | null = null;
 
-    using sub = client.on("bluetoothConnectionsFree", (data): void => { seen = data; });
-
-    void seen;
-    void sub;
+    using sub = client.on("bluetoothConnectionsFree", (data): void => { _seen = data; });
 
     client.disconnect();
   });
@@ -372,8 +343,6 @@ describe("ConnectionStateData and NotifyDataChunk - field types", () => {
 
     // @ts-expect-error - address requires bigint.
     const _wrong: ConnectionStateData = { address: 0xaa, connected: true, error: 0, mtu: 23 };
-
-    void _wrong;
   });
 
   test("NotifyDataChunk has bigint address, number handle, Buffer data", () => {

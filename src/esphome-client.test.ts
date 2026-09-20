@@ -5,7 +5,7 @@
  * byte-level wire fixtures that double as the protocol reference for the connect path.
  */
 import type {
-  AlarmControlPanelEvent, ClimateEvent, CoverEvent, DateEvent, DateTimeEvent, EntitySchema, EntityType, EventEntityEvent, FanEvent, LightEvent, LockEvent,
+  AlarmControlPanelEvent, ClimateEvent, CoverEvent, DateEvent, DateTimeEvent, Entity, EntitySchema, EntityType, EventEntityEvent, FanEvent, LightEvent, LockEvent,
   MediaPlayerEvent, NumberEvent, SelectEvent, SensorEvent, SirenEvent, SwitchEvent, TextEvent, TextSensorEvent, TimeEvent, UpdateEvent, ValveEvent, WaterHeaterEvent
 } from "./schemas/index.ts";
 import {
@@ -21,7 +21,6 @@ import { Buffer } from "node:buffer";
 import type { ClientCapabilities } from "./capabilities.ts";
 import type { ClockFn } from "./heartbeat.ts";
 import type { DeviceInfo } from "./esphome-client.ts";
-import type { Entity } from "./schemas/index.ts";
 import { MessageType } from "./protocol/message-types.ts";
 import { MockTransport } from "./testing/mock-transport.ts";
 import type { ProtoField } from "./protocol/codec.ts";

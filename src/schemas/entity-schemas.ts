@@ -122,6 +122,16 @@ export interface CommandPackedBitsField {
 }
 
 /**
+ * The record a schema role's `packedBitsFields` slot carries: one entry per packed wire field, keyed by that field's schema name. Inbound (state, listEntities) roles
+ * supply {@link InboundPackedBitsField} entries and command roles supply {@link CommandPackedBitsField} entries, so the union covers every role. The
+ * `PackedBitNamesOf` and `ApplyPackedBitsFields` projections in `derived.ts` take this as their parameter constraint, and the `infer` at each of their call sites
+ * narrows to it.
+ *
+ * @internal
+ */
+export type PackedBitsRecord = Record<string, InboundPackedBitsField | CommandPackedBitsField>;
+
+/**
  * Defines the command message structure for an entity type.
  *
  * @remarks Three encoding pathways coexist on the same schema, picked per entity type:

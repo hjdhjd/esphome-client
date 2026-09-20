@@ -23,7 +23,7 @@ import { createRecordingMock } from "./recording-mock.ts";
  * Positive case: inline-literal construction with valid keys succeeds. Pinning the positive case alongside the negative cases below catches "we accidentally made
  * the type uninstantiable" regressions - the directive-free construction must compile.
  */
-const validInlineLiteral = createRecordingMock(BluetoothProxyApi, {
+const _validInlineLiteral = createRecordingMock(BluetoothProxyApi, {
 
   available:   false,
   isConnected: () => false
@@ -34,7 +34,7 @@ const validInlineLiteral = createRecordingMock(BluetoothProxyApi, {
  * If a future refactor loosens `MockDefaults<T>` so unknown keys slip through, the `@ts-expect-error` directive becomes unused and this file fails to typecheck
  * with "Unused @ts-expect-error directive."
  */
-const invalidInlineLiteral = createRecordingMock(BluetoothProxyApi, {
+const _invalidInlineLiteral = createRecordingMock(BluetoothProxyApi, {
 
   // @ts-expect-error - typo (`availabel` instead of `available`) must be caught at compile time.
   availabel: false
@@ -44,7 +44,7 @@ const invalidInlineLiteral = createRecordingMock(BluetoothProxyApi, {
  * Reference-passed excess-property rule: variables annotated as `MockDefaults<T>` engage the same excess-property check that inline literals get. Pinning the
  * annotated-reference path verifies the doc claim in `MockDefaults<T>` that "the annotation re-engages the strict check at the variable's declaration site."
  */
-const annotatedRejectsTypo: MockDefaults<BluetoothProxyApi> = {
+const _annotatedRejectsTypo: MockDefaults<BluetoothProxyApi> = {
 
   // @ts-expect-error - typo caught at the variable declaration site because MockDefaults<T> constrains keys to `keyof T`. The deliberately-misspelled key happens
   // to sort alphabetically before `available` ("availabel" < "available"), so the natural ordering also places the directive adjacent to the bad line.
@@ -53,8 +53,6 @@ const annotatedRejectsTypo: MockDefaults<BluetoothProxyApi> = {
   isConnected: () => false
 };
 
-// Reference each typecheck-only constant so neither the unused-locals lint nor any future tree-shaking optimization elides them. None are consumed at runtime; their
-// value is purely the compile-time validation they trigger.
-void annotatedRejectsTypo;
-void invalidInlineLiteral;
-void validInlineLiteral;
+// Each typecheck-only constant above takes the leading underscore that the unused-variable lint reads as "declared for its compile-time effect alone", which is what
+// keeps them from being reported while their declarations still trigger the excess-property checks. None are consumed at runtime; their value is purely the
+// compile-time validation they produce.

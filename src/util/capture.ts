@@ -18,15 +18,14 @@
  *
  * @module util/capture
  */
+import type { EspHomeLogging, Nullable } from "../types.ts";
 import type { InboundMessage, TransportLike, TransportOpenOptions } from "../transport.ts";
 import { ProtocolByte, Transport } from "../transport.ts";
 import { encodeVarint, readVarint } from "../protocol/codec.ts";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import type { DeviceInfo } from "../esphome-client.ts";
-import type { EspHomeLogging } from "../types.ts";
 import { MessageType } from "../protocol/message-types.ts";
 import { MockTransport } from "../testing/mock-transport.ts";
-import type { Nullable } from "../types.ts";
 import { STATE_MESSAGE_TYPES } from "../run-phase-handlers.ts";
 import { setTimeout as delay } from "node:timers/promises";
 import { dirname } from "node:path";

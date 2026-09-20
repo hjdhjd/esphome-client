@@ -17,7 +17,7 @@
  *
  * @module schemas/derived
  */
-import type { BitmaskField, CommandPackedBitsField, ENTITY_SCHEMAS, EntitySchema, FieldSpec, HasPatternField, InboundPackedBitsField, RepeatedFieldSpec,
+import type { BitmaskField, ENTITY_SCHEMAS, EntitySchema, FieldSpec, HasPatternField, PackedBitsRecord, RepeatedFieldSpec,
   RepeatedMessageFieldSpec } from "./entity-schemas.ts";
 import type { CommandOverrides, EntityOverrides, EventOverrides } from "./overrides.ts";
 
@@ -130,17 +130,19 @@ export type RepeatedMessageRecordFor<F extends RepeatedMessageFieldSpec> =
  *
  * Given `{ featureFlags: { bits: { a: ..., b: ... } }, state: { bits: { c: ... } } }`, produces `"a" | "b" | "c"`.
  *
+ * The record shape sits on the type parameter rather than only inside the body, so the projection has a concrete key source at this declaration and not merely at each
+ * instantiation. The body's own conditional is what distributes the projection across a union of records.
+ *
  * @internal
  */
-export type PackedBitNamesOf<P> =
-  P extends Record<string, InboundPackedBitsField | CommandPackedBitsField> ?
+export type PackedBitNamesOf<P extends PackedBitsRecord> =
+  P extends PackedBitsRecord ?
     { [K in keyof P]: P[K] extends { bits: infer B } ? keyof B : never }[keyof P] :
     never;
 
 /**
- * Project a schema's packed-bits record (`packedBitsFields: Record<string, InboundPackedBitsField | CommandPackedBitsField>`) into a TypeScript shape. The
- * packed-field NAME itself never surfaces - each named bit inside `bits` becomes an optional `boolean` on the wire shape, flattened across every packed field's
- * bits. State / listEntities consumers read
+ * Project a schema's packed-bits record (`packedBitsFields: PackedBitsRecord`) into a TypeScript shape. The packed-field NAME itself never surfaces - each named bit
+ * inside `bits` becomes an optional `boolean` on the wire shape, flattened across every packed field's bits. State / listEntities consumers read
  * `entity.supportsAction: boolean`; command consumers write `client.command(id, { supportsAction: true })`. The packed `featureFlags: number` (or analogous wire
  * field) is invisible to consumers.
  *
@@ -150,7 +152,7 @@ export type PackedBitNamesOf<P> =
  *
  * @internal
  */
-export type ApplyPackedBitsFields<P> =
+export type ApplyPackedBitsFields<P extends PackedBitsRecord> =
   PackedBitNamesOf<P> extends never ? unknown :
     PackedBitNamesOf<P> extends string ? Partial<Record<PackedBitNamesOf<P>, boolean>> :
       unknown;
@@ -194,7 +196,7 @@ export type WireStateEventFor<S extends EntitySchema> = {
   key: number;
   type: S["type"];
 } & ApplyEnumMappingToFields<S["state"]["fields"], EnumMappingOf<S["state"]>> &
-  (S["state"] extends { packedBitsFields: infer P } ? ApplyPackedBitsFields<P> : unknown);
+  (S["state"] extends { packedBitsFields: infer P extends PackedBitsRecord } ? ApplyPackedBitsFields<P> : unknown);
 
 /**
  * Wire shape of a list-entities message for the given schema. Strictly derived from `S["listEntities"].fields` plus `repeatedFields` plus the base discovery fields
@@ -221,7 +223,7 @@ export type WireEntityFor<S extends EntitySchema> = {
   (S["listEntities"] extends { repeatedMessageFields: infer M } ?
     ApplyRepeatedMessageFields<M> :
     unknown) &
-  (S["listEntities"] extends { packedBitsFields: infer P } ?
+  (S["listEntities"] extends { packedBitsFields: infer P extends PackedBitsRecord } ?
     ApplyPackedBitsFields<P> :
     unknown);
 
@@ -246,13 +248,13 @@ export type WireCommandFor<S extends EntitySchema> =
         (S["command"] extends { bitmaskFields: infer BM } ?
           (BM extends Record<string, BitmaskField> ?
             { [K in keyof BM as K extends keyof EM ? never : K]?: WireBitmaskFieldOutput<BM[K] & BitmaskField> } : unknown) : unknown) &
-        (S["command"] extends { packedBitsFields: infer P } ? ApplyPackedBitsFields<P> : unknown) &
+        (S["command"] extends { packedBitsFields: infer P extends PackedBitsRecord } ? ApplyPackedBitsFields<P> : unknown) &
         { [K in keyof EM]?: keyof EM[K] | number } :
       (F extends Record<string, FieldSpec> ? { [K in keyof F]?: WireFieldOutput<F[K] & FieldSpec> } : unknown) &
         (HP extends Record<string, HasPatternField> ? { [K in keyof HP]?: WireHasPatternFieldOutput<HP[K] & HasPatternField> } : unknown) &
         (S["command"] extends { bitmaskFields: infer BM } ?
           (BM extends Record<string, BitmaskField> ? { [K in keyof BM]?: WireBitmaskFieldOutput<BM[K] & BitmaskField> } : unknown) : unknown) &
-        (S["command"] extends { packedBitsFields: infer P } ? ApplyPackedBitsFields<P> : unknown)) :
+        (S["command"] extends { packedBitsFields: infer P extends PackedBitsRecord } ? ApplyPackedBitsFields<P> : unknown)) :
     unknown;
 
 /**

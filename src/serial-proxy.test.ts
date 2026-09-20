@@ -902,7 +902,6 @@ runReissuableSubscriptionContract<SerialProxyApi>({
   }
 });
 
-// Reference the SerialProxyFlushResult type so the test file's symbol table records the contract; assertions above check the runtime shape.
+// A construction site for SerialProxyFlushResult, so the file states the type's shape alongside the assertions above that check the runtime shape. The leading
+// underscore marks the binding as declared for its compile-time effect alone.
 const _flushResultShape: SerialProxyFlushResult = { instance: 0, status: SerialProxyStatus.OK, type: SerialProxyRequestType.FLUSH };
-
-void _flushResultShape;

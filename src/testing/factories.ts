@@ -13,9 +13,8 @@
  *
  * @module testing/factories
  */
-import type { CommandFor, Entity, EntityFor, EntityType, StateEventFor } from "../schemas/index.ts";
+import type { CommandFor, ENTITY_SCHEMAS, Entity, EntityFor, EntityType, StateEventFor } from "../schemas/index.ts";
 import type { DeviceInfo } from "../esphome-client.ts";
-import type { ENTITY_SCHEMAS } from "../schemas/index.ts";
 import type { EntityId } from "../entity-id.ts";
 import { HealthState } from "../health.ts";
 import type { LiveConnectionHealth } from "../health.ts";

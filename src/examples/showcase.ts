@@ -25,17 +25,15 @@ import { BackpressureError, BufferOverflowError, CameraStreamClosedError, Config
   ConnectionTimeoutError, EncryptionKeyInvalidError, EncryptionKeyMissingError, EncryptionRequiredError, EspHomeError, FrameTooLargeError, HandshakeError,
   HeartbeatStalledError, NegotiationFailedError, NoiseHandshakeError, NoiseHandshakeTimeoutError, PeerClosedDuringNoiseError, PermanentError,
   PlaintextHandshakeError, ProtocolError } from "../errors.ts";
-import { BluetoothScannerMode, BluetoothScannerState } from "../api-constants.ts";
-import type { Entity, TelemetryEvent } from "../schemas/index.ts";
+import { BluetoothScannerMode, BluetoothScannerState, VoiceAssistantEvent, VoiceAssistantSubscribeFlag } from "../api-constants.ts";
+import type { Entity, ExtraSchemaSet, TelemetryEvent } from "../schemas/index.ts";
 import type { EspHomeLogging, Nullable } from "../types.ts";
-import { VoiceAssistantEvent, VoiceAssistantSubscribeFlag } from "../api-constants.ts";
 import { aliasOf, extending } from "../schemas/index.ts";
 import { createESPHomeHandshake, createHandshake } from "../crypto-noise.ts";
 import { entityId, isEntityId, parseEntityId } from "../entity-id.ts";
 import { mockDeviceInfo, mockEntityDiscovery, mockHealth, mockStateMessage } from "../testing/factories.ts";
 import { Buffer } from "node:buffer";
 import type { EntityId } from "../entity-id.ts";
-import type { ExtraSchemaSet } from "../schemas/index.ts";
 import { MockClient } from "../testing/mock-client.ts";
 import { MockTransport } from "../testing/mock-transport.ts";
 import type { ReadableStream } from "node:stream/web";
@@ -44,6 +42,19 @@ import { connectionUptimeMs } from "../health.ts";
 import { setTimeout as delay } from "node:timers/promises";
 import { randomBytes } from "node:crypto";
 import { withReconnect } from "../reconnect.ts";
+
+/* Every example below reports the values it demonstrates through this logger, which satisfies the library's own `EspHomeLogging` contract. A consumer
+ * substitutes the logger it already holds - a Homebridge plugin's `log`, a pino instance wrapped to the same levels - and the example code reads exactly as
+ * written. The methods discard their arguments because this file is compiled for type-checking and never executed; the declaration sits outside every
+ * `// #region` block so it never renders inside a published snippet.
+ */
+const log: EspHomeLogging = {
+
+  debug: (): void => undefined,
+  error: (): void => undefined,
+  info: (): void => undefined,
+  warn: (): void => undefined
+};
 
 /**
  * Construct a client via the async factory and bind it to an `await using` scope so the transport tears down automatically on scope exit. The factory applies
@@ -60,7 +71,6 @@ export async function openAndDisposeExample(): Promise<void> {
 
   // The async-dispose path sends DISCONNECT_REQUEST and awaits the matching response; if the server doesn't respond within `gracefulDisconnectTimeoutMs` (default
   // 1000ms), the client falls through to immediate teardown.
-  void client;
 }
 // #endregion open-and-dispose
 
@@ -81,12 +91,10 @@ export async function manualConstructionExample(): Promise<EspHomeClient> {
   // Subscriptions installed before connect() fire on the discovery handshake too.
   using deviceSub = client.on("deviceInfo", (info) => {
 
-    void info.name;
+    log.info("The device identified itself.", info.name);
   });
 
   await client.connect({ signal: AbortSignal.timeout(15000) });
-
-  void deviceSub;
 
   return client;
 }
@@ -110,7 +118,7 @@ export async function connectionWithNoiseExample(): Promise<void> {
   // reconnect, so the consumer is responsible for updating any persisted configuration.
   const rotated = await client.setNoiseEncryptionKey(process.env["ESPHOME_NEW_PSK"] ?? "", { signal: AbortSignal.timeout(10000) });
 
-  void rotated;
+  log.info("The device accepted the rotated pre-shared key.", rotated);
 }
 // #endregion connection-with-noise
 
@@ -147,7 +155,7 @@ export async function withReconnectExample(client: EspHomeClient): Promise<void>
 
     for await (const audio of client.voiceAssistant.audio({ signal })) {
 
-      void audio;
+      log.debug("Received a voice-assistant audio chunk.", audio);
     }
   }, { signal: AbortSignal.timeout(60000) });
 }
@@ -170,16 +178,13 @@ export async function reconnectWithPermanentErrorExample(): Promise<void> {
       maxDelayMs: 30000,
       onAttempt: (attempt, delayMs): void => {
 
-        void attempt;
-        void delayMs;
+        log.info("Scheduling a reconnect attempt.", attempt, delayMs);
       },
 
       // Default predicate: skip permanent errors. Layer additional filtering by calling the default first, then your own check.
       shouldRetry: (error, attempts): boolean => !(error instanceof PermanentError) && (attempts < 50)
     }
   });
-
-  void client;
 }
 // #endregion reconnect-with-permanent-error
 
@@ -200,13 +205,13 @@ export async function lifecycleAndHealthExample(client: EspHomeClient): Promise<
 
         case "connect":
 
-          void event.encrypted;
+          log.info("The client connected to the device.", event.encrypted);
 
           break;
 
         case "disconnect":
 
-          void event.cause;
+          log.warn("The client lost its connection to the device.", event.cause);
 
           break;
       }
@@ -228,16 +233,14 @@ export async function healthStreamExample(client: EspHomeClient): Promise<void> 
 
     if(health.state === "stalled") {
 
-      void health.consecutiveStalls;
+      log.warn("The connection has stalled.", health.consecutiveStalls);
     }
   });
-
-  void sub;
 
   // Stream rail: same data, async-iterable shape for `for await` consumption.
   for await (const health of client.healthStream({ signal: AbortSignal.timeout(30000) })) {
 
-    void health.lastPingRttMs;
+    log.debug("Received a health update.", health.lastPingRttMs);
 
     // Uptime is derived from the snapshot via the free helper, which reads `connectedAtMs` while the socket is up (connected or stalled) and returns 0 while it is down.
     void connectionUptimeMs(health);
@@ -384,7 +387,7 @@ export async function discoveryWalkthroughExample(client: EspHomeClient): Promis
   // Wait for the next discovery batch. After connect() resolves, the `entities` event has typically already fired; on subsequent reconnects, the event re-fires.
   const entities = await client.once("entities", { signal: AbortSignal.timeout(10000) });
 
-  void entities.length;
+  log.info("Discovery reported the device's entities.", entities.length);
 
   // Group-by-type snapshot keyed by entity type, useful for menu construction.
   const grouped = client.getAvailableEntityIds();
@@ -396,7 +399,7 @@ export async function discoveryWalkthroughExample(client: EspHomeClient): Promis
 
     if(entity?.type === "light") {
 
-      void entity.effects;
+      log.info("The light advertises the effects it supports.", entity.effects);
     }
   }
 }
@@ -413,7 +416,7 @@ export function entityKeyResolutionExample(client: EspHomeClient, lightId: Entit
 
   if(key !== null) {
 
-    void key;
+    log.debug("Resolved the branded id to its protocol key.", key);
   }
 }
 // #endregion entity-key-resolution
@@ -430,10 +433,7 @@ export function deviceInfoExample(client: EspHomeClient): void {
 
   if(info) {
 
-    void info.name;
-    void info.esphomeVersion;
-    void info.macAddress;
-    void info.apiEncryptionSupported;
+    log.info("Read the device's metadata.", info.name, info.esphomeVersion, info.macAddress, info.apiEncryptionSupported);
   }
 }
 // #endregion device-info
@@ -448,20 +448,18 @@ export function subDeviceEnumerationExample(client: EspHomeClient): void {
 
   for(const subDevice of client.subDevices()) {
 
-    void subDevice.id;
-    void subDevice.name;
-    void subDevice.areaId;
+    log.info("Discovered a sub-device.", subDevice.id, subDevice.name, subDevice.areaId);
 
     // Entities scoped to this sub-device. Single-device configurations report subDevices() as an empty array, so the loop body never runs.
     const entities = client.entitiesByDevice(subDevice.id);
 
-    void entities.length;
+    log.info("The sub-device owns entities.", entities.length);
   }
 
   // The parent ESP itself is device id 0 when sub-devices exist.
   const parentEntities = client.entitiesByDevice(0);
 
-  void parentEntities.length;
+  log.info("The parent ESP owns entities of its own.", parentEntities.length);
 }
 // #endregion sub-device-enumeration
 
@@ -477,8 +475,7 @@ export function latestStateLookupExample(client: EspHomeClient, lightId: EntityI
   if(latest?.state === true) {
 
     // The entity's last-known on/off state. brightness, colorTemperature, rgb fields are typed against the schema.
-    void latest.brightness;
-    void latest.effect;
+    log.info("The light is on.", latest.brightness, latest.effect);
   }
 }
 // #endregion latest-state-lookup
@@ -493,12 +490,12 @@ export function snapshotExample(client: EspHomeClient): void {
   // Full snapshot: every entity that has emitted at least one state event since the most recent connect.
   const all = client.snapshot();
 
-  void all.size;
+  log.info("The snapshot covers every entity that has reported state.", all.size);
 
   // Type-narrowed snapshot: only light entities, returned as a fresh `Map<EntityId<"light">, StateEventFor<typeof ENTITY_SCHEMAS["light"]>>`.
   const lights = client.snapshotFor("light");
 
-  void lights.size;
+  log.info("The light-only snapshot is a smaller view of the same data.", lights.size);
 }
 // #endregion snapshot
 
@@ -575,7 +572,7 @@ export async function commandAndAwaitExample(client: EspHomeClient): Promise<voi
 
   const result = await client.commandAndAwait(lampId, { brightness: 0.6, state: true });
 
-  void result.brightness;
+  log.info("The light confirmed the command.", result.brightness);
 }
 // #endregion command-and-await
 
@@ -658,12 +655,10 @@ export async function coverCommandExample(client: EspHomeClient): Promise<CoverE
 
         const _exhaustive: never = event.currentOperation;
 
-        void _exhaustive;
+        log.warn("The cover reported an operation this build does not recognize.", _exhaustive);
       }
     }
   });
-
-  void subscription;
 
   // Drive to half-open, then await the IDLE state event that signals motion completion. We compare against the named CoverOperation.IDLE constant rather than the raw
   // wire number so the predicate stays readable and survives future ESPHome wire-enum additions.
@@ -774,12 +769,10 @@ export async function mediaPlayerCommandExample(client: EspHomeClient): Promise<
 
         const _exhaustive: never = event.state;
 
-        void _exhaustive;
+        log.warn("The media player reported a state this build does not recognize.", _exhaustive);
       }
     }
   });
-
-  void subscription;
 
   // Play a URL at half volume.
   client.command(speaker, {
@@ -864,13 +857,10 @@ export async function lockCommandExample(client: EspHomeClient): Promise<LockEve
         // through whatever fallback the consumer prefers (typically logging the unknown numeric value for diagnosis).
         const _exhaustive: never = event.state;
 
-        void _exhaustive;
+        log.warn("The lock reported a state this build does not recognize.", _exhaustive);
       }
     }
   });
-
-  // Discard the Disposable explicitly so the type-checker stops complaining about an unused binding. The `using` keyword above does the real disposal at scope exit.
-  void subscription;
 
   // Unlock with a code, then await the next state event the device emits. We `await` here so the `using` subscription above stays installed across the round-trip; the
   // ESLint rule that enforces `return await` in a using-scope confirms this is the canonical shape.
@@ -963,8 +953,7 @@ export async function telemetryStreamExample(client: EspHomeClient): Promise<voi
 
   for await (const event of client.telemetry({ signal: AbortSignal.timeout(60000) })) {
 
-    void event.type;
-    void event.entity;
+    log.debug("Received a state event.", event.type, event.entity);
   }
 }
 // #endregion telemetry-stream
@@ -979,9 +968,7 @@ export async function telemetryStreamPerTypeExample(client: EspHomeClient): Prom
   for await (const event of client.telemetryFor("light", { signal: AbortSignal.timeout(60000) })) {
 
     // Each event is a LightEvent; the discriminated union narrowing happens at the channel boundary.
-    void event.brightness;
-    void event.effect;
-    void event.state;
+    log.debug("Received a light state event.", event.brightness, event.effect, event.state);
   }
 }
 // #endregion telemetry-stream-per-type
@@ -996,8 +983,7 @@ export async function telemetryStreamPerIdExample(client: EspHomeClient): Promis
 
   for await (const event of client.telemetryForId(sensor, { signal: AbortSignal.timeout(60000) })) {
 
-    void event.state;
-    void event.missingState;
+    log.debug("Received a reading from the temperature sensor.", event.state, event.missingState);
   }
 }
 // #endregion telemetry-stream-per-id
@@ -1012,7 +998,12 @@ export function webStreamsInteropExample(client: EspHomeClient): void {
   // Telemetry as a ReadableStream consumable by any Web Streams pipeline (compression, batching, fan-out via tee()).
   const stream: ReadableStream = client.telemetryReadable({ backpressure: "dropOldest", highWaterMark: 256 });
 
-  void stream;
+  // Drive the stream into a sink that handles each event as it arrives. The pipeTo promise is deliberately discarded because this example returns
+  // synchronously...a consumer that needs to observe the pipeline's completion or failure awaits it instead.
+  void stream.pipeTo(new WritableStream({
+
+    write: (event: TelemetryEvent): void => log.debug("Received a state event through the Web Streams pipeline.", event)
+  }));
 
   // Lifecycle, logs, voice-assistant audio, and per-camera images all expose matching readable adapters.
   void client.lifecycleReadable();
@@ -1031,7 +1022,7 @@ export async function backpressurePolicyExample(client: EspHomeClient): Promise<
   // Default: drop the oldest item under load. Optimized for "I want a recent sample, not the full backlog."
   for await (const event of client.telemetry({ backpressure: "dropOldest", highWaterMark: 64 })) {
 
-    void event;
+    log.debug("Received the freshest available state event.", event);
   }
 
   // Throw on overflow. Pair with a try/catch that responds to BackpressureError specifically.
@@ -1039,12 +1030,12 @@ export async function backpressurePolicyExample(client: EspHomeClient): Promise<
 
     for await (const event of client.telemetry({ backpressure: "throw", highWaterMark: 32 })) {
 
-      void event;
+      log.debug("Received a state event with no loss permitted.", event);
     }
 
   } catch(error) {
 
-    void error;
+    log.error("The telemetry stream overflowed before the consumer could drain it.", error);
   }
 }
 // #endregion backpressure-policy
@@ -1057,11 +1048,11 @@ export async function backpressurePolicyExample(client: EspHomeClient): Promise<
 // #region log-subscription
 export async function logSubscriptionExample(client: EspHomeClient): Promise<void> {
 
-  for await (const log of client.logs(LogLevel.DEBUG, { signal: AbortSignal.timeout(60000) })) {
+  for await (const entry of client.logs(LogLevel.DEBUG, { signal: AbortSignal.timeout(60000) })) {
 
-    if(log.level <= LogLevel.WARN) {
+    if(entry.level <= LogLevel.WARN) {
 
-      void log.message;
+      log.warn("The device reported a warning or worse.", entry.message);
     }
   }
 }
@@ -1121,7 +1112,7 @@ export async function errorClassEnumerationExample(): Promise<void> {
     if(error instanceof PeerClosedDuringNoiseError) {
 
       // Peer closed mid-handshake or sent a plaintext indicator byte.
-      void error.code;
+      log.error("The peer abandoned the noise handshake.", error.code);
 
       return;
     }
@@ -1129,7 +1120,7 @@ export async function errorClassEnumerationExample(): Promise<void> {
     if(error instanceof NoiseHandshakeError) {
 
       // Generic noise-protocol failure; inspect `code` for the specific cause.
-      void error.code;
+      log.error("The noise handshake failed.", error.code);
 
       return;
     }
@@ -1199,7 +1190,7 @@ export async function errorClassEnumerationExample(): Promise<void> {
     // Backpressure on a stream subscriber operating in `backpressure: "throw"` mode. Carries `dropped` for diagnostics.
     if(error instanceof BackpressureError) {
 
-      void error.dropped;
+      log.error("A stream subscriber fell behind and dropped events.", error.dropped);
 
       return;
     }
@@ -1208,8 +1199,7 @@ export async function errorClassEnumerationExample(): Promise<void> {
     // and the tagged `STREAM_CLOSED` code so a consumer awaiting multiple cameras can correlate which snapshot failed.
     if(error instanceof CameraStreamClosedError) {
 
-      void error.cameraId;
-      void error.code;
+      log.error("The camera stream closed before an image arrived.", error.cameraId, error.code);
 
       return;
     }
@@ -1294,7 +1284,7 @@ export async function permanentVsTransientExample(): Promise<void> {
       // eslint-disable-next-line no-await-in-loop
       const client = await openEspHomeClient({ host: "lab.local", psk: null });
 
-      void client;
+      log.info("The device accepted the connection.", client.isEncrypted);
 
       return;
 
@@ -1329,8 +1319,7 @@ export async function voiceAssistantExample(client: EspHomeClient): Promise<void
 
   for await (const audio of va.audio({ signal: AbortSignal.timeout(30000) })) {
 
-    void audio.data;
-    void audio.end;
+    log.debug("Received an audio chunk from the device.", audio.data, audio.end);
   }
 
   await va.announce({ text: "Doorbell rang" }, { timeoutMs: 5000 });
@@ -1357,8 +1346,7 @@ export async function voiceAssistantRespondExample(client: EspHomeClient): Promi
 
     for await (const chunk of va.audio({ signal: AbortSignal.timeout(60000) })) {
 
-      void chunk.data;
-      void chunk.end;
+      log.debug("Received an audio chunk from the device.", chunk.data, chunk.end);
     }
   })();
 
@@ -1397,8 +1385,7 @@ export async function voiceAssistantStreamingExample(client: EspHomeClient, gene
 
     for await (const chunk of va.audio({ signal: AbortSignal.timeout(60000) })) {
 
-      void chunk.data;
-      void chunk.end;
+      log.debug("Received an audio chunk bound for the speech-to-text pipeline.", chunk.data, chunk.end);
     }
   })();
 
@@ -1430,7 +1417,7 @@ export async function voiceAssistantAnnounceExample(client: EspHomeClient): Prom
     text: "Someone is at the front door"
   }, { signal: AbortSignal.timeout(8000) });
 
-  void success;
+  log.info("The device finished the announcement.", success);
 }
 // #endregion voice-assistant-announce
 
@@ -1465,9 +1452,7 @@ export async function voiceAssistantConfigurationExample(client: EspHomeClient):
 
   for(const wakeWord of config.availableWakeWords) {
 
-    void wakeWord.id;
-    void wakeWord.wakeWord;
-    void wakeWord.trainedLanguages;
+    log.info("The device offers a wake word.", wakeWord.id, wakeWord.wakeWord, wakeWord.trainedLanguages);
   }
 
   // Activate at most `maxActiveWakeWords` ids. An empty array clears all active wake words.
@@ -1498,8 +1483,7 @@ export async function cameraSnapshotExample(client: EspHomeClient): Promise<Null
     if(error instanceof CameraStreamClosedError) {
 
       // Transport disconnected mid-snapshot. The `code` tag is `STREAM_CLOSED`; `cameraId` names the failing camera for log correlation.
-      void error.code;
-      void error.cameraId;
+      log.error("The transport disconnected before the snapshot arrived.", error.code, error.cameraId);
 
       return null;
     }
@@ -1529,7 +1513,8 @@ export async function cameraStreamExample(client: EspHomeClient): Promise<void> 
 
   for await (const image of cam.stream({ signal: AbortSignal.timeout(30000) })) {
 
-    void image.byteLength;
+    log.debug("Received a camera frame.", image.byteLength);
+
     frameCount++;
 
     if(frameCount >= 30) {
@@ -1551,14 +1536,8 @@ export function homeAssistantServicesExample(client: EspHomeClient): void {
 
   using sub = client.on("homeassistantService", (event) => {
 
-    void event.service;
-    void event.data;
-    void event.dataTemplate;
-    void event.variables;
-    void event.isEvent;
+    log.info("The device called a Home Assistant action.", event.service, event.data, event.dataTemplate, event.variables, event.isEvent);
   });
-
-  void sub;
 }
 // #endregion home-assistant-services
 
@@ -1578,8 +1557,6 @@ export function homeAssistantStateBridgeExample(client: EspHomeClient, lookup: (
 
     client.homeAssistant.sendState(request.entityId, value, request.attribute);
   });
-
-  void sub;
 }
 // #endregion home-assistant-state-bridge
 
@@ -1594,9 +1571,7 @@ export function serviceExecutionExample(client: EspHomeClient): void {
   // Enumerate the discovered services.
   for(const service of client.services.list()) {
 
-    void service.key;
-    void service.name;
-    void service.args;
+    log.info("Discovered a user-defined service.", service.key, service.name, service.args);
   }
 
   // Argument shape mirrors the service definition - one of bool, int, float, string, or their array equivalents per slot.
@@ -1620,12 +1595,14 @@ export function serviceExecutionExample(client: EspHomeClient): void {
 // #region custom-logger-injection
 export async function customLoggerInjectionExample(): Promise<void> {
 
+  // The adapter is usually this thin: forward every level to the logging backend the consumer already owns, message first and the structured context
+  // parameters after it.
   const logger: EspHomeClientOptions["logger"] = {
 
-    debug: (message, ...args): void => { void message; void args; },
-    error: (message, ...args): void => { void message; void args; },
-    info: (message, ...args): void => { void message; void args; },
-    warn: (message, ...args): void => { void message; void args; }
+    debug: (message, ...parameters): void => log.debug(message, ...parameters),
+    error: (message, ...parameters): void => log.error(message, ...parameters),
+    info: (message, ...parameters): void => log.info(message, ...parameters),
+    warn: (message, ...parameters): void => log.warn(message, ...parameters)
   };
 
   await using client = await openEspHomeClient({
@@ -1634,8 +1611,6 @@ export async function customLoggerInjectionExample(): Promise<void> {
     logger,
     psk: null
   });
-
-  void client;
 }
 // #endregion custom-logger-injection
 
@@ -1660,7 +1635,7 @@ export function mockClientPatternExample(): void {
   // The recorded-command log captures every `command()` call for assertion.
   mock.command(entityId("switch", "front_door"), { state: true });
 
-  void mock.commands.length;
+  log.info("The mock recorded the commands the code under test sent.", mock.commands.length);
 }
 // #endregion mock-client-pattern
 
@@ -1675,11 +1650,9 @@ export function mockClientPatternExample(): void {
 // #region mock-transport-pattern
 export async function mockTransportPatternExample(): Promise<void> {
 
+  // Real tests stage the byte sequence the transport plays back during the handshake, synthesizing the hello / connect / discovery exchange with the helper
+  // exports from `esphome-client/testing`.
   const transport = new MockTransport();
-
-  // Stage the byte sequence the transport plays back during the handshake. Real tests use the helper exports from `esphome-client/testing` to synthesize the bytes
-  // for the hello/connect/discovery exchange.
-  void transport;
 
   await using client = await openEspHomeClient({
 
@@ -1687,8 +1660,6 @@ export async function mockTransportPatternExample(): Promise<void> {
     psk: null,
     transportFactory: (): MockTransport => transport
   });
-
-  void client;
 }
 // #endregion mock-transport-pattern
 
@@ -1705,10 +1676,7 @@ export function factoryPatternExample(): void {
   const info: DeviceInfo = mockDeviceInfo({ name: "fixture-device" });
   const health = mockHealth({ encrypted: true });
 
-  void event;
-  void entities;
-  void info;
-  void health;
+  log.info("Built the fixtures the scenario asserts against.", event, entities, info, health);
 }
 // #endregion factory-pattern
 
@@ -1760,21 +1728,19 @@ export async function telemetryEventNarrowingExample(client: EspHomeClient): Pro
 
       case "light":
 
-        void event.brightness;
-        void event.effect;
+        log.debug("A light changed state.", event.brightness, event.effect);
 
         break;
 
       case "climate":
 
-        void event.currentTemperature;
-        void event.mode;
+        log.debug("A thermostat changed state.", event.currentTemperature, event.mode);
 
         break;
 
       case "binary_sensor":
 
-        void event.state;
+        log.debug("A binary sensor changed state.", event.state);
 
         break;
 
@@ -1782,8 +1748,7 @@ export async function telemetryEventNarrowingExample(client: EspHomeClient): Pro
 
         // Camera state events surface the reassembled multi-packet image: `image` is the concatenated payload, `name` is the friendly entity name. The wire-level
         // chunk fields (`data`, `done`) are stripped by the EventOverrides table since consumers receive only the assembled result.
-        void event.image;
-        void event.name;
+        log.debug("A camera delivered an image.", event.image, event.name);
 
         break;
     }
@@ -1799,19 +1764,18 @@ export async function telemetryEventNarrowingExample(client: EspHomeClient): Pro
 export async function typedEventBusExample(client: EspHomeClient): Promise<void> {
 
   // Disposable callback. The `using` keyword removes the listener on scope exit.
-  using sub = client.on("deviceInfo", (info) => { void info.name; });
+  using sub = client.on("deviceInfo", (info) => log.info("The device identified itself.", info.name));
 
   // One-shot Promise. Resolves on the next emission; rejects on caller signal abort.
   const services = await client.once("services", { signal: AbortSignal.timeout(5000) });
 
+  log.info("Received the device's user-defined services.", services);
+
   // AsyncIterable stream with backpressure policy. Each call produces an independent subscription.
   for await (const event of client.stream("entities", { signal: AbortSignal.timeout(60000) })) {
 
-    void event.length;
+    log.info("Discovery re-ran and reported the device's entities.", event.length);
   }
-
-  void sub;
-  void services;
 }
 // #endregion typed-event-bus
 
@@ -1847,13 +1811,13 @@ export function cryptoNoiseHandshakeBasicExample(): void {
   const encrypted = initiatorSend.EncryptWithAd(Buffer.alloc(0), Buffer.from("Hello World"));
   const decrypted = responderReceive.DecryptWithAd(Buffer.alloc(0), encrypted);
 
-  void decrypted;
+  log.info("The responder recovered the initiator's plaintext.", decrypted);
 
   // The responder can reply through its sendCipher.
   const response = responderSend.EncryptWithAd(Buffer.alloc(0), Buffer.from("Hello back!"));
   const responseDecrypted = initiatorReceive.DecryptWithAd(Buffer.alloc(0), response);
 
-  void responseDecrypted;
+  log.info("The initiator recovered the responder's reply.", responseDecrypted);
 }
 // #endregion crypto-noise-handshake-basic
 
@@ -1870,7 +1834,7 @@ export function cryptoNoiseEsphomeConnectionExample(psk: Buffer): void {
   // First wire frame the client sends after the TCP connect: the ephemeral-key carrying handshake message.
   const clientHello = handshake.writeMessage();
 
-  void clientHello;
+  log.debug("The first handshake frame is ready for the transport to send.", clientHello);
 
   // The transport feeds the device's response back into readMessage; once isComplete becomes true, send/receive ciphers are ready for the API layer.
   // handshake.readMessage(deviceResponse);
@@ -1909,7 +1873,7 @@ export function cryptoNoiseAssociatedDataExample(): void {
   const encrypted = sendCipher.EncryptWithAd(sequenceNumber, Buffer.from("payload"));
   const decrypted = receiveCipher.DecryptWithAd(sequenceNumber, encrypted);
 
-  void decrypted;
+  log.info("The responder authenticated the sequence number and recovered the payload.", decrypted);
 }
 // #endregion crypto-noise-associated-data
 
@@ -1930,8 +1894,7 @@ export function cryptoNoiseErrorHandlingExample(psk: Buffer, incoming: Buffer): 
 
     if(error instanceof NoiseHandshakeError) {
 
-      void error.code;
-      void error.message;
+      log.error("The noise handshake rejected the incoming message.", error.code, error.message);
     }
 
     throw error;
@@ -1946,17 +1909,20 @@ export function cryptoNoiseErrorHandlingExample(psk: Buffer, incoming: Buffer): 
 // #region crypto-noise-with-logging
 export function cryptoNoiseWithLoggingExample(psk: Buffer): void {
 
+  // The adapter forwards every level to the logging backend the consumer already owns. The handshake calls it on each key exchange, hash update, and cipher
+  // transition, so a debug-enabled backend gets a step-by-step trace of the negotiation.
   const logger: EspHomeLogging = {
 
-    debug: (message): void => { void message; },
-    error: (message): void => { void message; },
-    info: (message): void => { void message; },
-    warn: (message): void => { void message; }
+    debug: (message, ...parameters): void => log.debug(message, ...parameters),
+    error: (message, ...parameters): void => log.error(message, ...parameters),
+    info: (message, ...parameters): void => log.info(message, ...parameters),
+    warn: (message, ...parameters): void => log.warn(message, ...parameters)
   };
 
   const handshake = createESPHomeHandshake({ logger, psk, role: "initiator" });
 
-  void handshake;
+  // The handshake reports incomplete until the device's response has been read back into it...the trace above narrates each step along the way.
+  log.debug("The traced handshake is ready to drive against the device socket.", handshake.isComplete);
 }
 // #endregion crypto-noise-with-logging
 
@@ -2002,7 +1968,7 @@ export async function infraredReceiveExample(client: EspHomeClient): Promise<voi
     // event.timings is the schema-typed `number[]` decoded from the packed sint32 wire payload.
     const samples = event.timings?.length ?? 0;
 
-    void samples;
+    log.info("The infrared receiver captured a pattern.", samples);
 
     break;
   }
@@ -2049,7 +2015,7 @@ export async function radioFrequencyReceiveExample(client: EspHomeClient): Promi
 
     const samples = event.timings?.length ?? 0;
 
-    void samples;
+    log.info("The radio-frequency receiver captured a pattern.", samples);
 
     break;
   }
@@ -2066,27 +2032,25 @@ export function serialListExample(client: EspHomeClient): void {
 
   for(const proxy of client.serial.list()) {
 
-    void proxy.name;
-
     switch(proxy.portType) {
 
       case SerialProxyPortType.TTL: {
 
-        void "ttl-only port; no modem-control pins to fuss with";
+        log.info("Discovered a TTL-only serial port, which carries no modem-control lines to manage.", proxy.name);
 
         break;
       }
 
       case SerialProxyPortType.RS232: {
 
-        void "rs232 - RTS / DTR available via setModemPins / getModemPins";
+        log.info("Discovered an RS232 serial port, whose RTS and DTR lines are reachable through setModemPins and getModemPins.", proxy.name);
 
         break;
       }
 
       case SerialProxyPortType.RS485: {
 
-        void "rs485 - half-duplex; manage the transceiver enable line as needed";
+        log.info("Discovered a half-duplex RS485 serial port, whose transceiver enable line the consumer drives itself.", proxy.name);
 
         break;
       }
@@ -2168,28 +2132,28 @@ export async function serialFlushExample(client: EspHomeClient): Promise<void> {
     case SerialProxyStatus.ASSUMED_SUCCESS: {
 
       // The device confirms the TX buffer drained successfully. Safe to issue the next write.
-      void "drained";
+      log.info("The device drained its serial transmit buffer.");
 
       break;
     }
 
     case SerialProxyStatus.ERROR: {
 
-      void result.errorMessage;
+      log.error("The device failed to drain its serial transmit buffer.", result.errorMessage);
 
       break;
     }
 
     case SerialProxyStatus.TIMEOUT: {
 
-      void "device-side drain timed out; retry or back off";
+      log.warn("The device-side drain timed out, so the caller retries or backs off.");
 
       break;
     }
 
     case SerialProxyStatus.NOT_SUPPORTED: {
 
-      void "this device cannot drain its TX buffer on demand; treat writes as best-effort";
+      log.warn("The device cannot drain its transmit buffer on demand, so writes are best-effort.");
 
       break;
     }
@@ -2211,7 +2175,7 @@ export async function serialModemPinsExample(client: EspHomeClient): Promise<voi
   const lineStates = await client.serial.getModemPins(0, { timeoutMs: 1000 });
   const dtrAsserted = (lineStates & SerialProxyLineStateFlags.DTR) !== 0;
 
-  void dtrAsserted;
+  log.debug("Read the modem-control lines back before dropping DTR.", dtrAsserted);
 
   client.serial.setModemPins(0, SerialProxyLineStateFlags.RTS);
 }
@@ -2228,12 +2192,12 @@ export function bluetoothAvailabilityExample(client: EspHomeClient): void {
   if(!client.bluetooth.available) {
 
     // The device does not expose a Bluetooth proxy. Surface a friendly capability gate instead of attempting an advertisement subscription that will yield nothing.
-    void "this device firmware does not include the Bluetooth proxy component";
+    log.warn("The device firmware does not include the Bluetooth proxy component.");
 
     return;
   }
 
-  void "Bluetooth proxy is available; we can subscribe to advertisements and set the scanner mode";
+  log.info("The Bluetooth proxy is available, so advertisement subscriptions and scanner-mode changes will reach the radio.");
 }
 // #endregion bluetooth-availability
 
@@ -2262,8 +2226,7 @@ export async function bluetoothAdvertisementsExample(client: EspHomeClient): Pro
 
     observations++;
 
-    void advertisement.rssi;
-    void advertisement.data;
+    log.debug("Observed the peripheral we are watching for.", advertisement.rssi, advertisement.data);
 
     if(observations >= 10) {
 
@@ -2304,7 +2267,7 @@ export async function bluetoothScannerStateExample(client: EspHomeClient): Promi
 
     if((state.mode === BluetoothScannerMode.ACTIVE) && (state.state === BluetoothScannerState.RUNNING)) {
 
-      void "scanner is now in active mode and running; safe to depend on scan-response data";
+      log.info("The scanner is running in active mode, so scan-response data is available.");
 
       break;
     }
@@ -2313,7 +2276,7 @@ export async function bluetoothScannerStateExample(client: EspHomeClient): Promi
   // Synchronous snapshot of the cached state without iterating; null if no push has been observed on the current connection.
   const snapshot = client.bluetooth.lastScannerState();
 
-  void snapshot;
+  log.debug("Read the cached scanner state.", snapshot);
 }
 // #endregion bluetooth-scanner-state
 
@@ -2330,7 +2293,7 @@ export async function bluetoothConnectExample(client: EspHomeClient): Promise<vo
   // Connect with the GATT cache enabled (the default). Pass `useCache: false` to bypass the cache.
   const state = await client.bluetooth.connect(address, { timeoutMs: 30000 });
 
-  void state.mtu;
+  log.info("Connected to the peripheral.", state.mtu);
 
   // Synchronous probe: returns true between connect and disconnect, false otherwise.
   if(client.bluetooth.isConnected(address)) {
@@ -2338,7 +2301,7 @@ export async function bluetoothConnectExample(client: EspHomeClient): Promise<vo
     // Issue a read against a known handle (acquired from an earlier getServices call in real workflows).
     const value = await client.bluetooth.readCharacteristic(address, 0x002a);
 
-    void value;
+    log.info("Read the characteristic.", value);
   }
 
   await client.bluetooth.disconnect(address);
@@ -2357,19 +2320,16 @@ export async function bluetoothGetServicesExample(client: EspHomeClient): Promis
 
   for(const service of services) {
 
-    void service.handle;
-    void service.uuid;
-    void service.shortUuid;
+    log.info("Discovered a GATT service.", service.handle, service.uuid, service.shortUuid);
 
     for(const characteristic of service.characteristics) {
 
-      void characteristic.handle;
       // The properties bitmask encodes Read (0x02), Write (0x08), Notify (0x10), etc. - bit-test to gate UI affordances.
-      void characteristic.properties;
+      log.info("The service exposes a characteristic.", characteristic.handle, characteristic.properties);
 
       for(const descriptor of characteristic.descriptors) {
 
-        void descriptor.handle;
+        log.info("The characteristic carries a descriptor.", descriptor.handle);
       }
     }
   }
@@ -2389,7 +2349,7 @@ export async function bluetoothReadWriteExample(client: EspHomeClient): Promise<
   // Read with the default 10s timeout.
   const current = await client.bluetooth.readCharacteristic(address, valueHandle);
 
-  void current;
+  log.info("Read the characteristic's current value.", current);
 
   // Write a fresh value and await the write acknowledgment.
   await client.bluetooth.writeCharacteristic(address, valueHandle, Buffer.from([ 0x01, 0x02, 0x03 ]), { response: true });
@@ -2412,7 +2372,7 @@ export async function bluetoothDescriptorsExample(client: EspHomeClient): Promis
   // Read the current CCCD value.
   const current = await client.bluetooth.readDescriptor(address, cccdHandle);
 
-  void current;
+  log.info("Read the descriptor's current value.", current);
 
   // Write a new value - here, enable notifications by writing 0x01 0x00 to the CCCD.
   await client.bluetooth.writeDescriptor(address, cccdHandle, Buffer.from([ 0x01, 0x00 ]));
@@ -2442,7 +2402,7 @@ export async function bluetoothNotifyExample(client: EspHomeClient): Promise<voi
 
   for await (const chunk of client.bluetooth.notify(address, handle, { signal: controller.signal })) {
 
-    void chunk.data;
+    log.debug("Received a characteristic notification.", chunk.data);
 
     if(++chunks >= 10) {
 
@@ -2489,9 +2449,7 @@ export async function bluetoothConnectionsFreeExample(client: EspHomeClient): Pr
 
   for await (const update of client.bluetooth.connectionsFree({ signal: controller.signal })) {
 
-    void update.free;
-    void update.limit;
-    void update.allocated;
+    log.debug("The device reported its BLE connection-slot capacity.", update.free, update.limit, update.allocated);
 
     if(update.free === 0) {
 
@@ -2507,7 +2465,7 @@ export async function bluetoothConnectionsFreeExample(client: EspHomeClient): Pr
   // Synchronous snapshot for callers that want the current state without iterating.
   const snapshot = client.bluetooth.lastConnectionsFree();
 
-  void snapshot;
+  log.debug("Read the cached connection-slot capacity.", snapshot);
 }
 // #endregion bluetooth-connections-free
 
@@ -2528,7 +2486,7 @@ export async function bluetoothPairUnpairExample(client: EspHomeClient): Promise
 
     if((error instanceof ConnectionError) && (error.code === "GATT_PAIR_FAILED")) {
 
-      void "pairing rejected by the device or the peripheral";
+      log.error("The device or the peripheral rejected the pairing request.");
 
       return;
     }
@@ -2561,7 +2519,7 @@ export async function zwaveBytePipeExample(client: EspHomeClient): Promise<void>
   // Capability gate: surface a friendly skip rather than attempting a frame subscription that will yield nothing.
   if(!client.zwave.available) {
 
-    void "this device firmware does not include the Z-Wave proxy component";
+    log.warn("The device firmware does not include the Z-Wave proxy component.");
 
     return;
   }
@@ -2569,7 +2527,7 @@ export async function zwaveBytePipeExample(client: EspHomeClient): Promise<void>
   // The home id is seeded from `DeviceInfo.zwaveHomeId` at discovery and updated when the device pushes a HOME_ID_CHANGE. `null` means no network is currently joined.
   const initialHomeId = client.zwave.homeId();
 
-  void initialHomeId;
+  log.info("Read the radio's Z-Wave home id.", initialHomeId);
 
   // Stream inbound frames as a backpressured async iterable. The first iterator issues SUBSCRIBE on the wire; the last to detach issues UNSUBSCRIBE. Concurrent iterators
   // share one wire-side subscription. The subscription survives reconnect; iterators alive across the cycle resume yielding once the new connection is up.
@@ -2581,7 +2539,7 @@ export async function zwaveBytePipeExample(client: EspHomeClient): Promise<void>
     for await (const homeId of client.zwave.homeIdChanges({ signal: controller.signal })) {
 
       // Route the change into a Z-Wave-aware library, or log it for diagnostics.
-      void homeId;
+      log.info("The radio joined, left, or re-keyed a Z-Wave network.", homeId);
     }
   })();
 
@@ -2596,7 +2554,7 @@ export async function zwaveBytePipeExample(client: EspHomeClient): Promise<void>
     //   driver.serialApi.write(frame); // or however the library's bridge surface is wired
     //
     // The library produces outbound frames; route them back via client.zwave.send(buffer).
-    void frame;
+    log.debug("Received a Z-Wave Serial API frame from the radio.", frame);
 
     observations++;
 

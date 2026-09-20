@@ -61,12 +61,13 @@
     "build": "npm run clean && tsc -p tsconfig.build.json && node -e \"require('node:fs').chmodSync('dist/util/espc-bin.js',0o755)\"",
     "build-docs": "node -e \"for(const p of ['docs/classes', 'docs/functions', 'docs/interfaces', 'docs/type-aliases', 'docs/variables', 'docs/README.md'])require('node:fs').rmSync(p,{force:true,recursive:true})\" && npx typedoc",
     "clean": "node -e \"require('node:fs').rmSync('dist',{force:true,recursive:true})\"",
-    "lint": "eslint --max-warnings=${ESLINT_MAX_WARNINGS:-\"-1\"} eslint.config.mjs \"src/**/*.ts\"",
+    "lint": "eslint --max-warnings=${ESLINT_MAX_WARNINGS:-\"0\"} eslint.config.mjs \"src/**/*.ts\"",
+    "lint:pack": "node scripts/check-pack-integrity.mjs",
     "lint:proto": "node scripts/lint-proto-sync.ts",
     "lint:test-file-globs": "node scripts/check-test-file-globs.mjs",
     "lint:types-test-files": "node scripts/lint-types-test-files.ts",
     "postpublish": "npm run clean",
-    "prepublishOnly": "npm run lint && npm run lint:proto && npm run lint:types-test-files && npm run lint:test-file-globs && npm run typecheck && npm run build",
+    "prepublishOnly": "npm run lint && npm run lint:proto && npm run lint:types-test-files && npm run lint:test-file-globs && npm run typecheck && npm run build && npm run lint:pack",
     "test": "node --test --experimental-test-coverage --test-coverage-include='src/**/*.ts' --test-coverage-exclude='src/**/*.test.ts' --test-coverage-exclude='src/**/*.types.test.ts' --test-coverage-exclude='src/testing/**' --test-coverage-lines=85 --test-coverage-branches=80 --test-coverage-functions=85 --test-timeout=15000 \"src/**/*.test.ts\"",
     "test:e2e": "node --test --test-timeout=120000 \"test/e2e/**/*.test.ts\"",
     "test:fuzz": "node --test --test-timeout=60000 \"test/fuzz/**/*.test.ts\"",
@@ -80,12 +81,12 @@
   },
   "devDependencies": {
     "@stylistic/eslint-plugin": "5.10.0",
-    "@types/node": "26.1.1",
+    "@types/node": "26.6.2",
     "eslint": "9.39.2",
-    "homebridge-plugin-utils": "2.0.0",
+    "homebridge-plugin-utils": "2.4.0",
     "typedoc": "0.28.20",
-    "typedoc-plugin-markdown": "4.12.0",
+    "typedoc-plugin-markdown": "4.13.1",
     "typescript": "5.9.3",
-    "typescript-eslint": "8.63.0"
+    "typescript-eslint": "8.70.0"
   }
 }

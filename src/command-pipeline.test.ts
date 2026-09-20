@@ -3,6 +3,7 @@
  * command-pipeline.test.ts: Unit tests for the schema-driven command encoder.
  */
 import type { EntitySchema, FieldSpec } from "./schemas/index.ts";
+import { MessageType, WireType } from "./protocol/index.ts";
 import { buildKeyField, encodeEntityCommand, encodeFieldValue, reportUnrecognizedOptions } from "./command-pipeline.ts";
 import { decodeProtobuf, zigzagDecode } from "./protocol/codec.ts";
 import { describe, test } from "node:test";
@@ -10,8 +11,6 @@ import { Buffer } from "node:buffer";
 import { ENTITY_SCHEMAS } from "./schemas/index.ts";
 import type { EncodeResult } from "./command-pipeline.ts";
 import type { EspHomeLogging } from "./types.ts";
-import { MessageType } from "./protocol/index.ts";
-import { WireType } from "./protocol/index.ts";
 import assert from "node:assert/strict";
 import { entityId } from "./entity-id.ts";
 

@@ -55,8 +55,6 @@ describe("Error hierarchy type-level narrowing", () => {
     // @ts-expect-error - assigning a plain Error to an EspHomeError-typed binding is a type error; the runtime value is rejected by the typechecker.
     const _bad: EspHomeError = plain;
 
-    void _bad;
-
     assert.equal(plain instanceof EspHomeError, false);
   });
 });

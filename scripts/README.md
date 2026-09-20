@@ -28,6 +28,7 @@ Current consumers:
 - `check-test-file-globs.mjs` — reads `tsconfig.build.json` as JSON and compares against the SSOT.
 - `check-example-references.mjs` — validates the JSDoc `@includeCode` showcase-region references against `src/examples/showcase.ts`.
 - `check-proto-drift.mjs` — fetches upstream `api.proto` and diffs.
+- `check-pack-integrity.mjs` - reads the would-be tarball's file list and the shipped maps, and checks that they agree on which sources ship.
 
 ## Decision rule
 

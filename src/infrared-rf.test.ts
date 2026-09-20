@@ -24,7 +24,6 @@ import { ConnectionError } from "./errors.ts";
 import { ENTITY_SCHEMAS } from "./schemas/index.ts";
 import { EspHomeClient } from "./esphome-client.ts";
 import { MessageType } from "./protocol/message-types.ts";
-import type { ProtoField } from "./protocol/codec.ts";
 import { WireType } from "./protocol/wire-types.ts";
 import assert from "node:assert/strict";
 import { setTimeout as delay } from "node:timers/promises";
@@ -34,16 +33,6 @@ import { entityId } from "./entity-id.ts";
 function quietLogger(): { debug: () => void; info: () => void; warn: () => void; error: () => void } {
 
   return { debug: (): void => undefined, error: (): void => undefined, info: (): void => undefined, warn: (): void => undefined };
-}
-
-// 4-byte little-endian fixed32 key (matches the wire encoding for every list-entities and state-response message).
-function encodeKeyFixed32(key: number): Buffer {
-
-  const buf = Buffer.alloc(4);
-
-  buf.writeUInt32LE(key, 0);
-
-  return buf;
 }
 
 // Synthesized HELLO_RESPONSE for API 1.12, the canonical modern-handshake fixture version (above the minor-11 modernHandshake threshold). Wire shape per
@@ -577,9 +566,3 @@ describe("ENTITY_SCHEMAS infrared and radio_frequency", () => {
     }
   });
 });
-
-// Referenced here only to keep the type-only import from being flagged as unused.
-void ([] as ProtoField[]);
-
-// Reference the encodeKeyFixed32 helper so it is not flagged as an unused local; it is kept on hand for fixture construction.
-void encodeKeyFixed32;

@@ -974,7 +974,6 @@ describe("LogSubscriptionManager - dispatch", () => {
 
     using sub = bus.on("log", (event): void => { seen.push(event); });
 
-    void sub;
     const event = sampleEvent(LogLevel.INFO, "hello world");
 
     manager.dispatch(event);
@@ -1033,7 +1032,6 @@ describe("LogSubscriptionManager - dispatch", () => {
 
     using sub = bus.on("log", (event): void => { captured.push(event); });
 
-    void sub;
     const event = sampleEvent(LogLevel.WARN, "shared");
 
     manager.dispatch(event);
@@ -1066,9 +1064,8 @@ describe("LogSubscriptionManager - hot path", () => {
     // backpressure behavior (which has its own dedicated test).
     const consumers = counters.map(async (_, idx) => (async (): Promise<void> => {
 
-      for await (const event of manager.subscribe(LogLevel.VERY_VERBOSE, { highWaterMark: 2048 })) {
+      for await (const _event of manager.subscribe(LogLevel.VERY_VERBOSE, { highWaterMark: 2048 })) {
 
-        void event;
         counters[idx]!++;
 
         if(counters[idx]! >= 1000) {

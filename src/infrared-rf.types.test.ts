@@ -6,6 +6,7 @@
  * `@ts-expect-error` annotation below MUST fail to compile if removed; `npm run typecheck` (tsc against tsconfig.check.json) enforces this. The annotations live
  * inside helper functions that are never executed - the type checker walks them at compile time but the test runner only confirms the file parses cleanly.
  */
+import type { Assert, Equal } from "./internal/type-assertions.ts";
 import type { ClientEventsMap, EspHomeClient } from "./esphome-client.ts";
 import { describe, test } from "node:test";
 import type { ENTITY_SCHEMAS } from "./schemas/index.ts";
@@ -17,22 +18,17 @@ describe("ClientEventsMap auto-extension via SchemaEvents (slice 2 design payoff
 
   test("ClientEventsMap['infrared'] resolves to StateEventFor<typeof ENTITY_SCHEMAS['infrared']> without a hand-edit", () => {
 
-    // Mutually-assignable pairs prove structural equality - if the auto-extension regressed, either binding would surface a typecheck error.
-    const l: ClientEventsMap["infrared"] = null as unknown as StateEventFor<typeof ENTITY_SCHEMAS["infrared"]>;
-    const r: StateEventFor<typeof ENTITY_SCHEMAS["infrared"]> = null as unknown as ClientEventsMap["infrared"];
+    // The bus channel and the schema-derived projection are the same type, not merely interchangeable...`Equal` compares them symbolically, so it also rejects an
+    // accidental `any` on either side. If the auto-extension regressed, the assertion below fails to compile.
+    type _Equivalent = Assert<Equal<ClientEventsMap["infrared"], StateEventFor<typeof ENTITY_SCHEMAS["infrared"]>>>;
 
-    void l;
-    void r;
     assert.ok(true);
   });
 
   test("ClientEventsMap['radio_frequency'] resolves to StateEventFor<typeof ENTITY_SCHEMAS['radio_frequency']> without a hand-edit", () => {
 
-    const l: ClientEventsMap["radio_frequency"] = null as unknown as StateEventFor<typeof ENTITY_SCHEMAS["radio_frequency"]>;
-    const r: StateEventFor<typeof ENTITY_SCHEMAS["radio_frequency"]> = null as unknown as ClientEventsMap["radio_frequency"];
+    type _Equivalent = Assert<Equal<ClientEventsMap["radio_frequency"], StateEventFor<typeof ENTITY_SCHEMAS["radio_frequency"]>>>;
 
-    void l;
-    void r;
     assert.ok(true);
   });
 });

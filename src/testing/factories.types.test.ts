@@ -14,9 +14,7 @@ describe("mockEntity override typing", () => {
     // The overrides parameter is `Partial<EntityFor<typeof ENTITY_SCHEMAS["light"]>>`, so a misspelled key (brigthness) is an excess property and fails the
     // object-literal check.
     // @ts-expect-error - "brigthness" is not a known key of the light entity shape, so the excess property fails the object-literal check.
-    const ent = mockEntity("light", "lamp", { brigthness: 0.8 });
-
-    void ent;
+    const _ent = mockEntity("light", "lamp", { brigthness: 0.8 });
 
     assert.equal(typeof mockEntity, "function");
   });
@@ -40,9 +38,7 @@ describe("mockStateMessage fields typing", () => {
     // The fields parameter is `Partial<StateEventFor<typeof ENTITY_SCHEMAS["sensor"]>>`, so a field that does not exist on the sensor state shape (the sensor state
     // carries `state`, not `value`) is an excess property and fails the object-literal check.
     // @ts-expect-error - "value" is not a known field of the sensor state shape, so the excess property fails the object-literal check.
-    const event = mockStateMessage(id, { value: 21.5 });
-
-    void event;
+    const _event = mockStateMessage(id, { value: 21.5 });
 
     assert.equal(typeof mockStateMessage, "function");
   });

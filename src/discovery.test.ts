@@ -2,6 +2,7 @@
  *
  * discovery.test.ts: Unit tests for the pure discovery decoders.
  */
+import { MessageType, WireType } from "./protocol/index.ts";
 import {
   decodeEntityFromSchema, decodeServiceEntity, extractFieldBySpec, extractRepeatedField,
   getEntityTypeLabel
@@ -12,9 +13,7 @@ import { Buffer } from "node:buffer";
 import { ConfigurationError } from "./errors.ts";
 import { ENTITY_SCHEMAS } from "./schemas/index.ts";
 import type { EspHomeLogging } from "./types.ts";
-import { MessageType } from "./protocol/index.ts";
 import { ServiceArgType } from "./types.ts";
-import { WireType } from "./protocol/index.ts";
 import assert from "node:assert/strict";
 
 const silentLog = (): EspHomeLogging => ({

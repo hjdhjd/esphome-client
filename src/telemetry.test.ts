@@ -2,14 +2,13 @@
  *
  * telemetry.test.ts: Unit tests for the schema-driven state-update decoder.
  */
+import { decodeProtobuf, encodeProtoFields } from "./protocol/codec.ts";
 import { describe, test } from "node:test";
 import { Buffer } from "node:buffer";
 import { ENTITY_SCHEMAS } from "./schemas/index.ts";
 import { WireType } from "./protocol/index.ts";
 import assert from "node:assert/strict";
-import { decodeProtobuf } from "./protocol/codec.ts";
 import { decodeStateFromSchema } from "./telemetry.ts";
-import { encodeProtoFields } from "./protocol/codec.ts";
 
 type DecodedFields = Record<number, ReturnType<typeof decodeProtobuf>[number]>;
 

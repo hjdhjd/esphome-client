@@ -48,7 +48,7 @@ type InboundExtendsCommand = Assert<Extends<InboundPackedBitsField["bits"][strin
  * construction is the only way to pin it. The constant below is never read at runtime - the .types.ts module is typecheck-only and not picked up by the test
  * runner.
  */
-const excessPropertyCheckInbound: InboundPackedBitsField = {
+const _excessPropertyCheckInbound: InboundPackedBitsField = {
 
   bits: {
 
@@ -63,7 +63,7 @@ const excessPropertyCheckInbound: InboundPackedBitsField = {
  * Positive excess-property case: a literal `{ bit, hasFieldBit }` IS valid on a `CommandPackedBitsField["bits"][string]` slot. Pinning the positive case alongside
  * the negative one above catches "we accidentally made `hasFieldBit` forbidden everywhere" regressions - the directive-free assignment must compile.
  */
-const excessPropertyCheckCommand: CommandPackedBitsField = {
+const _excessPropertyCheckCommand: CommandPackedBitsField = {
 
   bits: {
 
@@ -74,14 +74,12 @@ const excessPropertyCheckCommand: CommandPackedBitsField = {
   wireType: WireType.VARINT
 };
 
-// Export every sentinel-assertion type alias and reference the typecheck-only constants so neither the unused-locals lint nor any future tree-shaking optimization
-// elides them. None of these are consumed at runtime; their value is purely the compile-time validation they trigger.
+// Every sentinel-assertion type alias is exported so the module carries its rules as a surface a reader can find. The typecheck-only constants above take the leading
+// underscore that the unused-variable lint reads as "declared for its compile-time effect alone", which is what keeps them from being reported while their
+// declarations still trigger the excess-property checks. Neither is consumed at runtime; their value is purely the compile-time validation they produce.
 export type {
 
   CommandBitSpecShape,
   InboundBitSpecShape,
   InboundExtendsCommand
 };
-
-void excessPropertyCheckCommand;
-void excessPropertyCheckInbound;

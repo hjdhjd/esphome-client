@@ -45,8 +45,6 @@ describe("EntityRegistry - byId<T> brand-narrowing seam", () => {
     // @ts-expect-error - Nullable<EntityFor<switch>> is not assignable to Nullable<EntityFor<light>>; the brand distinction flows through to the return type.
     const _wrong: Nullable<EntityFor<typeof ENTITY_SCHEMAS["light"]>> = switchResult;
 
-    void _wrong;
-
     assert.equal(switchResult, null);
   });
 
@@ -55,9 +53,7 @@ describe("EntityRegistry - byId<T> brand-narrowing seam", () => {
     const registry = new EntityRegistry(noopHost);
 
     // @ts-expect-error - byId requires a branded EntityId; a plain string fails the brand constraint.
-    const result = registry.byId("light-x");
-
-    void result;
+    const _result = registry.byId("light-x");
 
     assert.equal(typeof registry.byId, "function");
   });
@@ -79,9 +75,7 @@ describe("EntityRegistry - keyForId requires a branded id", () => {
     const registry = new EntityRegistry(noopHost);
 
     // @ts-expect-error - keyForId requires a branded EntityId; a plain string is not assignable.
-    const key = registry.keyForId("light-x");
-
-    void key;
+    const _key = registry.keyForId("light-x");
 
     assert.equal(typeof registry.keyForId, "function");
   });

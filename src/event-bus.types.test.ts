@@ -22,16 +22,12 @@ describe("EventBus<EventMap> subscription typing", () => {
 
       // payload is { name: string }; the handler must access .name without coercion.
       const _name: string = payload.name;
-
-      void _name;
     });
 
     bus.on("count", (payload): void => {
 
       // payload is number; the handler can use it as a number directly.
       const _doubled: number = payload * 2;
-
-      void _doubled;
     });
 
     bus[Symbol.dispose]();

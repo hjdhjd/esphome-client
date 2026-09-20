@@ -2,6 +2,7 @@
  *
  * command-runner.types.test.ts: Type-level tests for the runCommand / runCommandAndAwait brand-narrowing seam.
  */
+import type { EspHomeLogging, Nullable } from "./types.ts";
 import { describe, test } from "node:test";
 import { runCommand, runCommandAndAwait } from "./command-runner.ts";
 import type { ClientEventsMap } from "./esphome-client.ts";
@@ -9,9 +10,7 @@ import type { CommandHost } from "./command-runner.ts";
 import { ENTITY_SCHEMAS } from "./schemas/index.ts";
 import type { EntityId } from "./entity-id.ts";
 import type { EntitySchema } from "./schemas/index.ts";
-import type { EspHomeLogging } from "./types.ts";
 import { EventBus } from "./event-bus.ts";
-import type { Nullable } from "./types.ts";
 import type { StateEventFor } from "./schemas/derived.ts";
 import assert from "node:assert/strict";
 import { entityId } from "./entity-id.ts";
@@ -53,15 +52,14 @@ describe("runCommand<T> - branded-id tag flows through to options", () => {
     const host = stubHost();
     const switchId: EntityId<"switch"> = entityId("switch", "front_door");
 
-    // The static-type check is the entire purpose of this test - we host the call inside an unused function so the type error fires without producing a runtime call
-    // that would log warn-and-drop. Reading `_attempt` keeps it from being unused.
+    // The static-type check is the entire purpose of this test - we host the call inside a function that is never invoked so the type error fires without producing a
+    // runtime call that would log warn-and-drop. The leading underscore marks the binding as declared for its compile-time effect alone.
     const _attempt = (): void => {
 
       // @ts-expect-error - SwitchCommand has no `brightness` field; passing light-shaped options for a switch id is a brand-mismatch compile error.
       runCommand(host, switchId, { brightness: 0.5, state: true });
     };
 
-    void _attempt;
     assert.equal(typeof runCommand, "function");
   });
 
@@ -75,7 +73,6 @@ describe("runCommand<T> - branded-id tag flows through to options", () => {
       runCommand(host, "light-x", { state: true });
     };
 
-    void _attempt;
     assert.equal(typeof runCommand, "function");
   });
 });
@@ -91,7 +88,6 @@ describe("runCommandAndAwait<T> - type-level constraint on awaitable entity type
     // runtime promise is created.
     const _typed = async (): Promise<StateEventFor<typeof ENTITY_SCHEMAS["light"]>> => runCommandAndAwait(host, lightId, { state: true });
 
-    void _typed;
     assert.equal(typeof runCommandAndAwait, "function");
   });
 
@@ -102,7 +98,6 @@ describe("runCommandAndAwait<T> - type-level constraint on awaitable entity type
 
     const _typed = async (): Promise<StateEventFor<typeof ENTITY_SCHEMAS["switch"]>> => runCommandAndAwait(host, switchId, { state: true });
 
-    void _typed;
     assert.equal(typeof runCommandAndAwait, "function");
   });
 
@@ -117,7 +112,6 @@ describe("runCommandAndAwait<T> - type-level constraint on awaitable entity type
       return runCommandAndAwait(host, buttonId, {});
     };
 
-    void _attempt;
     assert.equal(typeof runCommandAndAwait, "function");
   });
 
@@ -132,7 +126,6 @@ describe("runCommandAndAwait<T> - type-level constraint on awaitable entity type
       return runCommandAndAwait(host, sensorId, {});
     };
 
-    void _attempt;
     assert.equal(typeof runCommandAndAwait, "function");
   });
 
@@ -147,7 +140,6 @@ describe("runCommandAndAwait<T> - type-level constraint on awaitable entity type
       return runCommandAndAwait(host, cameraId, {});
     };
 
-    void _attempt;
     assert.equal(typeof runCommandAndAwait, "function");
   });
 });

@@ -28,9 +28,7 @@ describe("ZWaveProxyApi - public-surface narrowing", () => {
   test("client.zwave.frames() returns AsyncIterable<Buffer>", () => {
 
     const client = new EspHomeClient({ host: "localhost" });
-    const iterable: AsyncIterable<Buffer> = client.zwave.frames();
-
-    void iterable;
+    const _iterable: AsyncIterable<Buffer> = client.zwave.frames();
 
     client.disconnect();
   });
@@ -38,9 +36,7 @@ describe("ZWaveProxyApi - public-surface narrowing", () => {
   test("client.zwave.homeIdChanges() returns AsyncIterable<number>", () => {
 
     const client = new EspHomeClient({ host: "localhost" });
-    const iterable: AsyncIterable<number> = client.zwave.homeIdChanges();
-
-    void iterable;
+    const _iterable: AsyncIterable<number> = client.zwave.homeIdChanges();
 
     client.disconnect();
   });
@@ -48,9 +44,7 @@ describe("ZWaveProxyApi - public-surface narrowing", () => {
   test("client.zwave.homeId() returns number | null", () => {
 
     const client = new EspHomeClient({ host: "localhost" });
-    const result: number | null = client.zwave.homeId();
-
-    void result;
+    const _result: number | null = client.zwave.homeId();
 
     client.disconnect();
   });
@@ -58,9 +52,7 @@ describe("ZWaveProxyApi - public-surface narrowing", () => {
   test("client.zwave.available is a boolean", () => {
 
     const client = new EspHomeClient({ host: "localhost" });
-    const available: boolean = client.zwave.available;
-
-    void available;
+    const _available: boolean = client.zwave.available;
 
     client.disconnect();
   });
@@ -113,12 +105,9 @@ describe("ClientEventsMap - zwave channel typing", () => {
   test("client.on(\"zwaveFrame\", cb) types the callback parameter as Buffer", () => {
 
     const client = new EspHomeClient({ host: "localhost" });
-    let seen: Buffer | null = null;
+    let _seen: Buffer | null = null;
 
-    using sub = client.on("zwaveFrame", (frame): void => { seen = frame; });
-
-    void seen;
-    void sub;
+    using sub = client.on("zwaveFrame", (frame): void => { _seen = frame; });
 
     client.disconnect();
   });
@@ -126,12 +115,9 @@ describe("ClientEventsMap - zwave channel typing", () => {
   test("client.on(\"zwaveHomeIdChange\", cb) types the callback parameter as number", () => {
 
     const client = new EspHomeClient({ host: "localhost" });
-    let seen: number | null = null;
+    let _seen: number | null = null;
 
-    using sub = client.on("zwaveHomeIdChange", (homeId): void => { seen = homeId; });
-
-    void seen;
-    void sub;
+    using sub = client.on("zwaveHomeIdChange", (homeId): void => { _seen = homeId; });
 
     client.disconnect();
   });

@@ -52,8 +52,6 @@ describe("LifecycleEvent discriminated union narrowing", () => {
 
       // @ts-expect-error - .cause is not a property of the connect variant; the discriminated union excludes it.
       const _x = e.cause;
-
-      void _x;
     }
 
     assert.equal(e.kind, "connect");
@@ -67,8 +65,6 @@ describe("LifecycleEvent discriminated union narrowing", () => {
 
       // @ts-expect-error - .encrypted is not a property of the disconnect variant.
       const _x = e.encrypted;
-
-      void _x;
     }
 
     assert.equal(e.kind, "disconnect");

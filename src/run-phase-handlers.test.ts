@@ -2,7 +2,6 @@
  *
  * run-phase-handlers.test.ts: Unit tests for the run-phase dispatcher.
  */
-import type { ClientEventsMap, LogEventData } from "./esphome-client.ts";
 import {
   LIST_ENTITIES_MESSAGE_TYPES, STATE_MESSAGE_TYPES, buildRunPhaseHandlers, defaultRunPhaseHandler, handleCameraImageResponse, handleDisconnectRequest,
   handleDisconnectResponse, handleGetTimeRequest, handleGetTimeResponse, handleHomeassistantServiceResponse, handleNoiseEncryptionSetKeyResponse,
@@ -12,6 +11,7 @@ import {
 import { decodeProtobuf, encodeProtoFields, extractNumberField } from "./protocol/index.ts";
 import { describe, mock, test } from "node:test";
 import { Buffer } from "node:buffer";
+import type { ClientEventsMap } from "./esphome-client.ts";
 import type { ClientMetrics } from "./types.ts";
 import { ENTITY_SCHEMAS } from "./schemas/index.ts";
 import { EventBus } from "./event-bus.ts";
@@ -1303,6 +1303,3 @@ describe("run-phase-handlers - mock.fn host seam", () => {
     assert.deepEqual(call.arguments[1], payload);
   });
 });
-
-// Suppress unused-var lint on the LogEventData type-import; the import documents the seam's relationship to LogSubscriptionManager but no test instantiates it.
-void (null as unknown as LogEventData);

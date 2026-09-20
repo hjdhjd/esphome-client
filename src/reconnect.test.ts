@@ -2,11 +2,10 @@
  *
  * reconnect.test.ts: Unit tests for the reconnect supervisor primitives and the withReconnect helper.
  */
+import { AuthenticationError, ConnectionError } from "./errors.ts";
 import { HealthState, disconnectedHealth } from "./health.ts";
 import { defaultShouldRetry, nextBackoffDelay, reconnectDelay, resolveReconnectConfig, withReconnect } from "./reconnect.ts";
 import { describe, test } from "node:test";
-import { AuthenticationError } from "./errors.ts";
-import { ConnectionError } from "./errors.ts";
 import type { ConnectionHealth } from "./health.ts";
 import type { LifecycleEvent } from "./lifecycle.ts";
 import type { Nullable } from "./types.ts";

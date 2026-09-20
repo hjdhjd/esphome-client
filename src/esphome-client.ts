@@ -26,8 +26,7 @@ import {
   ENTITY_SCHEMAS, buildListEntitiesMessageTypes, buildSchemasTable, buildStateMessageTypes, findSchemaByListEntitiesMessageTypeIn,
   findSchemaByStateMessageTypeIn, getSchemaIn
 } from "./schemas/index.ts";
-import type { Entity, EntityType, TelemetryEvent } from "./schemas/index.ts";
-import type { EntitySchema, ExtendedEntityType, ExtraSchemaSet, SchemaForExtended, SchemasTable } from "./schemas/index.ts";
+import type { Entity, EntitySchema, EntityType, ExtendedEntityType, ExtraSchemaSet, SchemaForExtended, SchemasTable, TelemetryEvent } from "./schemas/index.ts";
 import type { FieldValue, ProtoField } from "./protocol/codec.ts";
 import { HealthState, disconnectedHealth, isConnectionLive } from "./health.ts";
 import type { HomeAssistantApiHost, HomeAssistantServiceEvent, HomeAssistantStateRequest } from "./home-assistant.ts";
@@ -1025,7 +1024,7 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
 
       log: this.log,
       onSendPing: (): void => { this.frameAndSend(MessageType.PING_REQUEST, Buffer.alloc(0)); },
-      onStall: (cause: HeartbeatStalledError, idleMs: number): void => {
+      onStall: (cause: HeartbeatStalledError): void => {
 
         // Stall budget exhausted. A stall only fires while the socket is up, so the record is live; narrowing to the live variant lets the spread into STALLED retain
         // `connectedAtMs` (both connected and stalled are "socket up" states) so uptime stays live through the stall. Bump the consecutive-stall counter, broadcast the
@@ -1039,7 +1038,6 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
         }
 
         this.metrics?.increment("heartbeat.stalled");
-        void idleMs;
         this.disconnectInternal("heartbeat stalled", cause);
       }
     };

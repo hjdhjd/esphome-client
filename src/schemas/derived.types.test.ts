@@ -24,7 +24,6 @@ describe("StateEventFor<S> per-entity narrowing", () => {
     // Type-level: event.type must be exactly the literal "light".
     const _t: "light" = event.type;
 
-    void _t;
     assert.equal(event.type, "light");
   });
 
@@ -40,7 +39,6 @@ describe("StateEventFor<S> per-entity narrowing", () => {
 
     const _t: "switch" = event.type;
 
-    void _t;
     assert.equal(event.type, "switch");
   });
 
@@ -57,7 +55,6 @@ describe("StateEventFor<S> per-entity narrowing", () => {
     // @ts-expect-error - the tag excludes cross-type assignment.
     const _bad: StateEventFor<typeof ENTITY_SCHEMAS["switch"]> = lightEvent;
 
-    void _bad;
     assert.equal(lightEvent.type, "light");
   });
 });
@@ -81,12 +78,9 @@ describe("StateEventFor<S> enumMappings narrowing", () => {
     // The state field accepts every member of the mapping's value-union. ESPHome API 1.14 added OPENING (6) and OPEN (7); the literal-union widened accordingly.
     const _members: 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 = ok.state ?? 0;
 
-    void _members;
-
     // @ts-expect-error - 99 is not a member of LockState; the narrowed type rejects it.
     const _bad: StateEventFor<typeof ENTITY_SCHEMAS["lock"]> = { entity: "lock-x", key: 2, state: 99, type: "lock" };
 
-    void _bad;
     assert.equal(ok.state, LockState.LOCKED);
   });
 
@@ -102,12 +96,9 @@ describe("StateEventFor<S> enumMappings narrowing", () => {
 
     const _members: 0 | 1 | 2 = ok.currentOperation ?? 0;
 
-    void _members;
-
     // @ts-expect-error - 5 is outside CoverOperation's literal union; assignment errors.
     const _bad: StateEventFor<typeof ENTITY_SCHEMAS["cover"]> = { currentOperation: 5, entity: "cover-x", key: 2, type: "cover" };
 
-    void _bad;
     assert.equal(ok.currentOperation, CoverOperation.IS_OPENING);
   });
 
@@ -124,7 +115,6 @@ describe("StateEventFor<S> enumMappings narrowing", () => {
     // @ts-expect-error - 99 is not a MediaPlayerState member; the narrowed type rejects it.
     const _bad: StateEventFor<typeof ENTITY_SCHEMAS["media_player"]> = { entity: "media_player-x", key: 2, state: 99, type: "media_player" };
 
-    void _bad;
     assert.equal(ok.state, MediaPlayerState.PLAYING);
   });
 
@@ -140,12 +130,9 @@ describe("StateEventFor<S> enumMappings narrowing", () => {
 
     const _modeMembers: 0 | 1 | 2 | 3 | 4 | 5 | 6 = ok.mode ?? 0;
 
-    void _modeMembers;
-
     // @ts-expect-error - 99 is outside ClimateMode's literal union.
     const _bad: StateEventFor<typeof ENTITY_SCHEMAS["climate"]> = { entity: "climate-x", key: 2, mode: 99, type: "climate" };
 
-    void _bad;
     assert.equal(ok.mode, ClimateMode.HEAT_COOL);
   });
 
@@ -218,7 +205,6 @@ describe("StateEventFor<S> enumMappings narrowing", () => {
 
     const _state: number | undefined = ok.state;
 
-    void _state;
     assert.equal(ok.state, 22.5);
   });
 });
@@ -261,8 +247,6 @@ describe("CommandFor<S> per-entity narrowing", () => {
     // @ts-expect-error - cross-entity command shapes are not assignable; switch and light have different field sets.
     const _bad: CommandFor<typeof ENTITY_SCHEMAS["switch"]> = { rgb: { b: 0, g: 0, r: 0 }, state: true };
 
-    void _bad;
-    void lightCmd;
     assert.equal(typeof lightCmd, "object");
   });
 });
@@ -281,7 +265,6 @@ describe("EntityFor<S> distinction", () => {
 
     const _t: "light" = ent.type;
 
-    void _t;
     assert.equal(ent.type, "light");
   });
 
@@ -298,7 +281,6 @@ describe("EntityFor<S> distinction", () => {
     // @ts-expect-error - entity tags exclude cross-type assignment.
     const _bad: EntityFor<typeof ENTITY_SCHEMAS["light"]> = switchEntity;
 
-    void _bad;
     assert.equal(switchEntity.type, "switch");
   });
 });

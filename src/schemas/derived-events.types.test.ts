@@ -3,6 +3,7 @@
  * derived-events.types.test.ts: Type-level tests for the unified ApplyOverride generic and the schema-derived ClientEventsMap inheritance.
  */
 import type { ApplyOverride, StateEventFor } from "./derived.ts";
+import type { Assert, Equal } from "../internal/type-assertions.ts";
 import { describe, test } from "node:test";
 import type { Buffer } from "node:buffer";
 import type { ClientEventsMap } from "../esphome-client.ts";
@@ -42,8 +43,6 @@ describe("ApplyOverride - intersection entry shape", () => {
     const _a: 1 = r.a;
     const _b: 2 = r.b;
 
-    void _a;
-    void _b;
     assert.deepEqual(r, { a: 1, b: 2 });
   });
 });
@@ -58,7 +57,6 @@ describe("ApplyOverride - refining entry shape (override wins over the wire key)
     const r: ApplyOverride<OneField, "x", { x: { a: 1 | 2 } }> = { a: 2 };
     const _a: 1 | 2 = r.a;
 
-    void _a;
     assert.deepEqual(r, { a: 2 });
   });
 
@@ -73,9 +71,8 @@ describe("ApplyOverride - refining entry shape (override wins over the wire key)
     const r: ApplyOverride<{ effects: string[] }, "x", { x: { effects: readonly string[] } }> = { effects: ["a"] };
 
     // @ts-expect-error - the override tightened `effects` to a readonly array, so it is not assignable to a mutable `string[]`.
-    const mutable: string[] = r.effects;
+    const _mutable: string[] = r.effects;
 
-    void mutable;
     assert.deepEqual(r.effects, ["a"]);
   });
 });
@@ -89,13 +86,9 @@ describe("ApplyOverride - omit+add entry shape", () => {
     const _a: 1 = r.a;
     const _b: 2 = r.b;
 
-    void _a;
-    void _b;
-
     // @ts-expect-error - the `c` field is omitted by the override and must not appear on the public shape.
     const _c: number = r.c;
 
-    void _c;
     assert.deepEqual(r, { a: 1, b: 2 });
   });
 
@@ -112,8 +105,6 @@ describe("ApplyOverride - omit+add entry shape", () => {
     // @ts-expect-error - the `d` field is omitted by the override.
     const _d: number = r.d;
 
-    void _c;
-    void _d;
     assert.deepEqual(r, { a: 1, b: 2 });
   });
 });
@@ -129,8 +120,6 @@ describe("ApplyOverride - branching edge cases", () => {
     const _a: 1 = r.a;
     const _omit: "z" = r.omit;
 
-    void _a;
-    void _omit;
     assert.deepEqual(r, { a: 1, omit: "z" });
   });
 
@@ -139,44 +128,35 @@ describe("ApplyOverride - branching edge cases", () => {
     const r: ApplyOverride<OneField, "y", { x: { b: 2 } }> = { a: 1 };
     const _a: 1 = r.a;
 
-    void _a;
     assert.deepEqual(r, { a: 1 });
   });
 });
 
 describe("ClientEventsMap - schema-derived equivalence per entity type", () => {
 
-  // Adding a new entity type to ENTITY_SCHEMAS automatically extends ClientEventsMap via the SchemaEvents inheritance; these assertions pin the equivalence between
-  // the bus payload type for each entity key and the schema-derived StateEventFor shape, so a future divergence (e.g., a hand-shaped per-entity alias accidentally
-  // rewritten) surfaces as a compile error here. We assert mutual assignability via paired `const _l: A = b; const _r: B = a;` so both directions are exercised.
+  // Adding a new entity type to ENTITY_SCHEMAS automatically extends ClientEventsMap via the SchemaEvents inheritance; these assertions hold the equivalence between
+  // the bus payload type for each entity key and the schema-derived StateEventFor shape fixed, so a future divergence (e.g., a hand-shaped per-entity alias
+  // accidentally rewritten) surfaces as a compile error here. Each claim is one `Assert<Equal<A, B>>` alias: `Equal` is stricter than assignability in both
+  // directions, so it also rejects an accidental `any` on either side rather than accepting it silently.
 
   test("alarm_control_panel", () => {
 
-    const l: ClientEventsMap["alarm_control_panel"] = null as unknown as StateEventFor<typeof ENTITY_SCHEMAS["alarm_control_panel"]>;
-    const r: StateEventFor<typeof ENTITY_SCHEMAS["alarm_control_panel"]> = null as unknown as ClientEventsMap["alarm_control_panel"];
+    type _Equivalent = Assert<Equal<ClientEventsMap["alarm_control_panel"], StateEventFor<typeof ENTITY_SCHEMAS["alarm_control_panel"]>>>;
 
-    void l;
-    void r;
     assert.ok(true);
   });
 
   test("binary_sensor", () => {
 
-    const l: ClientEventsMap["binary_sensor"] = null as unknown as StateEventFor<typeof ENTITY_SCHEMAS["binary_sensor"]>;
-    const r: StateEventFor<typeof ENTITY_SCHEMAS["binary_sensor"]> = null as unknown as ClientEventsMap["binary_sensor"];
+    type _Equivalent = Assert<Equal<ClientEventsMap["binary_sensor"], StateEventFor<typeof ENTITY_SCHEMAS["binary_sensor"]>>>;
 
-    void l;
-    void r;
     assert.ok(true);
   });
 
   test("button", () => {
 
-    const l: ClientEventsMap["button"] = null as unknown as StateEventFor<typeof ENTITY_SCHEMAS["button"]>;
-    const r: StateEventFor<typeof ENTITY_SCHEMAS["button"]> = null as unknown as ClientEventsMap["button"];
+    type _Equivalent = Assert<Equal<ClientEventsMap["button"], StateEventFor<typeof ENTITY_SCHEMAS["button"]>>>;
 
-    void l;
-    void r;
     assert.ok(true);
   });
 
@@ -184,12 +164,9 @@ describe("ClientEventsMap - schema-derived equivalence per entity type", () => {
 
     // Camera is the only entry in EventOverrides that uses the omit+add branching. The post-reassembly event drops the per-chunk wire plumbing
     // (data/done/deviceId) and adds image+name; the base tags type/entity/key survive so the camera arm of TelemetryEvent narrows uniformly with every other
-    // arm. This test pins the consumer-visible shape against the schema-derived StateEventFor projection.
-    const l: ClientEventsMap["camera"] = null as unknown as StateEventFor<typeof ENTITY_SCHEMAS["camera"]>;
-    const r: StateEventFor<typeof ENTITY_SCHEMAS["camera"]> = null as unknown as ClientEventsMap["camera"];
+    // arm. This test holds the consumer-visible shape fixed against the schema-derived StateEventFor projection.
+    type _Equivalent = Assert<Equal<ClientEventsMap["camera"], StateEventFor<typeof ENTITY_SCHEMAS["camera"]>>>;
 
-    void l;
-    void r;
     assert.ok(true);
   });
 
@@ -215,14 +192,8 @@ describe("ClientEventsMap - schema-derived equivalence per entity type", () => {
     const _name: string = sample.name;
     const _type: "camera" = sample.type;
 
-    void _entity;
-    void _image;
-    void _key;
-    void _name;
-    void _type;
-
     // The wire-only fields stripped by EventOverrides["camera"].omit must not appear on the consumer-facing camera event. Reading any of them would surface as a
-    // compile error - the @ts-expect-error annotations pin the absence of each stripped key.
+    // compile error - the @ts-expect-error annotations hold the absence of each stripped key fixed.
     // @ts-expect-error - `data` is wire-only per-chunk plumbing and must not appear on the consumer-facing camera event.
     const _data: string = sample.data;
 
@@ -232,229 +203,160 @@ describe("ClientEventsMap - schema-derived equivalence per entity type", () => {
     // @ts-expect-error - `deviceId` is wire-only routing metadata and must not appear on the consumer-facing camera event.
     const _deviceId: number | undefined = sample.deviceId;
 
-    void _data;
-    void _done;
-    void _deviceId;
     assert.ok(true);
   });
 
   test("climate", () => {
 
-    const l: ClientEventsMap["climate"] = null as unknown as StateEventFor<typeof ENTITY_SCHEMAS["climate"]>;
-    const r: StateEventFor<typeof ENTITY_SCHEMAS["climate"]> = null as unknown as ClientEventsMap["climate"];
+    type _Equivalent = Assert<Equal<ClientEventsMap["climate"], StateEventFor<typeof ENTITY_SCHEMAS["climate"]>>>;
 
-    void l;
-    void r;
     assert.ok(true);
   });
 
   test("cover", () => {
 
-    const l: ClientEventsMap["cover"] = null as unknown as StateEventFor<typeof ENTITY_SCHEMAS["cover"]>;
-    const r: StateEventFor<typeof ENTITY_SCHEMAS["cover"]> = null as unknown as ClientEventsMap["cover"];
+    type _Equivalent = Assert<Equal<ClientEventsMap["cover"], StateEventFor<typeof ENTITY_SCHEMAS["cover"]>>>;
 
-    void l;
-    void r;
     assert.ok(true);
   });
 
   test("date", () => {
 
-    const l: ClientEventsMap["date"] = null as unknown as StateEventFor<typeof ENTITY_SCHEMAS["date"]>;
-    const r: StateEventFor<typeof ENTITY_SCHEMAS["date"]> = null as unknown as ClientEventsMap["date"];
+    type _Equivalent = Assert<Equal<ClientEventsMap["date"], StateEventFor<typeof ENTITY_SCHEMAS["date"]>>>;
 
-    void l;
-    void r;
     assert.ok(true);
   });
 
   test("datetime", () => {
 
-    const l: ClientEventsMap["datetime"] = null as unknown as StateEventFor<typeof ENTITY_SCHEMAS["datetime"]>;
-    const r: StateEventFor<typeof ENTITY_SCHEMAS["datetime"]> = null as unknown as ClientEventsMap["datetime"];
+    type _Equivalent = Assert<Equal<ClientEventsMap["datetime"], StateEventFor<typeof ENTITY_SCHEMAS["datetime"]>>>;
 
-    void l;
-    void r;
     assert.ok(true);
   });
 
   test("event", () => {
 
-    const l: ClientEventsMap["event"] = null as unknown as StateEventFor<typeof ENTITY_SCHEMAS["event"]>;
-    const r: StateEventFor<typeof ENTITY_SCHEMAS["event"]> = null as unknown as ClientEventsMap["event"];
+    type _Equivalent = Assert<Equal<ClientEventsMap["event"], StateEventFor<typeof ENTITY_SCHEMAS["event"]>>>;
 
-    void l;
-    void r;
     assert.ok(true);
   });
 
   test("fan", () => {
 
-    const l: ClientEventsMap["fan"] = null as unknown as StateEventFor<typeof ENTITY_SCHEMAS["fan"]>;
-    const r: StateEventFor<typeof ENTITY_SCHEMAS["fan"]> = null as unknown as ClientEventsMap["fan"];
+    type _Equivalent = Assert<Equal<ClientEventsMap["fan"], StateEventFor<typeof ENTITY_SCHEMAS["fan"]>>>;
 
-    void l;
-    void r;
     assert.ok(true);
   });
 
   test("infrared (auto-extension proof: ClientEventsMap['infrared'] tracks the schema with no hand-edit)", () => {
 
-    const l: ClientEventsMap["infrared"] = null as unknown as StateEventFor<typeof ENTITY_SCHEMAS["infrared"]>;
-    const r: StateEventFor<typeof ENTITY_SCHEMAS["infrared"]> = null as unknown as ClientEventsMap["infrared"];
+    type _Equivalent = Assert<Equal<ClientEventsMap["infrared"], StateEventFor<typeof ENTITY_SCHEMAS["infrared"]>>>;
 
-    void l;
-    void r;
     assert.ok(true);
   });
 
   test("light", () => {
 
-    const l: ClientEventsMap["light"] = null as unknown as StateEventFor<typeof ENTITY_SCHEMAS["light"]>;
-    const r: StateEventFor<typeof ENTITY_SCHEMAS["light"]> = null as unknown as ClientEventsMap["light"];
+    type _Equivalent = Assert<Equal<ClientEventsMap["light"], StateEventFor<typeof ENTITY_SCHEMAS["light"]>>>;
 
-    void l;
-    void r;
     assert.ok(true);
   });
 
   test("lock", () => {
 
-    const l: ClientEventsMap["lock"] = null as unknown as StateEventFor<typeof ENTITY_SCHEMAS["lock"]>;
-    const r: StateEventFor<typeof ENTITY_SCHEMAS["lock"]> = null as unknown as ClientEventsMap["lock"];
+    type _Equivalent = Assert<Equal<ClientEventsMap["lock"], StateEventFor<typeof ENTITY_SCHEMAS["lock"]>>>;
 
-    void l;
-    void r;
     assert.ok(true);
   });
 
   test("media_player", () => {
 
-    const l: ClientEventsMap["media_player"] = null as unknown as StateEventFor<typeof ENTITY_SCHEMAS["media_player"]>;
-    const r: StateEventFor<typeof ENTITY_SCHEMAS["media_player"]> = null as unknown as ClientEventsMap["media_player"];
+    type _Equivalent = Assert<Equal<ClientEventsMap["media_player"], StateEventFor<typeof ENTITY_SCHEMAS["media_player"]>>>;
 
-    void l;
-    void r;
     assert.ok(true);
   });
 
   test("number", () => {
 
-    const l: ClientEventsMap["number"] = null as unknown as StateEventFor<typeof ENTITY_SCHEMAS["number"]>;
-    const r: StateEventFor<typeof ENTITY_SCHEMAS["number"]> = null as unknown as ClientEventsMap["number"];
+    type _Equivalent = Assert<Equal<ClientEventsMap["number"], StateEventFor<typeof ENTITY_SCHEMAS["number"]>>>;
 
-    void l;
-    void r;
     assert.ok(true);
   });
 
   test("radio_frequency (auto-extension proof: ClientEventsMap['radio_frequency'] tracks the schema with no hand-edit)", () => {
 
-    const l: ClientEventsMap["radio_frequency"] = null as unknown as StateEventFor<typeof ENTITY_SCHEMAS["radio_frequency"]>;
-    const r: StateEventFor<typeof ENTITY_SCHEMAS["radio_frequency"]> = null as unknown as ClientEventsMap["radio_frequency"];
+    type _Equivalent = Assert<Equal<ClientEventsMap["radio_frequency"], StateEventFor<typeof ENTITY_SCHEMAS["radio_frequency"]>>>;
 
-    void l;
-    void r;
     assert.ok(true);
   });
 
   test("select", () => {
 
-    const l: ClientEventsMap["select"] = null as unknown as StateEventFor<typeof ENTITY_SCHEMAS["select"]>;
-    const r: StateEventFor<typeof ENTITY_SCHEMAS["select"]> = null as unknown as ClientEventsMap["select"];
+    type _Equivalent = Assert<Equal<ClientEventsMap["select"], StateEventFor<typeof ENTITY_SCHEMAS["select"]>>>;
 
-    void l;
-    void r;
     assert.ok(true);
   });
 
   test("sensor", () => {
 
-    const l: ClientEventsMap["sensor"] = null as unknown as StateEventFor<typeof ENTITY_SCHEMAS["sensor"]>;
-    const r: StateEventFor<typeof ENTITY_SCHEMAS["sensor"]> = null as unknown as ClientEventsMap["sensor"];
+    type _Equivalent = Assert<Equal<ClientEventsMap["sensor"], StateEventFor<typeof ENTITY_SCHEMAS["sensor"]>>>;
 
-    void l;
-    void r;
     assert.ok(true);
   });
 
   test("siren", () => {
 
-    const l: ClientEventsMap["siren"] = null as unknown as StateEventFor<typeof ENTITY_SCHEMAS["siren"]>;
-    const r: StateEventFor<typeof ENTITY_SCHEMAS["siren"]> = null as unknown as ClientEventsMap["siren"];
+    type _Equivalent = Assert<Equal<ClientEventsMap["siren"], StateEventFor<typeof ENTITY_SCHEMAS["siren"]>>>;
 
-    void l;
-    void r;
     assert.ok(true);
   });
 
   test("switch", () => {
 
-    const l: ClientEventsMap["switch"] = null as unknown as StateEventFor<typeof ENTITY_SCHEMAS["switch"]>;
-    const r: StateEventFor<typeof ENTITY_SCHEMAS["switch"]> = null as unknown as ClientEventsMap["switch"];
+    type _Equivalent = Assert<Equal<ClientEventsMap["switch"], StateEventFor<typeof ENTITY_SCHEMAS["switch"]>>>;
 
-    void l;
-    void r;
     assert.ok(true);
   });
 
   test("text", () => {
 
-    const l: ClientEventsMap["text"] = null as unknown as StateEventFor<typeof ENTITY_SCHEMAS["text"]>;
-    const r: StateEventFor<typeof ENTITY_SCHEMAS["text"]> = null as unknown as ClientEventsMap["text"];
+    type _Equivalent = Assert<Equal<ClientEventsMap["text"], StateEventFor<typeof ENTITY_SCHEMAS["text"]>>>;
 
-    void l;
-    void r;
     assert.ok(true);
   });
 
   test("text_sensor", () => {
 
-    const l: ClientEventsMap["text_sensor"] = null as unknown as StateEventFor<typeof ENTITY_SCHEMAS["text_sensor"]>;
-    const r: StateEventFor<typeof ENTITY_SCHEMAS["text_sensor"]> = null as unknown as ClientEventsMap["text_sensor"];
+    type _Equivalent = Assert<Equal<ClientEventsMap["text_sensor"], StateEventFor<typeof ENTITY_SCHEMAS["text_sensor"]>>>;
 
-    void l;
-    void r;
     assert.ok(true);
   });
 
   test("time", () => {
 
-    const l: ClientEventsMap["time"] = null as unknown as StateEventFor<typeof ENTITY_SCHEMAS["time"]>;
-    const r: StateEventFor<typeof ENTITY_SCHEMAS["time"]> = null as unknown as ClientEventsMap["time"];
+    type _Equivalent = Assert<Equal<ClientEventsMap["time"], StateEventFor<typeof ENTITY_SCHEMAS["time"]>>>;
 
-    void l;
-    void r;
     assert.ok(true);
   });
 
   test("update", () => {
 
-    const l: ClientEventsMap["update"] = null as unknown as StateEventFor<typeof ENTITY_SCHEMAS["update"]>;
-    const r: StateEventFor<typeof ENTITY_SCHEMAS["update"]> = null as unknown as ClientEventsMap["update"];
+    type _Equivalent = Assert<Equal<ClientEventsMap["update"], StateEventFor<typeof ENTITY_SCHEMAS["update"]>>>;
 
-    void l;
-    void r;
     assert.ok(true);
   });
 
   test("valve", () => {
 
-    const l: ClientEventsMap["valve"] = null as unknown as StateEventFor<typeof ENTITY_SCHEMAS["valve"]>;
-    const r: StateEventFor<typeof ENTITY_SCHEMAS["valve"]> = null as unknown as ClientEventsMap["valve"];
+    type _Equivalent = Assert<Equal<ClientEventsMap["valve"], StateEventFor<typeof ENTITY_SCHEMAS["valve"]>>>;
 
-    void l;
-    void r;
     assert.ok(true);
   });
 
   test("water_heater", () => {
 
-    const l: ClientEventsMap["water_heater"] = null as unknown as StateEventFor<typeof ENTITY_SCHEMAS["water_heater"]>;
-    const r: StateEventFor<typeof ENTITY_SCHEMAS["water_heater"]> = null as unknown as ClientEventsMap["water_heater"];
+    type _Equivalent = Assert<Equal<ClientEventsMap["water_heater"], StateEventFor<typeof ENTITY_SCHEMAS["water_heater"]>>>;
 
-    void l;
-    void r;
     assert.ok(true);
   });
 });

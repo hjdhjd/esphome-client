@@ -33,10 +33,8 @@ describe("SerialProxyApi - public-surface narrowing", () => {
   test("client.serial.data(0) returns AsyncIterable<SerialDataChunk>", () => {
 
     const client = new EspHomeClient({ host: "localhost" });
-    const iterable: AsyncIterable<SerialDataChunk> = client.serial.data(0);
-
-    // We cannot actually consume the iterable without a transport - the type assertion is the point.
-    void iterable;
+    // We cannot actually consume the iterable without a transport - the annotation's acceptance is the point.
+    const _iterable: AsyncIterable<SerialDataChunk> = client.serial.data(0);
 
     client.disconnect();
   });
@@ -68,19 +66,13 @@ describe("SerialProxyConfigureOptions - required fields", () => {
   test("baudrate and dataSize are required (compile error if omitted)", () => {
 
     // The control case compiles cleanly.
-    const opts: SerialProxyConfigureOptions = { baudrate: 115200, dataSize: 8 };
-
-    void opts;
+    const _opts: SerialProxyConfigureOptions = { baudrate: 115200, dataSize: 8 };
 
     // @ts-expect-error - dataSize is required.
     const _missingDataSize: SerialProxyConfigureOptions = { baudrate: 115200 };
 
-    void _missingDataSize;
-
     // @ts-expect-error - baudrate is required.
     const _missingBaudrate: SerialProxyConfigureOptions = { dataSize: 8 };
-
-    void _missingBaudrate;
   });
 });
 
@@ -129,13 +121,10 @@ describe("ClientEventsMap - serialData typing", () => {
   test("client.on(\"serialData\", cb) types the callback parameter as SerialDataChunk", () => {
 
     const client = new EspHomeClient({ host: "localhost" });
-    let seen: SerialDataChunk | null = null;
+    // No emit is available without a transport; the callback parameter's assignment to a typed binding is the contract under test.
+    let _seen: SerialDataChunk | null = null;
 
-    using sub = client.on("serialData", (chunk): void => { seen = chunk; });
-
-    // No emit available without a transport; the type assertion above is the contract.
-    void seen;
-    void sub;
+    using sub = client.on("serialData", (chunk): void => { _seen = chunk; });
 
     client.disconnect();
   });
@@ -152,7 +141,5 @@ describe("SerialProxyFlushResult - type tag", () => {
 
     // @ts-expect-error - the result type is locked to FLUSH; SUBSCRIBE / UNSUBSCRIBE are not assignable.
     const _wrongType: SerialProxyFlushResult = { instance: 0, status: 0, type: SerialProxyRequestType.SUBSCRIBE };
-
-    void _wrongType;
   });
 });

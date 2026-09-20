@@ -2,9 +2,8 @@
  *
  * service-registry.test.ts: Unit tests for the ServiceRegistry.
  */
-import type { ServiceArgument, ServiceEntity } from "../types.ts";
+import type { EspHomeLogging, ServiceArgument, ServiceEntity } from "../types.ts";
 import { describe, test } from "node:test";
-import type { EspHomeLogging } from "../types.ts";
 import { ServiceArgType } from "../types.ts";
 import { ServiceRegistry } from "./service-registry.ts";
 import type { ServiceRegistryHost } from "./service-registry.ts";
@@ -44,12 +43,15 @@ const buildRegistry = (): { log: ReturnType<typeof recordingLogger>; registry: S
   return { log, registry };
 };
 
+// Upper bound for a synthesized service key. Wide enough that two fixtures built in the same test are very unlikely to collide on a key.
+const MOCK_SERVICE_KEY_RANGE = 1000000;
+
 // Inline mock-service factory. Services are simple value objects (key + name + args), so a small inline factory beats promoting a factories.ts helper for a single
 // consumer; future tests that need shared service fixtures can promote this then.
 const mockService = (overrides: Partial<ServiceEntity> & { key?: number; name?: string } = {}): ServiceEntity => ({
 
   args: overrides.args ?? [],
-  key: overrides.key ?? Math.floor(Math.random() * 1_000_000),
+  key: overrides.key ?? Math.floor(Math.random() * MOCK_SERVICE_KEY_RANGE),
   name: overrides.name ?? "test_service"
 });
 

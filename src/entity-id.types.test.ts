@@ -39,9 +39,6 @@ describe("EntityId<T> type-level guarantees", () => {
 
     // @ts-expect-error - assigning EntityId<"switch"> to EntityId<"light"> is a type error.
     const _x: EntityId<"light"> = switchId;
-
-    // Reference _x to keep the no-unused-locals quiet without introducing runtime semantics.
-    void _x;
   });
 
   test("isEntityId narrows a string to the matching EntityId<T> branch", () => {
@@ -94,7 +91,5 @@ describe("EntityId<T> contract violations - @ts-expect-error annotations must tr
 
     // @ts-expect-error - cannot assign EntityId<"light"> into EntityId<"switch"> without re-minting.
     const _switchId: EntityId<"switch"> = lightId;
-
-    void _switchId;
   });
 });

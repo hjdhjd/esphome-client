@@ -8,12 +8,11 @@
  * RecordingTransport tee (it copies every inbound message while delegating), and PII scrubbing. The end-to-end record-through-replay drive lives in
  * test/e2e/capture.test.ts, where the simulator scenarios provide validated wire fixtures.
  */
-import { decodeCaptureFrames, encodeCaptureFrames, scrubDeviceInfo } from "./capture.ts";
+import { RecordingTransport, decodeCaptureFrames, encodeCaptureFrames, scrubDeviceInfo } from "./capture.ts";
 import { describe, test } from "node:test";
 import type { DeviceInfo } from "../esphome-client.ts";
 import type { InboundMessage } from "../transport.ts";
 import { MockTransport } from "../testing/mock-transport.ts";
-import { RecordingTransport } from "./capture.ts";
 import assert from "node:assert/strict";
 
 describe("capture frame codec", () => {

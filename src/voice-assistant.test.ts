@@ -2,6 +2,7 @@
  *
  * voice-assistant.test.ts: Unit tests for the module-level inbound dispatchers in voice-assistant.ts.
  */
+import type { FieldValue, ProtoField } from "./protocol/codec.ts";
 import { decodeProtobuf, encodeProtoFields } from "./protocol/codec.ts";
 import { describe, test } from "node:test";
 import {
@@ -10,8 +11,6 @@ import {
 import { Buffer } from "node:buffer";
 import type { ClientEventsMap } from "./esphome-client.ts";
 import { EventBus } from "./event-bus.ts";
-import type { FieldValue } from "./protocol/codec.ts";
-import type { ProtoField } from "./protocol/codec.ts";
 import type { VoiceAssistantInboundContext } from "./voice-assistant.ts";
 import { WireType } from "./protocol/wire-types.ts";
 import assert from "node:assert/strict";

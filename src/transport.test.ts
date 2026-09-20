@@ -9,12 +9,11 @@ import {
   BufferOverflowError, ConnectionClosedByPeerError, ConnectionRefusedError, ConnectionTimeoutError, DecryptionFailedError, FrameTooLargeError,
   MalformedVarintError, NoiseHandshakeError, PeerClosedDuringNoiseError, PermanentError, ProtocolError
 } from "./errors.ts";
+import type { ClientMetrics, EspHomeLogging } from "./types.ts";
 import type { InboundMessage, NoiseCipherPair, TransportLike, TransportOpenOptions } from "./transport.ts";
 import { describe, test } from "node:test";
 import { Buffer } from "node:buffer";
 import type { CipherState } from "./crypto-noise.ts";
-import type { ClientMetrics } from "./types.ts";
-import type { EspHomeLogging } from "./types.ts";
 import { MessageType } from "./protocol/index.ts";
 import { MockSocket } from "./testing/mock-socket.ts";
 import type { Socket } from "node:net";

@@ -2,11 +2,10 @@
  *
  * sub-device.test.ts: Type-level tests for the SubDevice descriptor.
  */
+import type { FieldValue, ProtoField } from "./protocol/codec.ts";
 import { decodeProtobuf, encodeProtoFields } from "./protocol/codec.ts";
 import { describe, test } from "node:test";
 import { Buffer } from "node:buffer";
-import type { FieldValue } from "./protocol/codec.ts";
-import type { ProtoField } from "./protocol/codec.ts";
 import type { SubDevice } from "./sub-device.ts";
 import { WireType } from "./protocol/wire-types.ts";
 import assert from "node:assert/strict";

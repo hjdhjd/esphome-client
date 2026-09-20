@@ -136,8 +136,6 @@ describe("MockClient surface mirror", () => {
 
       // result.type narrows to the literal "light" because the EntityId<"light"> brand carried through.
       const _t: "light" = result.type;
-
-      void _t;
     }
 
     assert.equal(result, null);
@@ -153,9 +151,6 @@ describe("MockClient surface mirror", () => {
 
       const _id: EntityId<"light"> = id;
       const _t: "light" = event.type;
-
-      void _id;
-      void _t;
     }
 
     assert.equal(lights.size, 0);

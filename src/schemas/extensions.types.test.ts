@@ -51,7 +51,6 @@ describe("ExtraSchemaSet typing", () => {
       aliasOf("not_an_entity");
     };
 
-    void _typeCheck;
     assert.ok(true);
   });
 
@@ -63,7 +62,6 @@ describe("ExtraSchemaSet typing", () => {
       extending("not_an_entity", { addedListEntitiesFields: {} });
     };
 
-    void _typeCheck;
     assert.ok(true);
   });
 
@@ -81,8 +79,6 @@ describe("ExtraSchemaSet typing", () => {
       // @ts-expect-error -- ExtraSchemaSet is readonly; assignment should be flagged.
       set["foo"] = aliasOf("switch");
     };
-
-    void _typeCheck;
   });
 });
 
@@ -99,12 +95,9 @@ describe("EspHomeClient<Extras> type threading", () => {
     // Static-type-only check: ExtendedEntityType<NoExtras> must accept "light" (built-in) and reject "door_cover" (no extras).
     const _typeCheck = (): void => {
 
-      const builtIn: ExtendedEntityType<NoExtras> = "light";
-
-      void builtIn;
+      const _builtIn: ExtendedEntityType<NoExtras> = "light";
     };
 
-    void _typeCheck;
     assert.ok(true);
   });
 
@@ -112,14 +105,10 @@ describe("EspHomeClient<Extras> type threading", () => {
 
     const _typeCheck = (): void => {
 
-      const builtIn: ExtendedEntityType<DoorCoverExtras> = "light";
-      const extras: ExtendedEntityType<DoorCoverExtras> = "door_cover";
-
-      void builtIn;
-      void extras;
+      const _builtIn: ExtendedEntityType<DoorCoverExtras> = "light";
+      const _extras: ExtendedEntityType<DoorCoverExtras> = "door_cover";
     };
 
-    void _typeCheck;
     assert.ok(true);
   });
 
@@ -130,11 +119,8 @@ describe("EspHomeClient<Extras> type threading", () => {
     const _typeCheck = (): void => {
 
       const _value: CoverSchema = undefined as unknown as CoverSchema;
-
-      void _value;
     };
 
-    void _typeCheck;
     assert.ok(true);
   });
 
@@ -156,7 +142,6 @@ describe("EspHomeClient<Extras> type threading", () => {
       client.command(entityId("door_cover", "garage"), { position: 0.5 });
     };
 
-    void _typeCheck;
     assert.ok(true);
   });
 
@@ -178,7 +163,6 @@ describe("EspHomeClient<Extras> type threading", () => {
       client.command(entityId("switch", "x"), { position: 0.5 });
     };
 
-    void _typeCheck;
     assert.ok(true);
   });
 
@@ -197,7 +181,6 @@ describe("EspHomeClient<Extras> type threading", () => {
       client.command(entityId("switch", "x"), { state: true });
     };
 
-    void _typeCheck;
     assert.ok(true);
   });
 });

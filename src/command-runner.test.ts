@@ -632,7 +632,8 @@ describe("runCommandAndAwait - pre-subscribe ordering guarantee", () => {
 
       bus,
       keyForId: (): number => 100,
-      send: (type: number, payload: Buffer): void => {
+      // Both parameters carry the underscore prefix: the hook needs neither, and spelling them out keeps the mock's shape readable against the wire callback contract.
+      send: (_type: number, _payload: Buffer): void => {
 
         callOrder.push("send");
 
@@ -640,9 +641,6 @@ describe("runCommandAndAwait - pre-subscribe ordering guarantee", () => {
         assert.ok(bus.listenerCount("light") > 0, "stream listener attached before send fires");
 
         bus.emit("light", { entity: "x", key: 100, state: true, type: "light" });
-
-        void payload;
-        void type;
       }
     });
 

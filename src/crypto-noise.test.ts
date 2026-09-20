@@ -983,13 +983,12 @@ describe("Real-cipher edge cases", () => {
     assert.ok(dec, "the responder must expose a receiveCipher after a completed handshake");
 
     // Encrypt frame A (advances the send nonce from 0 to 1), then frame B at nonce 1.
-    const a = enc.EncryptWithAd(Buffer.alloc(0), Buffer.from("A"));
+    const _a = enc.EncryptWithAd(Buffer.alloc(0), Buffer.from("A"));
     const b = enc.EncryptWithAd(Buffer.alloc(0), Buffer.from("B"));
 
     // Delivering B before A means the receiver decrypts B at nonce 0, but B was encrypted at nonce 1, so the tag check fails. Reordering fails closed for the same
-    // implicit-nonce reason as replay. (We keep `a` to document the order that WOULD have succeeded; we do not deliver it.)
-    void a;
-
+    // implicit-nonce reason as replay. Frame A is still encrypted, because that is what advances the send nonce, and its binding carries the underscore prefix to
+    // mark it as held only to document the order that WOULD have succeeded; we never deliver it.
     assert.throws(() => dec.DecryptWithAd(Buffer.alloc(0), b), { code: "AUTH_FAILED", name: "NoiseHandshakeError" });
   });
 
