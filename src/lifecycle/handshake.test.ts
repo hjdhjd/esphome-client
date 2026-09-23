@@ -5,7 +5,7 @@
 import type { ApiMajorRange, ClientApiVersion } from "./handshake.ts";
 import {
   EncryptionKeyInvalidError, EncryptionKeyMissingError, EncryptionRequiredError, NegotiationFailedError,
-  NoiseHandshakeError, NoiseHandshakeTimeoutError, PlaintextHandshakeError, ProtocolError
+  NoiseHandshakeError, NoiseHandshakeTimeoutError, PermanentError, PlaintextHandshakeError, ProtocolError
 } from "../errors.ts";
 import type { EspHomeLogging, NoiseServerHello, PskResolver } from "../types.ts";
 import { MessageType, WireType } from "../protocol/index.ts";
@@ -339,17 +339,52 @@ describe("performNoiseHandshake - server-handshake reply validation", () => {
     await assert.rejects(promise, (err: unknown) => (err instanceof NoiseHandshakeError) && (err.code === "TRUNCATED_E"));
   });
 
-  test("rejects server-handshake reply with non-zero header (PSK auth failure)", async () => {
+  // An in-band rejection is a non-zero header followed by the device's reason text. The rows are ESPHome's wrong-key reason, the framing and protocol faults its
+  // firmware reports, a reason no firmware sends yet, and a near miss that differs from the wrong-key reason only by trailing punctuation. Only the exact wrong-key
+  // reason is a key rejection.
+  const rejections: readonly { keyRejected: boolean; reason: string }[] = [
 
-    const transport = new MockTransport();
-    const promise = startNoise({ transport });
+    { keyRejected: true, reason: "Handshake MAC failure" },
+    { keyRejected: false, reason: "Handshake error" },
+    { keyRejected: false, reason: "Bad indicator byte" },
+    { keyRejected: false, reason: "Bad handshake packet len" },
+    { keyRejected: false, reason: "Empty handshake message" },
+    { keyRejected: false, reason: "Bad handshake error byte" },
+    { keyRejected: false, reason: "A reason no firmware sends yet" },
+    { keyRejected: false, reason: "Handshake MAC failure." }
+  ];
 
-    transport.pushNoiseHandshakeFrame(goodHello);
-    await Promise.resolve();
-    transport.pushNoiseHandshakeFrame(Buffer.concat([ Buffer.from([1]), Buffer.from("auth failed", "utf8") ]));
+  for(const { keyRejected, reason } of rejections) {
 
-    await assert.rejects(promise, (err: unknown) => (err instanceof EncryptionKeyInvalidError) && (err.code === "NOISE_HANDSHAKE_FAILED"));
-  });
+    test("an in-band rejection for " + JSON.stringify(reason) + " is " + (keyRejected ? "a permanent key rejection" : "a transient handshake rejection"), async () => {
+
+      const transport = new MockTransport();
+      const promise = startNoise({ transport });
+
+      transport.pushNoiseHandshakeFrame(goodHello);
+      await Promise.resolve();
+      transport.pushNoiseHandshakeFrame(Buffer.concat([ Buffer.from([1]), Buffer.from(reason, "utf8") ]));
+
+      await assert.rejects(promise, (err: unknown) => {
+
+        if(keyRejected) {
+
+          assert.ok(err instanceof EncryptionKeyInvalidError, "ESPHome's wrong-key reason must fail with EncryptionKeyInvalidError");
+          assert.equal(err.code, "NOISE_HANDSHAKE_FAILED", "the key rejection keeps the code consumers already match on");
+          assert.ok(err instanceof PermanentError, "a rejected key must be permanent so the default reconnect predicate gives up");
+
+          return true;
+        }
+
+        assert.ok(err instanceof NoiseHandshakeError, "any other reason must fail with NoiseHandshakeError");
+        assert.equal(err.code, "HANDSHAKE_REJECTED");
+        assert.equal(err instanceof PermanentError, false, "a protocol fault must stay transient so the reconnect supervisor may retry it");
+        assert.ok(err.message.includes(reason), "the device's reason must be carried in the message");
+
+        return true;
+      });
+    });
+  }
 });
 
 describe("performNoiseHandshake - readMessage failure re-tagging", () => {
@@ -452,18 +487,6 @@ describe("performNoiseHandshake - readMessage failure re-tagging", () => {
 
       return true;
     });
-  });
-
-  test("the in-band header != 0 server rejection still throws EncryptionKeyInvalidError", async () => {
-
-    const transport = new MockTransport();
-    const promise = startNoise({ transport });
-
-    transport.pushNoiseHandshakeFrame(goodHello);
-    await Promise.resolve();
-    transport.pushNoiseHandshakeFrame(Buffer.concat([ Buffer.from([1]), Buffer.from("auth failed", "utf8") ]));
-
-    await assert.rejects(promise, (err: unknown) => (err instanceof EncryptionKeyInvalidError) && (err.code === "NOISE_HANDSHAKE_FAILED"));
   });
 });
 

@@ -92,6 +92,9 @@ export class HandshakeError extends ConnectionError {}
  * - `AUTH_FAILED` - ChaCha20-Poly1305 authentication tag verification failed during decryption (`crypto-noise.ts`). Wrong PSK or tampered ciphertext.
  * - `CT_TOO_SHORT` - Inbound ciphertext was shorter than the 16-byte AEAD tag (`crypto-noise.ts`). Malformed inbound noise frame.
  * - `HANDSHAKE_COMPLETE` - A handshake-state operation was attempted after the handshake already completed (`crypto-noise.ts`). Library-internal lifecycle bug.
+ * - `HANDSHAKE_REJECTED` - The device rejected the handshake in-band for a reason other than a wrong key, such as a malformed or unexpected handshake frame
+ *   (`lifecycle/handshake.ts`). The message carries the device's reason text. Not a key problem, so it stays transient; a wrong key is reported instead as a permanent
+ *   {@link EncryptionKeyInvalidError}.
  * - `HANDSHAKE_TIMEOUT` - The per-step handshake timeout elapsed (`lifecycle/handshake.ts`). Carried by {@link NoiseHandshakeTimeoutError}.
  * - `INVALID_PSK_LENGTH` - The PSK is not exactly 32 bytes (`crypto-noise.ts`). Consumer-supplied configuration error; the connect-flow handshake re-tags this into a
  *   permanent {@link EncryptionKeyInvalidError}.
@@ -109,8 +112,9 @@ export class HandshakeError extends ConnectionError {}
  * - `UNSUPPORTED_TOKEN` - The device's noise-handshake server-hello frame selected a protocol byte other than 1 (`lifecycle/handshake.ts`). Indicates the peer
  *   negotiated a noise protocol variant this client does not support.
  */
-export type NoiseHandshakeErrorCode = "AUTH_FAILED" | "CT_TOO_SHORT" | "HANDSHAKE_COMPLETE" | "HANDSHAKE_TIMEOUT" | "INVALID_PSK_LENGTH" | "INVALID_REMOTE_KEY" |
-  "MISSING_KEYS" | "MSG_TOO_LONG" | "NONCE_EXHAUSTED" | "NOT_INITIALIZED" | "PEER_CLOSED_NOISE" | "PEER_PLAINTEXT_DURING_NOISE" | "TRUNCATED_E" | "UNSUPPORTED_TOKEN";
+export type NoiseHandshakeErrorCode = "AUTH_FAILED" | "CT_TOO_SHORT" | "HANDSHAKE_COMPLETE" | "HANDSHAKE_REJECTED" | "HANDSHAKE_TIMEOUT" | "INVALID_PSK_LENGTH" |
+  "INVALID_REMOTE_KEY" | "MISSING_KEYS" | "MSG_TOO_LONG" | "NONCE_EXHAUSTED" | "NOT_INITIALIZED" | "PEER_CLOSED_NOISE" | "PEER_PLAINTEXT_DURING_NOISE" |
+  "TRUNCATED_E" | "UNSUPPORTED_TOKEN";
 
 /**
  * Failure during the Noise NNpsk0 handshake itself. Carries a narrowed {@link NoiseHandshakeErrorCode} for precise dispatch.

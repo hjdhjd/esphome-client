@@ -41,7 +41,7 @@ const NOISE_INDICATOR = 0x01;
 /**
  * The chosen-protocol byte the device announces in its server-hello and the SUCCESS header byte prefixing the server handshake reply. The production initiator requires
  * the chosen-protocol byte to be exactly `0x01` ({@link "lifecycle/handshake".performNoiseHandshake} step 2) and treats a non-zero handshake-reply header as an
- * authentication failure (step 4).
+ * in-band rejection (step 4).
  */
 const NOISE_PROTO_ID = 0x01;
 const NOISE_SUCCESS_HEADER = 0x00;

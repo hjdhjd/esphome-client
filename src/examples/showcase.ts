@@ -1102,7 +1102,7 @@ export async function errorClassEnumerationExample(): Promise<void> {
 
     if(error instanceof EncryptionKeyInvalidError) {
 
-      // PSK is the wrong length or the device rejected it.
+      // The PSK is the wrong length, or the device rejected it as the wrong key.
       return;
     }
 

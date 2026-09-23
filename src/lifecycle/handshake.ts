@@ -116,6 +116,10 @@ export interface DiscoveryInput {
   readonly transport: TransportLike;
 }
 
+// ESPHome's wire contract for a rejected key: a device that cannot authenticate the client's handshake message answers with exactly this reason text. Every other
+// reason it sends reports a framing or protocol fault rather than a key problem, so the reply is matched by exact equality.
+const KEY_REJECTED_REASON = "Handshake MAC failure";
+
 /**
  * Run the Noise NNpsk0 handshake over the supplied transport. Sends the empty initial frame, reads the server hello and resolves the key from what it announces,
  * initializes the cipher state, processes the server's handshake reply, and installs the cipher pair on success.
@@ -125,11 +129,12 @@ export interface DiscoveryInput {
  *
  * @param input - Handshake inputs.
  * @throws {EncryptionKeyMissingError} when invoked without a key resolver, or when the resolver returns no key for the announced server hello.
- * @throws {NoiseHandshakeError} for framing-level handshake failures (truncated/short/missing-key) that are not key problems.
+ * @throws {NoiseHandshakeError} for framing-level handshake failures (truncated/short/missing-key) that are not key problems, and for an in-band rejection whose
+ * reason is anything other than a wrong key (`HANDSHAKE_REJECTED`, carrying the device's reason text).
  * @throws {EncryptionKeyInvalidError} when the resolved key does not decode to 32 bytes (`INVALID_PSK_LENGTH`), or when the encrypted handshake reply cannot be
- * authenticated: the in-band server rejection (header != 0), OR a local AEAD failure decrypting the reply (`AUTH_FAILED`), OR a malformed / low-order peer ephemeral
- * that fails X25519 key agreement (`INVALID_REMOTE_KEY`). Every enumerated failure above is a permanent bad-key failure; the granular cause code is preserved on the
- * error's `cause` chain.
+ * authenticated: the device's in-band rejection of the key (header != 0 with ESPHome's wrong-key reason), OR a local AEAD failure decrypting the reply
+ * (`AUTH_FAILED`), OR a malformed / low-order peer ephemeral that fails X25519 key agreement (`INVALID_REMOTE_KEY`). Every enumerated failure above is a permanent
+ * bad-key failure; the granular cause code is preserved on the error's `cause` chain.
  * @throws {NoiseHandshakeTimeoutError} when the abort signal fires (timeout or user-driven abort).
  * @throws {PlaintextHandshakeError} when the announced server name does not match the expected name.
  */
@@ -203,7 +208,7 @@ export async function performNoiseHandshake(input: NoiseHandshakeInput): Promise
 
     await transport.sendNoiseHandshakeFrame(Buffer.concat([ Buffer.from([0]), handshakeMessage ]));
 
-    // Step 4: receive the server handshake reply. First byte 0 indicates success; non-zero is an authentication failure.
+    // Step 4: receive the server handshake reply. First byte 0 indicates success; non-zero is an in-band rejection whose reason text is the rest of the frame.
     const serverHandshake = await transport.nextNoiseHandshakeFrame(signal);
 
     if(serverHandshake.length === 0) {
@@ -213,9 +218,19 @@ export async function performNoiseHandshake(input: NoiseHandshakeInput): Promise
 
     const header = serverHandshake.readUInt8(0);
 
+    // We classify an in-band rejection by the reason the device gives. Only ESPHome's wrong-key reason is a key problem, and so a permanent failure; any other reason,
+    // including one a future firmware adds, is a protocol fault that stays transient, so the reconnect supervisor may retry it while the fallback gate still fails it
+    // closed.
     if(header !== 0) {
 
-      throw new EncryptionKeyInvalidError("Noise handshake failure: " + serverHandshake.subarray(1).toString() + ".", "NOISE_HANDSHAKE_FAILED");
+      const reason = serverHandshake.subarray(1).toString();
+
+      if(reason === KEY_REJECTED_REASON) {
+
+        throw new EncryptionKeyInvalidError("The device rejected the encryption key.", "NOISE_HANDSHAKE_FAILED");
+      }
+
+      throw new NoiseHandshakeError("The device rejected the Noise handshake: " + reason + ".", "HANDSHAKE_REJECTED");
     }
 
     // Read the server's handshake reply. This is the connect-flow's final crypto step, so a bad-KEY failure here is permanent: either the server rejected our PSK (a
