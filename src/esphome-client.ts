@@ -18,7 +18,7 @@ import type {
   ConnectionStateData as BluetoothConnectionStateData, ConnectionsFreeData as BluetoothConnectionsFreeData, BluetoothLERawAdvertisement,
   NotifyDataChunk as BluetoothNotifyDataChunk, BluetoothProxyHost, BluetoothScannerStateData
 } from "./bluetooth-proxy.ts";
-import type { ClientMetrics, EspHomeLogging, Nullable, ServiceEntity } from "./types.ts";
+import type { ClientMetrics, EspHomeLogging, Nullable, PskResolver, ServiceEntity } from "./types.ts";
 import type { ClockFn, HeartbeatConfig, HeartbeatHost } from "./heartbeat.ts";
 import type { CommandAndAwaitOptions, CommandHost, NonAwaitableEntityType } from "./command-runner.ts";
 import type { CommandFor, StateEventFor } from "./schemas/derived.ts";
@@ -454,7 +454,8 @@ export interface ServiceCallResult {
  * @property extraSchemas - Optional registry of additional entity schemas registered for this client instance only. See {@link ExtraSchemaSet} for the contract.
  * @property logger - Optional logging interface for debug and error messages.
  * @property port - The port number for the ESPHome API (default: 6053).
- * @property psk - Optional base64 encoded pre-shared key for Noise encryption.
+ * @property psk - Optional Noise encryption key: the base64-encoded pre-shared key, or a {@link PskResolver} the client calls with the node name and MAC address the
+ * device announces in its server hello, so the key can be selected per device at first contact. An empty string means no key.
  * @property serverName - Optional expected server name for validation during encrypted connections.
  *
  */
@@ -554,7 +555,7 @@ export interface EspHomeClientOptions<Extras extends ExtraSchemaSet = {}> {
   maxRecvBufferBytes?: number;
 
   port?: number;
-  psk?: Nullable<string>;
+  psk?: Nullable<string> | PskResolver;
 
   /**
    * Auto-reconnect configuration. When enabled (the default), a non-permanent disconnect triggers a backoff-scheduled reconnect; consumer-held subscriptions survive
@@ -855,8 +856,8 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
   // over the connection state - guaranteeing the loop and a superseding manual connect never mutate `transport`/registries/health concurrently. `null` when no loop runs.
   private reconnectLoopPromise: Nullable<Promise<void>> = null;
 
-  // The pre-shared key for Noise encryption (base64 encoded).
-  private psk: Nullable<string>;
+  // The Noise encryption key resolver. A string key is held as a resolver that returns it, so the handshake has one key path for every key form; null means no key.
+  private readonly resolvePsk: Nullable<PskResolver>;
 
   // The expected server name for validation (optional).
   private expectedServerName: Nullable<string>;
@@ -919,11 +920,13 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
    * ready-to-use instance; reach for `new EspHomeClient(options)` only when the consumer must attach subscriptions before the first `connect()` so events fired during
    * the handshake are not missed.
    *
-   * @remarks Every option is optional except `host`. When `psk` is supplied the client attempts the Noise NNpsk0 handshake first and falls back to plaintext ONLY when
-   * the device demonstrably does not speak encryption - it responded in plaintext or closed the socket during the noise exchange. A bad encryption key (a rejected PSK or
-   * a malformed/low-order peer key) fails closed with a permanent {@link EncryptionKeyInvalidError} rather than silently downgrading to plaintext. The full
-   * options surface (transport injection, metrics sink, keep-alive, reconnect, frame/buffer/field caps, handshake and connect timeouts) is documented on
-   * {@link EspHomeClientOptions}; consult that type rather than this docstring for a complete listing.
+   * @remarks Every option is optional except `host`. When `psk` is supplied, as a key or as a {@link PskResolver}, the client attempts the Noise NNpsk0 handshake first
+   * and falls back to plaintext ONLY when the device demonstrably does not speak encryption - it responded in plaintext or closed the socket during the noise exchange.
+   * The key is checked where the handshake uses it, not at construction: a bad encryption key (a key that does not decode to 32 bytes, a rejected PSK, or a
+   * malformed/low-order peer key) fails closed with a permanent {@link EncryptionKeyInvalidError}, and a resolver that returns no key fails closed with a permanent
+   * {@link EncryptionKeyMissingError}, rather than silently downgrading to plaintext. The full options surface (transport injection, metrics sink, keep-alive,
+   * reconnect, frame/buffer/field caps, handshake and connect timeouts) is documented on {@link EspHomeClientOptions}; consult that type rather than this docstring for
+   * a complete listing.
    *
    * Usage:
    *
@@ -991,7 +994,13 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
     this.homeAssistantApi = new HomeAssistantApi(homeAssistantApiHost);
 
     this.remoteDeviceInfo = null;
-    this.psk = options.psk ?? null;
+
+    // We normalize the key forms, once, into the single resolver the handshake consults: a function is used as given, a non-empty string becomes a resolver that
+    // returns it, and an empty string, like an absent key, means no key. The key is not validated here...the handshake checks it where it is used, so a malformed
+    // string key fails the connection closed exactly like a malformed key a resolver returns.
+    const psk = options.psk;
+
+    this.resolvePsk = (typeof psk === "function") ? psk : (psk ? (): string => psk : null);
     this.expectedServerName = options.serverName ?? null;
     this.disconnectCorrelator = new Correlator<void>();
     this.noiseKeyCorrelator = new Correlator<boolean>();
@@ -1151,18 +1160,6 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
       resolveSchema: (entityType: string): EntitySchema | undefined => getSchemaIn(this.schemasTable, entityType),
       send: (type: number, payload: Buffer): void => { this.frameAndSend(type, payload); }
     };
-
-    // Validate the encryption key format if provided.
-    if(this.psk) {
-
-      const keyBuffer = Buffer.from(this.psk, "base64");
-
-      if(keyBuffer.length !== 32) {
-
-        this.log.error("Invalid encryption key provided.");
-        this.psk = null;
-      }
-    }
   }
 
   /**
@@ -1282,8 +1279,8 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
 
       try {
 
-        // Try the noise handshake first if a PSK was supplied.
-        if(this.psk) {
+        // Try the noise handshake first if a key or key resolver was supplied.
+        if(this.resolvePsk) {
 
           try {
 
@@ -1292,7 +1289,7 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
               expectedServerName: this.expectedServerName,
               log: this.log,
               metrics: this.metrics,
-              psk: this.psk,
+              resolvePsk: this.resolvePsk,
               signal: this.combineSignals(overallSignal, this.handshakeTimeoutMs),
               transport: context.transport
             });
@@ -1323,7 +1320,7 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
           clientId: this.clientId,
           log: this.log,
           maxFieldsPerMessage: this.maxFieldsPerMessage,
-          psk: this.psk,
+          pskConfigured: this.resolvePsk !== null,
           receiver: context.receiver,
           setApiMinorVersion: (minor: number): void => { this.deviceApiMinorVersion = minor; },
           signal: this.combineSignals(overallSignal, this.handshakeTimeoutMs),

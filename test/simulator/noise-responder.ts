@@ -17,7 +17,7 @@
  * layer synchronously while the client is still inside its own `write` callback.
  *
  * This is a plain non-`.test.ts` module: the e2e runner globs only the `.test.ts` files under `test/e2e`, so this helper is imported by the encrypted-session test
- * (whose handshake, frame-corruption, and bad-key fail-closed cases all drive it) rather than discovered standalone.
+ * (whose handshake, frame-corruption, bad-key fail-closed, and key-resolver cases all drive it) rather than discovered standalone.
  *
  * @module test/simulator/noise-responder
  */
@@ -107,6 +107,13 @@ export interface NoiseResponderOptions {
   readonly psk: Buffer;
 
   /**
+   * Optional node name and MAC address for the server hello to announce, in the upstream wire form ESPHome 2025.4.0 and newer write: the hello body is
+   * `[0x01][name][0x00][mac][0x00]`, where `mac` is the raw twelve lowercase hex digits with no separators (`"244cab06499c"`). When omitted the hello carries the
+   * chosen-proto byte only.
+   */
+  readonly serverHello?: { readonly mac: string; readonly name: string };
+
+  /**
    * Optional bad-key anti-vacuity hook driving the header=0-UNDECRYPTABLE path. When set, the responder still emits the `0x00` SUCCESS header (so the client treats the
    * reply as a non-rejection and proceeds into its `readMessage` - this is the path the in-band header != 0 reject does NOT exercise) but corrupts the responder
    * ephemeral in msg2 so the client cannot complete the handshake:
@@ -168,10 +175,14 @@ export interface NoiseResponder {
  */
 export function createNoiseResponder(options: NoiseResponderOptions): NoiseResponder {
 
-  const { corruptType, frames, psk, undecryptableMode } = options;
+  const { corruptType, frames, psk, serverHello, undecryptableMode } = options;
 
   // The responder's handshake. A real responder-role HandshakeState; both sides OMIT additionalPrologueData, so the prologue is ESPHome's fixed "NoiseAPIInit\x00\x00".
   const responder = createESPHomeHandshake({ psk, role: "responder" });
+
+  // The server hello body: the chosen-proto byte, followed by the null-terminated node name and MAC address when the test asks for them.
+  const serverHelloBody = (serverHello === undefined) ? Buffer.from([ NOISE_PROTO_ID ]) :
+    Buffer.concat([ Buffer.from([ NOISE_PROTO_ID ]), Buffer.from(serverHello.name + "\x00" + serverHello.mac + "\x00", "utf8") ]);
 
   // Tracks whether the one-shot ciphertext corruption has been applied, so only the first matching frame is tampered.
   let corrupted = false;
@@ -201,9 +212,9 @@ export function createNoiseResponder(options: NoiseResponderOptions): NoiseRespo
 
       case ResponderStep.AWAIT_INITIAL: {
 
-        // The client's first write is the empty initial handshake frame `[0x01][0x00 0x00]`. Reply with the server-hello `[0x01][be16 1][0x01]`: a single chosen-proto
-        // byte, no server name (so the client leaves `expectedServerName` unchecked).
-        pushSoon(buildNoiseWireFrame(Buffer.from([ NOISE_PROTO_ID ])));
+        // The client's first write is the empty initial handshake frame `[0x01][0x00 0x00]`. Reply with the server-hello: by default `[0x01][be16 1][0x01]`, a single
+        // chosen-proto byte and no server name (so the client leaves `expectedServerName` unchecked), or the announced name and MAC address when `serverHello` is set.
+        pushSoon(buildNoiseWireFrame(serverHelloBody));
         step = ResponderStep.AWAIT_MSG1;
 
         break;

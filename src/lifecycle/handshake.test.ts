@@ -7,11 +7,11 @@ import {
   EncryptionKeyInvalidError, EncryptionKeyMissingError, EncryptionRequiredError, NegotiationFailedError,
   NoiseHandshakeError, NoiseHandshakeTimeoutError, PlaintextHandshakeError, ProtocolError
 } from "../errors.ts";
+import type { EspHomeLogging, NoiseServerHello, PskResolver } from "../types.ts";
 import { MessageType, WireType } from "../protocol/index.ts";
-import { applyHelloResponse, authenticateIfNeeded, performDiscovery, performNoiseHandshake, performPlaintextHandshake } from "./handshake.ts";
+import { applyHelloResponse, authenticateIfNeeded, parseServerHello, performDiscovery, performNoiseHandshake, performPlaintextHandshake } from "./handshake.ts";
 import { describe, test } from "node:test";
 import { Buffer } from "node:buffer";
-import type { EspHomeLogging } from "../types.ts";
 import { MessageReceiver } from "../message-receiver.ts";
 import { MockTransport } from "../testing/mock-transport.ts";
 import assert from "node:assert/strict";
@@ -45,6 +45,27 @@ const CLIENT_API_VERSION: ClientApiVersion = { major: 1, minor: 12 };
 // Validly-shaped 32-byte base64 PSK. Shape passes the length check; never authenticates against a real device.
 const VALID_PSK = Buffer.alloc(32, 1).toString("base64");
 
+// Build a frame from space-separated hex octets, so each fixture below reads byte for byte against its source.
+const hexFrame = (hex: string): Buffer => Buffer.from(hex.replaceAll(" ", ""), "hex");
+
+// Byte-exact Noise server hellos captured from live devices, each the frame body the transport hands the handshake after stripping the `[0x01][be16 size]` wire
+// header. The first is the capture published with esphome/esphome pull request 8551, which added the MAC segment; the second was read from a production ratgdo.
+const LIVE_HELLOS = [
+
+  {
+
+    expected: { macAddress: "24:4C:AB:06:49:9C", name: "poolhouse81proxy" },
+    frame: hexFrame("01 70 6f 6f 6c 68 6f 75 73 65 38 31 70 72 6f 78 79 00 32 34 34 63 61 62 30 36 34 39 39 63 00")
+  },
+  {
+
+    expected: { macAddress: "D8:13:2A:CE:00:EC", name: "ratgdo-north" },
+    frame: hexFrame("01 72 61 74 67 64 6f 2d 6e 6f 72 74 68 00 64 38 31 33 32 61 63 65 30 30 65 63 00")
+  }
+] as const;
+
+const [POOLHOUSE_HELLO] = LIVE_HELLOS;
+
 const buildHelloPayload = (args: { major: number; minor: number; serverInfo?: string; deviceName?: string }): Buffer => {
 
   const fields = [
@@ -65,15 +86,15 @@ const buildHelloPayload = (args: { major: number; minor: number; serverInfo?: st
   return encodeProtoFields(fields);
 };
 
-// Drive performNoiseHandshake with a short-named option bag so test lines stay under the 170-char wrap.
-const startNoise = async (args: { transport: MockTransport; expectedServerName?: string; signal?: AbortSignal }): Promise<void> => {
+// Drive performNoiseHandshake with a short-named option bag so test lines stay under the 170-char wrap. The key resolver defaults to one returning VALID_PSK.
+const startNoise = async (args: { transport: MockTransport; expectedServerName?: string; resolvePsk?: PskResolver; signal?: AbortSignal }): Promise<void> => {
 
   await performNoiseHandshake({
 
     expectedServerName: args.expectedServerName ?? null,
     log: silentLog(),
     metrics: undefined,
-    psk: VALID_PSK,
+    resolvePsk: args.resolvePsk ?? ((): string => VALID_PSK),
     signal: args.signal ?? AbortSignal.timeout(2000),
     transport: args.transport
   });
@@ -101,7 +122,7 @@ describe("performNoiseHandshake - input validation", () => {
 
     await assert.rejects(
 
-      performNoiseHandshake({ expectedServerName: null, log: silentLog(), metrics: undefined, psk: null, signal: AbortSignal.timeout(50), transport }),
+      performNoiseHandshake({ expectedServerName: null, log: silentLog(), metrics: undefined, resolvePsk: null, signal: AbortSignal.timeout(50), transport }),
       (err: unknown) => (err instanceof EncryptionKeyMissingError) && (err.code === "ENCRYPTION_KEY_MISSING")
     );
   });
@@ -140,6 +161,164 @@ describe("performNoiseHandshake - server-hello validation", () => {
     transport.pushNoiseHandshakeFrame(helloFrame);
 
     await assert.rejects(promise, (err: unknown) => (err instanceof PlaintextHandshakeError) && (err.code === "SERVER_NAME_MISMATCH"));
+  });
+});
+
+describe("parseServerHello - the facts a Noise server hello announces", () => {
+
+  for(const { expected, frame } of LIVE_HELLOS) {
+
+    test("parses the live " + expected.name + " hello into its node name and normalized MAC address", () => {
+
+      assert.deepEqual(parseServerHello(frame), expected);
+    });
+  }
+
+  // Each row is a frame and the exact parse it must produce. An absent member must be omitted entirely, never present as undefined, and the strict deep-equal here
+  // tells those apart.
+  const cases: readonly { expected: NoiseServerHello; frame: Buffer; label: string }[] = [
+
+    { expected: {}, frame: Buffer.from([1]), label: "a hello carrying only the chosen-proto byte announces nothing" },
+    { expected: { name: "garage" }, frame: Buffer.from("\x01garage\x00", "latin1"), label: "a hello from firmware before ESPHome 2025.4.0 announces only its name" },
+    { expected: { macAddress: "24:4C:AB:06:49:9C" }, frame: Buffer.from("\x01\x00244cab06499c\x00", "latin1"), label: "an empty name segment is absent" },
+    { expected: { name: "garage" }, frame: Buffer.from("\x01garage\x00\x00", "latin1"), label: "an empty MAC segment is absent" },
+    { expected: {}, frame: Buffer.from("\x01garage", "latin1"), label: "an unterminated name segment is ignored" },
+    { expected: { name: "garage" }, frame: Buffer.from("\x01garage\x00244cab06499c", "latin1"), label: "an unterminated MAC segment is ignored" },
+    { expected: { name: "garage" }, frame: Buffer.from("\x01garage\x00244cab06499\x00", "latin1"), label: "a MAC segment one digit short is absent" },
+    { expected: { name: "garage" }, frame: Buffer.from("\x01garage\x00244cab06499cc\x00", "latin1"), label: "a MAC segment one digit long is absent" },
+    { expected: { name: "garage" }, frame: Buffer.from("\x01garage\x0024:4c:ab:06:49:9c\x00", "latin1"), label: "a MAC segment with separators is absent" },
+    { expected: { name: "garage" }, frame: Buffer.from("\x01garage\x00244cab06499g\x00", "latin1"), label: "a MAC segment with a non-hex digit is absent" },
+    { expected: { macAddress: "24:4C:AB:06:49:9C", name: "garage" }, frame: Buffer.from("\x01garage\x00244CAB06499C\x00", "latin1"),
+      label: "an uppercase MAC segment normalizes the same way" }
+  ];
+
+  for(const { expected, frame, label } of cases) {
+
+    test(label, () => {
+
+      assert.deepEqual(parseServerHello(frame), expected);
+    });
+  }
+});
+
+describe("performNoiseHandshake - key resolution", () => {
+
+  test("calls the resolver once with the parsed hello, after the name check, and handshakes with the key it returns", async () => {
+
+    const transport = new MockTransport();
+    const hellos: NoiseServerHello[] = [];
+
+    // A key distinct from every other fixture, so only a handshake that used the resolver's own key authenticates against it below.
+    const resolvedKey = Buffer.alloc(32, 0x3c);
+
+    const promise = startNoise({
+
+      expectedServerName: POOLHOUSE_HELLO.expected.name,
+      resolvePsk: (hello): string => {
+
+        hellos.push(hello);
+
+        return resolvedKey.toString("base64");
+      },
+      transport
+    });
+
+    // Queue the live hello and then an empty reply. The client handshakes up to its NNpsk0 msg1 and then fails on the empty reply, which ends the attempt promptly.
+    transport.pushNoiseHandshakeFrame(POOLHOUSE_HELLO.frame);
+    transport.pushNoiseHandshakeFrame(Buffer.alloc(0));
+
+    await assert.rejects(promise, (err: unknown) => (err instanceof NoiseHandshakeError) && (err.code === "TRUNCATED_E"));
+
+    assert.deepEqual(hellos, [POOLHOUSE_HELLO.expected], "the resolver must be called exactly once, with the parsed server hello");
+
+    const clientMsg1Frame = transport.outboundHandshakeFrames[1];
+
+    assert.ok(clientMsg1Frame, "the client must have sent its NNpsk0 msg1 after resolving the key");
+
+    // A responder holding the resolver's key authenticates msg1 only when the client sealed it with that same key.
+    const responder = createESPHomeHandshake({ psk: Buffer.from(resolvedKey), role: "responder" });
+
+    assert.doesNotThrow(() => { responder.readMessage(clientMsg1Frame.subarray(1)); }, "msg1 must be sealed with the key the resolver returned");
+  });
+
+  for(const missingKey of [ null, "" ]) {
+
+    test("a resolver returning " + JSON.stringify(missingKey) + " throws EncryptionKeyMissingError before any handshake message is sent", async () => {
+
+      const transport = new MockTransport();
+      const promise = startNoise({ resolvePsk: (): typeof missingKey => missingKey, transport });
+
+      transport.pushNoiseHandshakeFrame(POOLHOUSE_HELLO.frame);
+
+      await assert.rejects(promise, (err: unknown) => (err instanceof EncryptionKeyMissingError) && (err.code === "ENCRYPTION_KEY_MISSING"));
+      assert.equal(transport.outboundHandshakeFrames.length, 1, "only the empty initial frame may be sent - never a handshake message");
+    });
+  }
+
+  test("a wrong-length key throws EncryptionKeyInvalidError caused by the primitive's check, sends no handshake message, and zeroes the decoded key", async (t) => {
+
+    const transport = new MockTransport();
+    const shortKey = Buffer.alloc(16, 0x77).toString("base64");
+
+    // Observe the handshake's own decode of the key. The spy calls through to the real Buffer.from and records each result, so the decoded buffer the handshake owned
+    // can be inspected after it rejects. The test context restores the method when the test ends.
+    const bufferFrom = t.mock.method(Buffer, "from");
+    const promise = startNoise({ resolvePsk: (): string => shortKey, transport });
+
+    transport.pushNoiseHandshakeFrame(POOLHOUSE_HELLO.frame);
+
+    await assert.rejects(promise, (err: unknown) => {
+
+      assert.ok(err instanceof EncryptionKeyInvalidError, "a wrong-length key must fail with the permanent EncryptionKeyInvalidError");
+      assert.equal(err.code, "INVALID_PSK_LENGTH");
+      assert.ok(err.cause instanceof NoiseHandshakeError, "the primitive's own length check must be preserved on the cause chain");
+      assert.equal(err.cause.code, "INVALID_PSK_LENGTH");
+
+      return true;
+    });
+
+    assert.equal(transport.outboundHandshakeFrames.length, 1, "only the empty initial frame may be sent - never a handshake message");
+
+    const decode = bufferFrom.mock.calls.find((call) => call.arguments[0] === shortKey);
+
+    assert.ok(decode?.result, "the handshake must decode the resolved key");
+    assert.equal(decode.result.length, 16);
+    assert.ok(decode.result.every((byte) => byte === 0), "the decoded key the handshake still owned must be zeroed");
+  });
+
+  test("an exception the resolver throws reaches the caller as the same object, before any handshake message is sent", async () => {
+
+    const transport = new MockTransport();
+    const thrown = new Error("The key store is unavailable.");
+    const promise = startNoise({ resolvePsk: (): string => { throw thrown; }, transport });
+
+    transport.pushNoiseHandshakeFrame(POOLHOUSE_HELLO.frame);
+
+    await assert.rejects(promise, (err: unknown) => err === thrown);
+    assert.equal(transport.outboundHandshakeFrames.length, 1, "only the empty initial frame may be sent - never a handshake message");
+  });
+
+  test("a server-name mismatch throws before the resolver is called", async () => {
+
+    const transport = new MockTransport();
+    let resolverCalls = 0;
+
+    const promise = startNoise({
+
+      expectedServerName: "expected-name",
+      resolvePsk: (): string => {
+
+        resolverCalls++;
+
+        return VALID_PSK;
+      },
+      transport
+    });
+
+    transport.pushNoiseHandshakeFrame(POOLHOUSE_HELLO.frame);
+
+    await assert.rejects(promise, (err: unknown) => (err instanceof PlaintextHandshakeError) && (err.code === "SERVER_NAME_MISMATCH"));
+    assert.equal(resolverCalls, 0, "the resolver must not see a hello from a device that failed the name check");
   });
 });
 
@@ -367,7 +546,7 @@ describe("performPlaintextHandshake - wire I/O", () => {
       clientId: "test-client",
       log: silentLog(),
       maxFieldsPerMessage: 64,
-      psk: null,
+      pskConfigured: false,
       receiver,
       setApiMinorVersion: (m): void => { captured = m; },
       signal: AbortSignal.timeout(2000),
@@ -397,7 +576,7 @@ describe("performPlaintextHandshake - wire I/O", () => {
       clientId: "test-client",
       log: silentLog(),
       maxFieldsPerMessage: 64,
-      psk: null,
+      pskConfigured: false,
       receiver,
       setApiMinorVersion: (): void => { /* discard */ },
       signal: AbortSignal.timeout(2000),
@@ -423,7 +602,7 @@ describe("performPlaintextHandshake - wire I/O", () => {
       clientId: "test-client",
       log: silentLog(),
       maxFieldsPerMessage: 64,
-      psk: null,
+      pskConfigured: false,
       receiver,
       setApiMinorVersion: (): void => { /* discard */ },
       signal: AbortSignal.timeout(2000),

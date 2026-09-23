@@ -15,10 +15,11 @@
  * mutation-check corrupts one ciphertext byte of a SETUP-phase frame and asserts `connect()` rejects, proving the client genuinely decrypts a real cipher.
  */
 import { ConnectionClosedByPeerError, EncryptionKeyInvalidError, EspHomeError, PermanentError } from "../../src/errors.ts";
+import { EspHomeClient, openEspHomeClient } from "../../src/esphome-client.ts";
+import type { EspHomeLogging, NoiseServerHello } from "../../src/types.ts";
 import { describe, test } from "node:test";
 import { Buffer } from "node:buffer";
-import type { EspHomeClient } from "../../src/esphome-client.ts";
-import type { EspHomeLogging } from "../../src/types.ts";
+import type { EspHomeClientOptions } from "../../src/esphome-client.ts";
 import type { InboundMessage } from "../../src/transport.ts";
 import { MessageType } from "../../src/protocol/index.ts";
 import type { NoiseResponder } from "../simulator/noise-responder.ts";
@@ -29,7 +30,6 @@ import type { TransportLike } from "../../src/transport.ts";
 import assert from "node:assert/strict";
 import { basicDiscovery } from "../simulator/scenarios/index.ts";
 import { createNoiseResponder } from "../simulator/noise-responder.ts";
-import { openEspHomeClient } from "../../src/esphome-client.ts";
 
 describe("encrypted session end-to-end - real NNpsk0 cipher", () => {
 
@@ -55,7 +55,9 @@ describe("encrypted session end-to-end - real NNpsk0 cipher", () => {
   // Drive a single encrypted connect: kick off the open, fire the responder's connect, and await the client. `transportFactory` returns a REAL Transport over the
   // responder's mock socket, so a real cipher pair is installed - the only test seam is the injected socket. We count factory invocations to prove no plaintext fallback
   // (a fallback constructs a second transport). `maxConstructionRetries: 0` keeps the attempt single-shot so a corrupted-frame run rejects promptly instead of retrying.
-  const driveEncryptedConnect = async (responder: NoiseResponder): Promise<{ client: EspHomeClient; transportConstructions: number }> => {
+  // The key defaults to the shared PSK string; a test passes a resolver to drive the same session through the resolver form.
+  const driveEncryptedConnect = async (responder: NoiseResponder, psk: EspHomeClientOptions["psk"] = PSK_BASE64):
+    Promise<{ client: EspHomeClient; transportConstructions: number }> => {
 
     let transportConstructions = 0;
 
@@ -65,7 +67,7 @@ describe("encrypted session end-to-end - real NNpsk0 cipher", () => {
       keepAlive: false,
       logger: silentLogger,
       maxConstructionRetries: 0,
-      psk: PSK_BASE64,
+      psk,
       reconnect: false,
       transportFactory: (options): Promise<TransportLike> => {
 
@@ -206,4 +208,83 @@ describe("encrypted session end-to-end - real NNpsk0 cipher", () => {
       assert.equal(count(), 1, "no plaintext fallback - a bad-key handshake must construct exactly one transport");
     });
   }
+
+  // The server hellos the resolver tests announce, in the upstream wire form (a raw lowercase MAC with no separators), and the parse each must reach the resolver as.
+  const POOLHOUSE = { expected: { macAddress: "24:4C:AB:06:49:9C", name: "poolhouse81proxy" }, serverHello: { mac: "244cab06499c", name: "poolhouse81proxy" } };
+  const RATGDO_NORTH = { expected: { macAddress: "D8:13:2A:CE:00:EC", name: "ratgdo-north" }, serverHello: { mac: "d8132ace00ec", name: "ratgdo-north" } };
+
+  test("a PSK resolver receives the announced node name and normalized MAC address, and its key completes the encrypted session", async () => {
+
+    const hellos: NoiseServerHello[] = [];
+    const responder = createNoiseResponder({ frames: scenarioFrames(basicDiscovery), psk: responderPsk(), serverHello: POOLHOUSE.serverHello });
+    const { client, transportConstructions } = await driveEncryptedConnect(responder, (hello): string => {
+
+      hellos.push(hello);
+
+      return PSK_BASE64;
+    });
+
+    assert.deepEqual(hellos, [POOLHOUSE.expected], "the resolver must be called once, with the name and the MAC address in the library's public form");
+    assert.equal(client.isEncrypted, true, "the resolver's key must complete a real encrypted session");
+    assert.equal(transportConstructions, 1, "no plaintext fallback - exactly one transport must be constructed for an encrypted connect");
+
+    client[Symbol.dispose]();
+  });
+
+  test("a PSK resolver runs once per connection attempt and sees each attempt's own server hello", async () => {
+
+    // Successive attempts on one client, each against a responder announcing a different device, so the resolver must be consulted afresh on every attempt rather
+    // than once per client. Each attempt constructs its own transport over the next responder's socket.
+    const [ first, second ] = [
+
+      createNoiseResponder({ frames: scenarioFrames(basicDiscovery), psk: responderPsk(), serverHello: POOLHOUSE.serverHello }),
+      createNoiseResponder({ frames: scenarioFrames(basicDiscovery), psk: responderPsk(), serverHello: RATGDO_NORTH.serverHello })
+    ];
+    const hellos: NoiseServerHello[] = [];
+    let transportConstructions = 0;
+
+    const client = new EspHomeClient({
+
+      host: "encrypted-host",
+      keepAlive: false,
+      logger: silentLogger,
+      psk: (hello): string => {
+
+        hellos.push(hello);
+
+        return PSK_BASE64;
+      },
+      reconnect: false,
+      transportFactory: (options): Promise<TransportLike> => {
+
+        const responder = (transportConstructions++ === 0) ? first : second;
+
+        return Transport.open({ ...options, socketFactory: (): Socket => responder.socket as unknown as Socket });
+      }
+    });
+
+    // Connect through one responder: start the connect, yield so the transport attaches its connect listener, then fire the responder's connect event.
+    const connectThrough = async (responder: NoiseResponder): Promise<void> => {
+
+      const connected = client.connect();
+
+      await yieldTick();
+      responder.start();
+      await connected;
+    };
+
+    await connectThrough(first);
+
+    assert.equal(client.isEncrypted, true, "the first attempt must complete an encrypted session");
+
+    client.disconnect();
+
+    await connectThrough(second);
+
+    assert.equal(client.isEncrypted, true, "the second attempt must complete an encrypted session");
+    assert.deepEqual(hellos, [ POOLHOUSE.expected, RATGDO_NORTH.expected ], "the resolver must run once per attempt, with that attempt's server hello");
+    assert.equal(transportConstructions, 2, "one transport per attempt - neither attempt may fall back to plaintext");
+
+    client[Symbol.dispose]();
+  });
 });

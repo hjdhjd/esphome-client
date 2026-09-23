@@ -27,7 +27,7 @@ import { BackpressureError, BufferOverflowError, CameraStreamClosedError, Config
   PlaintextHandshakeError, ProtocolError } from "../errors.ts";
 import { BluetoothScannerMode, BluetoothScannerState, VoiceAssistantEvent, VoiceAssistantSubscribeFlag } from "../api-constants.ts";
 import type { Entity, ExtraSchemaSet, TelemetryEvent } from "../schemas/index.ts";
-import type { EspHomeLogging, Nullable } from "../types.ts";
+import type { EspHomeLogging, Nullable, PskResolver } from "../types.ts";
 import { aliasOf, extending } from "../schemas/index.ts";
 import { createESPHomeHandshake, createHandshake } from "../crypto-noise.ts";
 import { entityId, isEntityId, parseEntityId } from "../entity-id.ts";
@@ -101,8 +101,8 @@ export async function manualConstructionExample(): Promise<EspHomeClient> {
 // #endregion manual-construction
 
 /**
- * Encrypted connection with a Noise NNpsk0 pre-shared key. The PSK is base64-encoded and must decode to exactly 32 bytes; the constructor logs and discards a
- * malformed key, falling back to plaintext. A live PSK rotation uses {@link EspHomeClient.setNoiseEncryptionKey} after the session is up.
+ * Encrypted connection with a Noise NNpsk0 pre-shared key. The PSK is base64-encoded and must decode to exactly 32 bytes; a malformed key fails an encrypted
+ * connection closed with {@link EncryptionKeyInvalidError}. A live PSK rotation uses {@link EspHomeClient.setNoiseEncryptionKey} after the session is up.
  */
 // #region connection-with-noise
 export async function connectionWithNoiseExample(): Promise<void> {
@@ -121,6 +121,23 @@ export async function connectionWithNoiseExample(): Promise<void> {
   log.info("The device accepted the rotated pre-shared key.", rotated);
 }
 // #endregion connection-with-noise
+
+/**
+ * Select the encryption key per device at first contact. A consumer that connects to an address before it knows which device answers, and stores each key under the
+ * device's MAC address, passes a {@link PskResolver} as `psk`. The client calls it with what the device announces in its Noise server hello, before any key is used.
+ */
+// #region psk-resolver
+export async function pskResolverExample(keysByMac: ReadonlyMap<string, string>): Promise<void> {
+
+  // Firmware before ESPHome 2025.4.0 announces no MAC address. Returning null then fails the connection with EncryptionKeyMissingError.
+  const psk: PskResolver = (hello): Nullable<string> => (hello.macAddress === undefined) ? null : (keysByMac.get(hello.macAddress) ?? null);
+
+  await using client = await openEspHomeClient({ host: "192.168.1.50", psk });
+
+  // The announced MAC address is unauthenticated, so admit the device under the one the encrypted connection itself delivers.
+  log.info("The device connected with its own key.", client.deviceInfo()?.macAddress);
+}
+// #endregion psk-resolver
 
 /**
  * The three teardown paths. `disconnect()` is sync (immediate TCP close); `disconnectAsync()` is graceful (sends DISCONNECT_REQUEST and awaits the response up to

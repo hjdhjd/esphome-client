@@ -93,7 +93,8 @@ export class HandshakeError extends ConnectionError {}
  * - `CT_TOO_SHORT` - Inbound ciphertext was shorter than the 16-byte AEAD tag (`crypto-noise.ts`). Malformed inbound noise frame.
  * - `HANDSHAKE_COMPLETE` - A handshake-state operation was attempted after the handshake already completed (`crypto-noise.ts`). Library-internal lifecycle bug.
  * - `HANDSHAKE_TIMEOUT` - The per-step handshake timeout elapsed (`lifecycle/handshake.ts`). Carried by {@link NoiseHandshakeTimeoutError}.
- * - `INVALID_PSK_LENGTH` - The PSK is not exactly 32 bytes (`crypto-noise.ts`). Consumer-supplied configuration error.
+ * - `INVALID_PSK_LENGTH` - The PSK is not exactly 32 bytes (`crypto-noise.ts`). Consumer-supplied configuration error; the connect-flow handshake re-tags this into a
+ *   permanent {@link EncryptionKeyInvalidError}.
  * - `INVALID_REMOTE_KEY` - The remote ephemeral public key was malformed or a low-order point, so X25519 key agreement failed (`crypto-noise.ts`). The `diffieHellman`
  *   primitive rejected the peer key; the connect-flow handshake re-tags this into a permanent {@link EncryptionKeyInvalidError}.
  * - `MISSING_KEYS` - A Diffie-Hellman or post-handshake step required keys that were not yet initialized (`crypto-noise.ts`, `lifecycle/handshake.ts`).
@@ -201,7 +202,8 @@ export class NotConnectedError extends EspHomeError {}
 // Encryption-specific permanent errors.
 
 /**
- * The device requires encryption but no PSK was provided in the client options. Consumer must configure the encryption key.
+ * The device requires encryption but no key is available for it: none was provided in the client options, or the configured {@link PskResolver} returned
+ * none for the device. Consumer must configure the encryption key.
  */
 export class EncryptionKeyMissingError extends PermanentError {}
 

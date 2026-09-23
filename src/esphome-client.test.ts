@@ -547,18 +547,58 @@ describe("EspHomeClient construction with injected MockTransport", () => {
     const psk = Buffer.alloc(32, 0x42).toString("base64");
     const client = new EspHomeClient({ host: "test.local", logger: quietLogger(), psk, transportFactory: (): MockTransport => new MockTransport() });
 
-    // The host clears an invalid PSK to null but retains a 32-byte one. Indirectly observable: once construction completes without an error log entry, the PSK persists.
+    // The host holds the key without validating it; the handshake checks it where it is used. Indirectly observable: construction completes.
     assert.notEqual(client, null);
   });
 
-  test("constructor with an invalid PSK length logs an error and clears the key", () => {
+  test("an invalid PSK length logs nothing at construction and fails an encrypted connect closed with EncryptionKeyInvalidError on one transport", async () => {
 
+    // The key is checked once, where the handshake uses it, so a malformed string key fails closed exactly like a malformed key a resolver returns: construction logs
+    // nothing, and connecting to a device that speaks encryption rejects with the permanent INVALID_PSK_LENGTH failure rather than downgrading to plaintext.
     const log = makeLogCapture();
     const tooShortPsk = Buffer.alloc(16, 0x77).toString("base64");
+    const transports: MockTransport[] = [];
+    const transportFactory = (): MockTransport => {
 
-    new EspHomeClient({ host: "test.local", logger: log.logger, psk: tooShortPsk, transportFactory: (): MockTransport => new MockTransport() });
+      const t = new MockTransport();
 
-    assert.ok(log.error.some((m) => m.includes("Invalid encryption key")), "expected an invalid-encryption-key error log");
+      transports.push(t);
+
+      return t;
+    };
+    const client = new EspHomeClient({ host: "test.local", logger: log.logger, psk: tooShortPsk, reconnect: false, transportFactory });
+
+    assert.deepEqual([ ...log.debug, ...log.error, ...log.info, ...log.warn ], [], "construction must not log about the key");
+
+    const connectPromise = client.connect({ signal: AbortSignal.timeout(2000) });
+
+    await delay(10);
+
+    const noiseTransport = transports[0];
+
+    if(!noiseTransport) {
+
+      throw new Error("noise transport not constructed");
+    }
+
+    // An encrypted device answers the client's empty initial frame with its server hello; the malformed key then fails before any handshake message is sent.
+    noiseTransport.pushNoiseHandshakeFrame(Buffer.from([1]));
+
+    await assert.rejects(connectPromise, (err: unknown) => {
+
+      assert.ok(err instanceof EncryptionKeyInvalidError, "a malformed key must reject with EncryptionKeyInvalidError");
+      assert.equal(err.code, "INVALID_PSK_LENGTH");
+      assert.ok(err.cause instanceof NoiseHandshakeError, "the primitive's own length check must be preserved on the cause chain");
+      assert.equal(err.cause.code, "INVALID_PSK_LENGTH");
+      assert.ok(err instanceof PermanentError, "a malformed key must be a PermanentError so the default reconnect predicate gives up");
+
+      return true;
+    });
+
+    assert.equal(transports.length, 1, "a malformed key must NOT construct a second (plaintext) transport");
+    assert.equal(noiseTransport.outboundHandshakeFrames.length, 1, "only the empty initial frame may be sent - never a handshake message");
+
+    client.disconnect();
   });
 
   test("constructor honors a custom clientId, port, and timeouts", () => {
@@ -1232,6 +1272,69 @@ describe("EspHomeClient.connect - error and abort paths", () => {
 
     assert.equal(client.health().state, "connected");
     assert.equal(client.isEncrypted, false);
+
+    client.disconnect();
+  });
+
+  test("connect with a PSK resolver falls back to plaintext like a string key, without calling the resolver, when the device answers in plaintext", async () => {
+
+    // The resolver runs only after an encrypted device's server hello, so a device that answers the client's initial frame in plaintext takes the same fallback a
+    // string key takes and never reaches the resolver.
+    const transports: MockTransport[] = [];
+    const transportFactory = (): MockTransport => {
+
+      const t = new MockTransport();
+
+      transports.push(t);
+
+      return t;
+    };
+    let resolverCalls = 0;
+    const psk = (): string => {
+
+      resolverCalls++;
+
+      return Buffer.alloc(32, 0x55).toString("base64");
+    };
+    const client = new EspHomeClient({ host: "test.local", logger: quietLogger(), psk, reconnect: false, transportFactory });
+
+    const connectPromise = client.connect({ signal: AbortSignal.timeout(2000) });
+
+    await delay(10);
+
+    const noiseTransport = transports[0];
+
+    if(!noiseTransport) {
+
+      throw new Error("noise transport not constructed");
+    }
+
+    noiseTransport.fail(new PeerClosedDuringNoiseError(
+      "Peer responded with a plaintext indicator byte (0x00) during the noise handshake; the device may not support encryption.", "PEER_PLAINTEXT_DURING_NOISE"
+    ));
+
+    await delay(10);
+
+    assert.equal(transports.length, 2, "a plaintext answer during noise must fall back and construct a second (plaintext) transport");
+
+    const plaintextTransport = transports[1];
+
+    if(!plaintextTransport) {
+
+      throw new Error("plaintext transport not constructed");
+    }
+
+    plaintextTransport.pushInbound(MessageType.HELLO_RESPONSE, HELLO_RESPONSE_PROTOCOL_1_12);
+    await delay(5);
+    plaintextTransport.pushInbound(MessageType.DEVICE_INFO_RESPONSE, DEVICE_INFO_RESPONSE_DEFAULT);
+    await delay(2);
+    plaintextTransport.pushInbound(MessageType.LIST_ENTITIES_DONE_RESPONSE, LIST_ENTITIES_DONE_RESPONSE);
+
+    await connectPromise;
+
+    assert.equal(client.health().state, "connected");
+    assert.equal(client.isEncrypted, false);
+    assert.equal(resolverCalls, 0, "the resolver must never be called for a device that does not speak encryption");
 
     client.disconnect();
   });

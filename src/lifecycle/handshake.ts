@@ -4,7 +4,7 @@
  */
 
 import { API_FEATURE_VERSIONS, deviceSupports } from "../api-feature-versions.ts";
-import type { ClientMetrics, EspHomeLogging, Nullable } from "../types.ts";
+import type { ClientMetrics, EspHomeLogging, NoiseServerHello, Nullable, PskResolver } from "../types.ts";
 import {
   EncryptionKeyInvalidError, EncryptionKeyMissingError, EncryptionRequiredError, NegotiationFailedError,
   NoiseHandshakeError, NoiseHandshakeTimeoutError, PeerClosedDuringNoiseError, PlaintextHandshakeError, ProtocolError
@@ -14,6 +14,7 @@ import { decodeProtobuf, encodeProtoFields } from "../protocol/codec.ts";
 import { extractNumberField, extractStringField } from "../protocol/field-extractors.ts";
 import { Buffer } from "node:buffer";
 import type { FieldValue } from "../protocol/codec.ts";
+import type { HandshakeState } from "../crypto-noise.ts";
 import type { MessageReceiver } from "../message-receiver.ts";
 import type { TransportLike } from "../transport.ts";
 import { createESPHomeHandshake } from "../crypto-noise.ts";
@@ -49,22 +50,23 @@ export interface ClientApiVersion {
 }
 
 /**
- * Inputs required to run the noise handshake. The `psk` is the resolved 32-byte key (base64); when null, callers must skip noise entirely - the helper rejects with
- * {@link EncryptionKeyMissingError} if invoked without one.
+ * Inputs required to run the noise handshake. The `resolvePsk` resolver supplies the base64 key for the device once its server hello has been read; when null, callers
+ * must skip noise entirely - the helper rejects with {@link EncryptionKeyMissingError} if invoked without one.
  */
 export interface NoiseHandshakeInput {
 
   readonly expectedServerName: Nullable<string>;
   readonly log: EspHomeLogging;
   readonly metrics: ClientMetrics | undefined;
-  readonly psk: Nullable<string>;
+  readonly resolvePsk: Nullable<PskResolver>;
   readonly signal: AbortSignal;
   readonly transport: TransportLike;
 }
 
 /**
  * Inputs required to run the plaintext HELLO exchange + protocol-version negotiation. The host wires `setApiMinorVersion` to its own state so subsequent capability
- * queries read the right value.
+ * queries read the right value. `pskConfigured` reports whether the consumer configured any encryption key, so a device that demands encryption from a client without
+ * one surfaces as {@link EncryptionRequiredError}.
  */
 export interface PlaintextHandshakeInput {
 
@@ -72,7 +74,7 @@ export interface PlaintextHandshakeInput {
   readonly clientId: string;
   readonly log: EspHomeLogging;
   readonly maxFieldsPerMessage: number;
-  readonly psk: Nullable<string>;
+  readonly pskConfigured: boolean;
   readonly receiver: MessageReceiver;
   readonly setApiMinorVersion: (minor: number) => void;
   readonly signal: AbortSignal;
@@ -115,38 +117,45 @@ export interface DiscoveryInput {
 }
 
 /**
- * Run the Noise NNpsk0 handshake over the supplied transport. Initializes the cipher state, sends the empty initial frame, processes the server's hello + handshake
- * replies, and installs the cipher pair on success.
+ * Run the Noise NNpsk0 handshake over the supplied transport. Sends the empty initial frame, reads the server hello and resolves the key from what it announces,
+ * initializes the cipher state, processes the server's handshake reply, and installs the cipher pair on success.
+ *
+ * @remarks The resolver runs after the expected server-name check and before any key material is used. An exception it throws fails the handshake and reaches the
+ * caller unchanged.
  *
  * @param input - Handshake inputs.
- * @throws {EncryptionKeyMissingError} when invoked without a PSK.
+ * @throws {EncryptionKeyMissingError} when invoked without a key resolver, or when the resolver returns no key for the announced server hello.
  * @throws {NoiseHandshakeError} for framing-level handshake failures (truncated/short/missing-key) that are not key problems.
- * @throws {EncryptionKeyInvalidError} when the encrypted handshake reply cannot be authenticated: the in-band server rejection (header != 0), OR a local AEAD failure
- * decrypting the reply (`AUTH_FAILED`), OR a malformed / low-order peer ephemeral that fails X25519 key agreement (`INVALID_REMOTE_KEY`). Every enumerated failure above
- * is a permanent bad-key failure; the granular cause code is preserved on the error's `cause` chain.
+ * @throws {EncryptionKeyInvalidError} when the resolved key does not decode to 32 bytes (`INVALID_PSK_LENGTH`), or when the encrypted handshake reply cannot be
+ * authenticated: the in-band server rejection (header != 0), OR a local AEAD failure decrypting the reply (`AUTH_FAILED`), OR a malformed / low-order peer ephemeral
+ * that fails X25519 key agreement (`INVALID_REMOTE_KEY`). Every enumerated failure above is a permanent bad-key failure; the granular cause code is preserved on the
+ * error's `cause` chain.
  * @throws {NoiseHandshakeTimeoutError} when the abort signal fires (timeout or user-driven abort).
  * @throws {PlaintextHandshakeError} when the announced server name does not match the expected name.
  */
 export async function performNoiseHandshake(input: NoiseHandshakeInput): Promise<void> {
 
-  const { expectedServerName, log, metrics, psk, signal, transport } = input;
+  const { expectedServerName, log, metrics, resolvePsk, signal, transport } = input;
 
-  if(!psk) {
+  if(!resolvePsk) {
 
     throw new EncryptionKeyMissingError("Missing encryption key.", "ENCRYPTION_KEY_MISSING");
   }
 
   transport.enterNoiseHandshake();
 
-  const noiseClient = createESPHomeHandshake({ logger: log, psk: Buffer.from(psk, "base64") });
   const startedAt = Date.now();
+
+  // The handshake state exists only once the key is resolved, after the server hello. The catch below tears down whatever state was built, if any.
+  let noiseClient: Nullable<HandshakeState> = null;
 
   try {
 
     // Step 1: send the empty initial handshake frame.
     await transport.sendNoiseHandshakeFrame(Buffer.alloc(0));
 
-    // Step 2: receive the server hello frame. Format: [chosen-proto][server-name\x00][...].
+    // Step 2: receive the server hello frame. Format: [chosen-proto][node name\x00][MAC\x00], where firmware before ESPHome 2025.4.0 omits the MAC segment. The device
+    // sends it before any key is used and never mixes it into the prologue, so resolving the key from what it announces yields the same handshake as a key known upfront.
     const serverHello = await transport.nextNoiseHandshakeFrame(signal);
     const chosenProto = (serverHello.length > 0) ? serverHello.readUInt8(0) : -1;
 
@@ -155,19 +164,38 @@ export async function performNoiseHandshake(input: NoiseHandshakeInput): Promise
       throw new NoiseHandshakeError("Unknown protocol selected by server: " + String(chosenProto) + ".", "UNSUPPORTED_TOKEN");
     }
 
-    if(expectedServerName) {
+    const hello = parseServerHello(serverHello);
 
-      const serverNameEnd = serverHello.indexOf(0, 1);
+    if(expectedServerName && (hello.name !== undefined) && (expectedServerName !== hello.name)) {
 
-      if(serverNameEnd > 1) {
+      throw new PlaintextHandshakeError("Server name mismatch, expected " + expectedServerName + ", got " + hello.name + ".", "SERVER_NAME_MISMATCH");
+    }
 
-        const serverName = serverHello.subarray(1, serverNameEnd).toString();
+    const psk = resolvePsk(hello);
 
-        if(expectedServerName !== serverName) {
+    if(!psk) {
 
-          throw new PlaintextHandshakeError("Server name mismatch, expected " + expectedServerName + ", got " + serverName + ".", "SERVER_NAME_MISMATCH");
-        }
+      throw new EncryptionKeyMissingError("Missing encryption key.", "ENCRYPTION_KEY_MISSING");
+    }
+
+    // We decode the key into a fresh buffer on every attempt because the handshake state holds it by reference and zeroes it in place on teardown, so each buffer must
+    // belong to exactly one handshake. The state's own length check is the single key validation for every key form. When construction fails the state never took the
+    // buffer, so we zero it here, and a wrong-length key is re-tagged into the permanent EncryptionKeyInvalidError the connect flow reports for every bad key.
+    const pskBuffer = Buffer.from(psk, "base64");
+
+    try {
+
+      noiseClient = createESPHomeHandshake({ logger: log, psk: pskBuffer });
+    } catch(err) {
+
+      pskBuffer.fill(0);
+
+      if((err instanceof NoiseHandshakeError) && (err.code === "INVALID_PSK_LENGTH")) {
+
+        throw new EncryptionKeyInvalidError("The encryption key is invalid: " + err.message, "INVALID_PSK_LENGTH", { cause: err });
       }
+
+      throw err;
     }
 
     // Step 3: send our handshake message prefixed with the zero header byte.
@@ -227,7 +255,7 @@ export async function performNoiseHandshake(input: NoiseHandshakeInput): Promise
 
   } catch(err) {
 
-    noiseClient.destroy();
+    noiseClient?.destroy();
 
     // Translate signal-driven aborts into typed timeout errors so the caller's catch can decide whether to fall back.
     if((err instanceof DOMException) && ((err.name === "AbortError") || (err.name === "TimeoutError"))) {
@@ -237,6 +265,40 @@ export async function performNoiseHandshake(input: NoiseHandshakeInput): Promise
 
     throw err;
   }
+}
+
+// The server hello's MAC segment is the device's six octets as hex digits with no separators. ESPHome writes them lowercase; we accept either case.
+const HELLO_MAC_SEGMENT = /^[\da-f]{12}$/iu;
+
+/**
+ * Parse a Noise server hello frame into the facts it announces. The frame is `[chosen-proto][node name][0x00][MAC][0x00]`; firmware before ESPHome 2025.4.0 sends
+ * `[chosen-proto][node name][0x00]`. The caller validates the chosen-proto byte first.
+ *
+ * @remarks Segments start after the chosen-proto byte and count only when null-terminated, so unterminated trailing bytes are ignored, and an empty segment is absent.
+ * The name decodes as UTF-8. The MAC segment is normalized to the library's public uppercase colon-separated form, the form `DeviceInfo.macAddress` carries, and is
+ * absent unless it is exactly twelve hex digits. Exported for direct testing of the parse without the surrounding wire I/O.
+ *
+ * @param frame - The server hello frame, chosen-proto byte included.
+ * @returns The announced node name and MAC address, each present only when the frame carries it.
+ */
+export function parseServerHello(frame: Buffer): NoiseServerHello {
+
+  const nameEnd = frame.indexOf(0, 1);
+
+  if(nameEnd === -1) {
+
+    return {};
+  }
+
+  const name = frame.toString("utf8", 1, nameEnd);
+  const macEnd = frame.indexOf(0, nameEnd + 1);
+  const mac = (macEnd === -1) ? "" : frame.toString("utf8", nameEnd + 1, macEnd);
+
+  return {
+
+    ...(HELLO_MAC_SEGMENT.test(mac) && { macAddress: mac.toUpperCase().replace(/(..)(?=.)/gu, "$1:") }),
+    ...((name.length > 0) && { name })
+  };
 }
 
 /**
@@ -249,7 +311,7 @@ export async function performNoiseHandshake(input: NoiseHandshakeInput): Promise
  */
 export async function performPlaintextHandshake(input: PlaintextHandshakeInput): Promise<void> {
 
-  const { clientApiVersion, clientId, log, maxFieldsPerMessage, psk, receiver, setApiMinorVersion, signal, supportedApiMajors, transport } = input;
+  const { clientApiVersion, clientId, log, maxFieldsPerMessage, pskConfigured, receiver, setApiMinorVersion, signal, supportedApiMajors, transport } = input;
   const clientInfo = Buffer.from(clientId, "utf8");
 
   try {
@@ -268,7 +330,7 @@ export async function performPlaintextHandshake(input: PlaintextHandshakeInput):
 
     // No-PSK case: peer responded with the noise indicator byte, transport surfaced PROTOCOL_MISMATCH. Translate to EncryptionRequiredError so consumers see a typed
     // permanent failure rather than a generic protocol error.
-    if((err instanceof ProtocolError) && (err.code === "PROTOCOL_MISMATCH") && !psk) {
+    if((err instanceof ProtocolError) && (err.code === "PROTOCOL_MISMATCH") && !pskConfigured) {
 
       throw new EncryptionRequiredError("Server requires encryption but no PSK was configured.", "ENCRYPTION_REQUIRED", { cause: err });
     }
