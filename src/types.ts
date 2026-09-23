@@ -127,8 +127,9 @@ export interface NoiseServerHello {
  *
  * @remarks The client calls the resolver synchronously on every connection attempt, reconnects included, after it reads the server hello and after the expected
  * server-name check, and before any key material is used. Return the base64-encoded key, or `null` when there is none. A `null` or empty return fails the connection
- * with {@link EncryptionKeyMissingError}, a key that does not decode to 32 bytes fails it with {@link EncryptionKeyInvalidError}, and an exception the resolver
- * throws fails the connection attempt and reaches the caller. A device that does not speak encryption falls back to plaintext without the resolver being called.
+ * with {@link EncryptionKeyMissingError}, and a key that does not decode to 32 bytes fails it with {@link EncryptionKeyInvalidError}. An exception the resolver
+ * throws fails the connection attempt: `connect()` rejects with it as thrown when it is an {@link EspHomeError}, and otherwise with a {@link ConnectionError}
+ * (`CONNECT_FAILED`) that carries it as `cause`. A device that does not speak encryption falls back to plaintext without the resolver being called.
  *
  * Usage:
  *
