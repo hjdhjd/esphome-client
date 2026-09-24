@@ -1,0 +1,7 @@
+docs/README.md linguist-generated
+docs/classes/** linguist-generated
+docs/functions/** linguist-generated
+docs/interfaces/** linguist-generated
+docs/type-aliases/** linguist-generated
+docs/variables/** linguist-generated
+package-lock.json linguist-generated

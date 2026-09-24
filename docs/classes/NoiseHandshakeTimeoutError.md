@@ -6,7 +6,7 @@
 
 # Class: NoiseHandshakeTimeoutError
 
-Noise handshake aborted because the per-step timeout elapsed.
+Noise handshake aborted because the handshake-phase timeout elapsed.
 
 ## Extends
 

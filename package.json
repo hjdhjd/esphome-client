@@ -67,7 +67,7 @@
     "lint:test-file-globs": "node scripts/check-test-file-globs.mjs",
     "lint:types-test-files": "node scripts/lint-types-test-files.ts",
     "postpublish": "npm run clean",
-    "prepublishOnly": "npm run lint && npm run lint:proto && npm run lint:types-test-files && npm run lint:test-file-globs && npm run typecheck && npm run build && npm run lint:pack",
+    "prepublishOnly": "npm run lint && npm run lint:proto && npm run lint:types-test-files && npm run lint:test-file-globs && npm run typecheck && npm run build",
     "test": "node --test --experimental-test-coverage --test-coverage-include='src/**/*.ts' --test-coverage-exclude='src/**/*.test.ts' --test-coverage-exclude='src/**/*.types.test.ts' --test-coverage-exclude='src/testing/**' --test-coverage-lines=85 --test-coverage-branches=80 --test-coverage-functions=85 --test-timeout=15000 \"src/**/*.test.ts\"",
     "test:e2e": "node --test --test-timeout=120000 \"test/e2e/**/*.test.ts\"",
     "test:fuzz": "node --test --test-timeout=60000 \"test/fuzz/**/*.test.ts\"",

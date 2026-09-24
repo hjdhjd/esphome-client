@@ -54,7 +54,7 @@ stream backpressure options, and the protocol-level primitives (`protocol`, `cry
 | [DecryptionFailedError](classes/DecryptionFailedError.md) | A single inbound noise frame failed the ChaCha20-Poly1305 tag check on an already-handshaked session. |
 | [EncodingError](classes/EncodingError.md) | Encoder failed to serialize an outbound message. Indicates a bug or out-of-range field value. |
 | [EncryptionKeyInvalidError](classes/EncryptionKeyInvalidError.md) | The supplied PSK is the wrong length, malformed, or rejected by the device. Consumer must provide the correct key. |
-| [EncryptionKeyMissingError](classes/EncryptionKeyMissingError.md) | The device requires encryption but no PSK was provided in the client options. Consumer must configure the encryption key. |
+| [EncryptionKeyMissingError](classes/EncryptionKeyMissingError.md) | The device requires encryption but no key is available for it: none was provided in the client options, or the configured [PskResolver](type-aliases/PskResolver.md) returned none for the device. Consumer must configure the encryption key. |
 | [EncryptionRequiredError](classes/EncryptionRequiredError.md) | The server sent the noise-protocol indicator while the client was in plaintext mode (no PSK configured). Consumer must supply a PSK. |
 | [EspHomeClient](classes/EspHomeClient.md) | The ESPHome native-API client. The single high-level entry point for ESP8266/ESP32 devices running ESPHome firmware. |
 | [EspHomeError](classes/EspHomeError.md) | Base class for every library-emitted error. |
@@ -68,7 +68,7 @@ stream backpressure options, and the protocol-level primitives (`protocol`, `cry
 | [MessageTooManyFieldsError](classes/MessageTooManyFieldsError.md) | A protobuf message contained more fields than [EspHomeClientOpenOptions.maxFieldsPerMessage](interfaces/EspHomeClientOpenOptions.md#maxfieldspermessage). Bounds the decoder's allocation so a hostile or buggy device cannot exhaust memory. |
 | [NegotiationFailedError](classes/NegotiationFailedError.md) | API version negotiation found no overlap between the client's supported range and the device's announced range. Permanent without consumer intervention. |
 | [NoiseHandshakeError](classes/NoiseHandshakeError.md) | Failure during the Noise NNpsk0 handshake itself. Carries a narrowed [NoiseHandshakeErrorCode](type-aliases/NoiseHandshakeErrorCode.md) for precise dispatch. |
-| [NoiseHandshakeTimeoutError](classes/NoiseHandshakeTimeoutError.md) | Noise handshake aborted because the per-step timeout elapsed. |
+| [NoiseHandshakeTimeoutError](classes/NoiseHandshakeTimeoutError.md) | Noise handshake aborted because the handshake-phase timeout elapsed. |
 | [NotConnectedError](classes/NotConnectedError.md) | A command was issued before the client connected, or after it disconnected. Indicates a lifecycle ordering bug in consumer code. |
 | [PeerClosedDuringNoiseError](classes/PeerClosedDuringNoiseError.md) | Peer (the device) closed the socket while the noise handshake was still in flight. Triggers fallback to plaintext when applicable. |
 | [PermanentError](classes/PermanentError.md) | Marker class for errors that auto-reconnect should not retry. |
@@ -123,6 +123,7 @@ stream backpressure options, and the protocol-level primitives (`protocol`, `cry
 | [LogEventData](interfaces/LogEventData.md) | Log event data emitted when log messages are received from the ESPHome device. These provide insight into the device's internal operation and debugging information. |
 | [MessageEventData](interfaces/MessageEventData.md) | Message event data. This structure is emitted with the 'message' event for raw protocol messages. |
 | [NoiseHandshakeOptions](interfaces/NoiseHandshakeOptions.md) | Options for creating a Noise handshake. |
+| [NoiseServerHello](interfaces/NoiseServerHello.md) | The facts a device announces in its Noise server hello, the first frame it sends on an encrypted connection and the only one it sends before any key is used. |
 | [NotifyDataChunk](interfaces/NotifyDataChunk.md) | One inbound GATT notify chunk. Emitted on the `bluetoothNotifyData` bus event whenever the device pushes a `BluetoothGATTNotifyDataResponse` (id 79); the [BluetoothProxyApi.notify](classes/BluetoothProxyApi.md#notify) iterator filters by `(address, handle)` so consumers see only the notifications they subscribed to. |
 | [ReconnectConfig](interfaces/ReconnectConfig.md) | Auto-reconnect configuration. Every field has a sensible default; the empty object `{}` is the recommended way to opt in with defaults. |
 | [RepeatedFieldSpec](interfaces/RepeatedFieldSpec.md) | Defines the wire format for a repeated protobuf field containing multiple values of the same type. |
@@ -222,6 +223,7 @@ stream backpressure options, and the protocol-level primitives (`protocol`, `cry
 | [NumberEntity](type-aliases/NumberEntity.md) | The `number` entity type: a bounded numeric value set within its min / max / step range. |
 | [NumberEvent](type-aliases/NumberEvent.md) | - |
 | [NumberMode](type-aliases/NumberMode.md) | Number-entity input mode, surfaced on `ListEntitiesNumberResponse` (`mode` field). Mirrors `api.proto` `NumberMode`. The mode tells the consumer how to render the number input - free-form auto, exact numeric box, or bounded slider. |
+| [PskResolver](type-aliases/PskResolver.md) | Selects the Noise encryption key for a device from what its server hello announces. Pass one as the `psk` client option when the key depends on which device answers, for example a consumer that stores keys under each device's MAC address and connects to an address before it knows which device is there. |
 | [RadioFrequencyCapabilityFlags](type-aliases/RadioFrequencyCapabilityFlags.md) | Radio-frequency entity capability bitmask flags. The wire-side `ListEntitiesRadioFrequencyResponse.capabilities` field is a bitwise OR of these values. The two bits map identically to [InfraredCapabilityFlags](variables/InfraredCapabilityFlags.md): bit 0 = transmitter, bit 1 = receiver, per the comment at `api.proto` §ListEntitiesRadioFrequencyResponse.capabilities. |
 | [RadioFrequencyEntity](type-aliases/RadioFrequencyEntity.md) | The `radio_frequency` entity type: transmits a raw 433.92 MHz OOK timing pattern to a connected RF module. |
 | [RadioFrequencyEvent](type-aliases/RadioFrequencyEvent.md) | The telemetry event for a `radio_frequency` entity: a decoded inbound RF transmission received from the device. |

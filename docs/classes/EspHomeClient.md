@@ -146,11 +146,13 @@ the handshake are not missed.
 
 #### Remarks
 
-Every option is optional except `host`. When `psk` is supplied the client attempts the Noise NNpsk0 handshake first and falls back to plaintext ONLY when
-the device demonstrably does not speak encryption - it responded in plaintext or closed the socket during the noise exchange. A bad encryption key (a rejected PSK or
-a malformed/low-order peer key) fails closed with a permanent [EncryptionKeyInvalidError](EncryptionKeyInvalidError.md) rather than silently downgrading to plaintext. The full
-options surface (transport injection, metrics sink, keep-alive, reconnect, frame/buffer/field caps, handshake and connect timeouts) is documented on
-[EspHomeClientOptions](../interfaces/EspHomeClientOptions.md); consult that type rather than this docstring for a complete listing.
+Every option is optional except `host`. When `psk` is supplied, as a key or as a [PskResolver](../type-aliases/PskResolver.md), the client attempts the Noise NNpsk0 handshake first
+and falls back to plaintext ONLY when the device demonstrably does not speak encryption - it responded in plaintext or closed the socket during the noise exchange.
+The key is checked where the handshake uses it, not at construction: a bad encryption key (a key that does not decode to 32 bytes, a rejected PSK, or a
+malformed/low-order peer key) fails closed with a permanent [EncryptionKeyInvalidError](EncryptionKeyInvalidError.md), and a resolver that returns no key fails closed with a permanent
+[EncryptionKeyMissingError](EncryptionKeyMissingError.md), rather than silently downgrading to plaintext. The full options surface (transport injection, metrics sink, keep-alive,
+reconnect, frame/buffer/field caps, handshake and connect timeouts) is documented on [EspHomeClientOptions](../interfaces/EspHomeClientOptions.md); consult that type rather than this docstring for
+a complete listing.
 
 Usage:
 
@@ -704,6 +706,9 @@ Generic, type-safe command entry point. The single canonical way to issue any en
 Fire-and-forget at the consumer level: encode failures and unknown ids are warned via the configured logger and dropped rather than thrown, so the call site
 stays linear. To await a matching state event, use [EspHomeClient.commandAndAwait](#commandandawait).
 
+Infrared and radio-frequency ids are a compile error here because a transmit must pass the transmitter-capability check, so they go through
+[EspHomeClient.transmitRawTimings](#transmitrawtimings).
+
 Usage:
 
 ```ts
@@ -878,9 +883,9 @@ The device information if available, or `null` if not yet received.
 disconnect(): void;
 ```
 
-Synchronous disconnect: tear down the transport immediately so the device observes a TCP close. Cancels any in-flight reconnect loop and marks the client as
-explicitly closed so auto-reconnect does not pick the connection up again. Safe to call more than once. Use [EspHomeClient.disconnectAsync](#disconnectasync) when a graceful
-`DISCONNECT_REQUEST`/`DISCONNECT_RESPONSE` handshake is preferable.
+Synchronous disconnect: tear down the transport immediately so the device observes a TCP close. Cancels any in-flight reconnect loop or manual connect and marks
+the client as explicitly closed so auto-reconnect does not pick the connection up again. Safe to call more than once. Use [EspHomeClient.disconnectAsync](#disconnectasync) when
+a graceful `DISCONNECT_REQUEST`/`DISCONNECT_RESPONSE` handshake is preferable.
 
 Usage:
 
@@ -913,8 +918,8 @@ disconnectAsync(): Promise<void>;
 
 Graceful asynchronous disconnect. Sends DISCONNECT_REQUEST and awaits DISCONNECT_RESPONSE up to [EspHomeClientOptions.gracefulDisconnectTimeoutMs](../interfaces/EspHomeClientOptions.md#gracefuldisconnecttimeoutms) (default
 1000ms), then tears down the transport. On timeout, falls through to immediate teardown - the consumer is never blocked indefinitely. Marks the client explicitly
-closed and cancels any in-flight reconnect loop (mirroring [EspHomeClient.disconnect](#disconnect)), so a graceful disconnect stays disconnected rather than
-auto-reconnecting.
+closed and cancels any in-flight reconnect loop or manual connect (mirroring [EspHomeClient.disconnect](#disconnect)), so a graceful disconnect stays disconnected rather
+than auto-reconnecting.
 
 Usage:
 
@@ -2084,8 +2089,8 @@ An `AsyncIterable<StateEventFor<typeof ENTITY_SCHEMAS[T]>>`.
 telemetryForId<T>(id, options?): AsyncIterable<StateEventFor<SchemaForExtended<T, Extras>>>;
 ```
 
-Async-iterable view of state updates for one specific entity. Filters [telemetryFor](#telemetryfor) on the entity's numeric key (resolved from the branded id at
-iteration start so the filter is O(1) per event).
+Async-iterable view of state updates for one specific entity. Filters [telemetryFor](#telemetryfor) on the entity's numeric key (resolved from the branded id when the view
+is requested, so the filter is O(1) per event). An id the client has not discovered yields a view that ends at once.
 
 Usage:
 
@@ -2181,7 +2186,7 @@ field layout are shared across both physical layers.
 
 | Type Parameter | Description |
 | ------ | ------ |
-| `T` *extends* `"infrared"` \| `"radio_frequency"` | The branded entity-type tag; must resolve to `"infrared"` or `"radio_frequency"`. |
+| `T` *extends* `TransmitEntityType` | The branded entity-type tag; must resolve to `"infrared"` or `"radio_frequency"`. |
 
 #### Parameters
 
@@ -2199,7 +2204,7 @@ field layout are shared across both physical layers.
 This is the only consumer-facing entry point for the shared transmit RPC. Unlike [command](#command), the call surfaces typed failure for unknown or
 non-transmitter entities instead of warn-and-drop, because an IR/RF transmit silently dropped is invisible to the consumer (no acknowledged completion event arrives,
 so a missing transmission cannot be detected after the fact). Capability gating is centralized here so callers do not need to bit-test against
-[InfraredCapabilityFlags](../variables/InfraredCapabilityFlags.md) themselves before every transmit. The capability flag bit positions are identical between [InfraredCapabilityFlags](../variables/InfraredCapabilityFlags.md) and
+[InfraredCapabilityFlags](../type-aliases/InfraredCapabilityFlags.md) themselves before every transmit. The capability flag bit positions are identical between [InfraredCapabilityFlags](../type-aliases/InfraredCapabilityFlags.md) and
 [RadioFrequencyCapabilityFlags](../type-aliases/RadioFrequencyCapabilityFlags.md), so the same `TRANSMITTER` constant covers both branches.
 
 Usage (infrared):

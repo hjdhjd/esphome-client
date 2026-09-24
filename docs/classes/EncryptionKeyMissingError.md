@@ -6,7 +6,8 @@
 
 # Class: EncryptionKeyMissingError
 
-The device requires encryption but no PSK was provided in the client options. Consumer must configure the encryption key.
+The device requires encryption but no key is available for it: none was provided in the client options, or the configured [PskResolver](../type-aliases/PskResolver.md) returned
+none for the device. Consumer must configure the encryption key.
 
 ## Extends
 
