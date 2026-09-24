@@ -81,7 +81,7 @@ type _AsyncDisposeMirrorsEspHomeClient = Assert<Equal<MockClient[typeof Symbol.a
 // has no consumer to serve - so everything else is presence-enforced by default, and a consumer method removed from the mock (or added to the client without being
 // mirrored or excluded here) surfaces below by name.
 type MockExcludedKey = "acknowledgeDisconnectRequest" | "acknowledgeDisconnectResponse" | "acknowledgePingResponse" | "connect" | "logAllEntityIds" | "sendPing" |
-  "setNoiseEncryptionKey" | "subscribeToLogs" | "transmitRawTimings";
+  "setNoiseEncryptionKey" | "subscribeToLogs";
 
 // Real consumer members absent from the mock, keyed by the missing member...empty in the healthy state.
 type MissingConsumerMember = {

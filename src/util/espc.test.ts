@@ -2939,6 +2939,7 @@ describe("Edge cases - boundary inputs to parser and dispatch", () => {
     assert.equal(typeof client.command, "function");
     assert.equal(typeof client.deviceInfo, "function");
     assert.equal(typeof client.getEntitiesWithIds, "function");
+    assert.equal(typeof client.transmitRawTimings, "function");
   });
 
   test("executeControl accepts EntityId<T> brand on entity.id without runtime cast", () => {

@@ -12,14 +12,17 @@
  *   4. `transmitRawTimings` produces the correct INFRARED_RF_TRANSMIT_RAW_TIMINGS_REQUEST wire frame and refuses RX-only / unknown ids with the documented
  *      ConnectionError codes.
  *   5. Schema-table sanity checks confirm the SSOT chain (state/listEntities/command messageTypes, command + state slot presence).
+ *   6. The CLI's control dispatch sends the transmit entity types through `transmitRawTimings`, so the capability check refuses a receive-only entity there too.
  */
 import { InfraredCapabilityFlags, RadioFrequencyCapabilityFlags, RadioFrequencyModulation } from "./api-constants.ts";
 import type { InfraredEntity, InfraredEvent, RadioFrequencyEntity, RadioFrequencyEvent } from "./schemas/index.ts";
 import { MockTransport, pushInfraredListEntity, pushInfraredRFReceiveEvent, pushRadioFrequencyListEntity } from "./testing/mock-transport.ts";
+import { Printer, executeControl, runInteractiveControl } from "./util/espc.ts";
 import { decodePackedSint32, decodeProtobuf, encodePackedSint32, encodeProtoFields, zigzagDecode, zigzagEncode } from "./protocol/codec.ts";
 import { describe, test } from "node:test";
 import { Buffer } from "node:buffer";
 import type { CapturedFrame } from "./testing/mock-transport.ts";
+import type { CommandOptions } from "./util/espc.ts";
 import { ConnectionError } from "./errors.ts";
 import { ENTITY_SCHEMAS } from "./schemas/index.ts";
 import { EspHomeClient } from "./esphome-client.ts";
@@ -564,5 +567,113 @@ describe("ENTITY_SCHEMAS infrared and radio_frequency", () => {
       assert.equal(spec?.valueType, "sint32-packed");
       assert.equal(spec?.wireType, WireType.LENGTH_DELIMITED);
     }
+  });
+});
+
+// 6. CLI control dispatch - the non-interactive and interactive control surfaces route the transmit entity types through transmitRawTimings.
+
+describe("CLI control dispatch for transmit entities", () => {
+
+  // The CLI renders through a Printer; these tests assert on the client and the wire, so its stdout and stderr discard what it writes.
+  const discard = { write: (): boolean => true };
+  const printer = new Printer({ stderr: discard, stdout: discard });
+
+  // The command-scoped flags parseArgs would produce for a bare `control` invocation...every flag absent.
+  const noFlags: CommandOptions = {
+
+    brightness: undefined,
+    duration: undefined,
+    effect: undefined,
+    entity: undefined,
+    rgb: undefined,
+    state: undefined,
+    temp: undefined,
+    type: undefined,
+    wait: undefined
+  };
+
+  // Connect a real client that discovers one receive-only infrared entity, the configuration the transmitter-capability check exists to refuse.
+  async function connectReceiveOnly(transport: MockTransport, client: EspHomeClient): Promise<void> {
+
+    await driveConnectWithEntities(transport, client, (t): void => {
+
+      pushInfraredListEntity(t, { capabilities: InfraredCapabilityFlags.RECEIVER, key: 0x8000, name: "RX Only", objectId: "rx_only" });
+    });
+
+    transport.outboundFrames.length = 0;
+  }
+
+  // Assert that a thrown error is the transmit refusal the capability check raises.
+  function isNotTransmitter(err: unknown): boolean {
+
+    assert.equal(err instanceof ConnectionError, true);
+    assert.equal((err as ConnectionError).code, "ENTITY_NOT_TRANSMITTER");
+
+    return true;
+  }
+
+  test("executeControl refuses an infrared transmit on a receive-only entity with ENTITY_NOT_TRANSMITTER and sends nothing", async () => {
+
+    const transport = new MockTransport();
+    const client = new EspHomeClient({ host: "test.local", logger: quietLogger(), reconnect: false, transportFactory: (): MockTransport => transport });
+
+    await connectReceiveOnly(transport, client);
+
+    const entity = client.getEntitiesWithIds().find((candidate): boolean => candidate.id === "infrared-rx_only");
+
+    assert.notEqual(entity, undefined);
+    assert.throws(() => executeControl({ client, commandArgs: [ "infrared-rx_only", "9000,-4500,560,-560" ], commandOptions: noFlags, entity: entity!, printer }),
+      isNotTransmitter);
+
+    await delay(2);
+
+    assert.equal(transport.outboundFrames.some((f): boolean => f.type === MessageType.INFRARED_RF_TRANSMIT_RAW_TIMINGS_REQUEST), false);
+
+    client.disconnect();
+  });
+
+  test("runInteractiveControl refuses an infrared transmit on a receive-only entity with ENTITY_NOT_TRANSMITTER and sends nothing", async () => {
+
+    const transport = new MockTransport();
+    const client = new EspHomeClient({ host: "test.local", logger: quietLogger(), reconnect: false, transportFactory: (): MockTransport => transport });
+
+    await connectReceiveOnly(transport, client);
+
+    assert.throws(() => runInteractiveControl([ "control", "infrared-rx_only", "9000,-4500,560,-560" ], client, printer), isNotTransmitter);
+
+    await delay(2);
+
+    assert.equal(transport.outboundFrames.some((f): boolean => f.type === MessageType.INFRARED_RF_TRANSMIT_RAW_TIMINGS_REQUEST), false);
+
+    client.disconnect();
+  });
+
+  test("executeControl sends a transmitter entity's infrared transmit as the same frame transmitRawTimings produces", async () => {
+
+    const transport = new MockTransport();
+    const client = new EspHomeClient({ host: "test.local", logger: quietLogger(), reconnect: false, transportFactory: (): MockTransport => transport });
+
+    await driveConnectWithEntities(transport, client, (t): void => {
+
+      pushInfraredListEntity(t, { capabilities: InfraredCapabilityFlags.TRANSMITTER, key: 0x9000, name: "IR TX", objectId: "ir_tx" });
+    });
+
+    const entity = client.getEntitiesWithIds().find((candidate): boolean => candidate.id === "infrared-ir_tx");
+
+    assert.notEqual(entity, undefined);
+    transport.outboundFrames.length = 0;
+
+    // The CLI transmit and a direct call with the options the CLI grammar parses to must put the same bytes on the wire.
+    executeControl({ client, commandArgs: [ "infrared-ir_tx", "9000,-4500,560,-560", "38000", "2" ], commandOptions: noFlags, entity: entity!, printer });
+    client.transmitRawTimings(entityId("infrared", "ir_tx"), { carrierFrequency: 38000, repeatCount: 2, timings: [ 9000, -4500, 560, -560 ] });
+
+    await delay(2);
+
+    const frames = transport.outboundFrames.filter((f): boolean => f.type === MessageType.INFRARED_RF_TRANSMIT_RAW_TIMINGS_REQUEST);
+
+    assert.equal(frames.length, 2);
+    assert.deepEqual(frames[0]?.payload, frames[1]?.payload);
+
+    client.disconnect();
   });
 });

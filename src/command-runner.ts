@@ -30,16 +30,17 @@
  *
  * @module command-runner
  */
+import type { BaseEntity, ENTITY_SCHEMAS, EntitySchema, EntityType } from "./schemas/index.ts";
 import type { ClientMetrics, EspHomeLogging, Nullable } from "./types.ts";
 import type { CommandFor, StateEventFor } from "./schemas/derived.ts";
-import type { ENTITY_SCHEMAS, EntitySchema, EntityType } from "./schemas/index.ts";
+import { ConfigurationError, ConnectionError } from "./errors.ts";
 import { encodeEntityCommand, reportUnrecognizedOptions } from "./command-pipeline.ts";
 import type { Buffer } from "node:buffer";
 import { COMMAND_ADAPTERS } from "./schemas/index.ts";
 import type { ClientEventsMap } from "./esphome-client.ts";
-import { ConfigurationError } from "./errors.ts";
 import type { EntityId } from "./entity-id.ts";
 import type { EventBus } from "./event-bus.ts";
+import { InfraredCapabilityFlags } from "./api-constants.ts";
 
 /**
  * Default timeout (in milliseconds) {@link runCommandAndAwait} applies when the caller does not supply `awaitOptions.timeoutMs`. Sized at 2000ms - long enough that
@@ -48,17 +49,24 @@ import type { EventBus } from "./event-bus.ts";
 export const DEFAULT_COMMAND_AWAIT_TIMEOUT_MS = 2000;
 
 /**
+ * The entity types whose command is a raw-timings transmit. Their consumer entry point is {@link EspHomeClient.transmitRawTimings}, which refuses an entity whose
+ * capabilities lack the transmitter bit, so {@link EspHomeClient.command} excludes these types at the type level and a transmit cannot reach the wire without that
+ * check. {@link NonAwaitableEntityType} includes them because a transmit has no state response to await.
+ */
+export type TransmitEntityType = "infrared" | "radio_frequency";
+
+/**
  * Type-level constraint on the entity types {@link runCommandAndAwait} accepts. Excludes the read-only, stateless, and non-key-bearing entity types whose state
  * schemas do not respond to commands - calling `commandAndAwait` against them would hang until timeout. The exclusion is kept in sync with the host method's own
  * type-level constraint.
  *
  * @remarks `binary_sensor`, `sensor`, and `text_sensor` are read-only - they emit state but no command surface exists. `button` is stateless on the wire (the device
  * acknowledges with no telemetry). `camera` is excluded because its schema declares no `command` block, so a generic entity command can never be encoded for it;
- * its state event still carries the numeric `key` field (preserved by the schema's event-shape override) - it simply has no command surface to invoke. `infrared`
- * and `radio_frequency` are excluded because they emit raw-timing receive events (no key-bearing state response) and use a transmit RPC rather than a key-targeted
- * command.
+ * its state event still carries the numeric `key` field (preserved by the schema's event-shape override) - it simply has no command surface to invoke. The
+ * {@link TransmitEntityType} members are excluded because they emit raw-timing receive events (no key-bearing state response) and use a transmit RPC rather than a
+ * key-targeted command.
  */
-export type NonAwaitableEntityType = "binary_sensor" | "button" | "camera" | "infrared" | "radio_frequency" | "sensor" | "text_sensor";
+export type NonAwaitableEntityType = "binary_sensor" | "button" | "camera" | "sensor" | "text_sensor" | TransmitEntityType;
 
 /**
  * Entity types accepted by {@link runCommandAndAwait}. The complement of {@link NonAwaitableEntityType} relative to the canonical {@link EntityType} set.
@@ -180,6 +188,31 @@ function entityTypeFromId(id: EntityId): Nullable<string> {
   }
 
   return id.slice(0, dash);
+}
+
+/**
+ * Refuse a transmit through an entity whose capabilities lack the transmitter bit. {@link EspHomeClient.transmitRawTimings} calls this after its entity lookup and
+ * the testing `MockClient` calls it on a registered entity, so the capability rule and its error are stated once and a consumer test against the mock sees the same
+ * refusal the real client raises.
+ *
+ * @param entity - The registered entity the transmit targets. Typed as the entity base shape so the client's branded lookup and the mock's registry lookup pass it
+ * without a cast.
+ * @param id - The branded entity id, named in the error message.
+ *
+ * @throws {ConnectionError} with code `ENTITY_NOT_TRANSMITTER` when the entity's `capabilities` bitmask does not include the transmitter bit.
+ */
+export function assertTransmitter(entity: BaseEntity, id: EntityId): void {
+
+  // The capability bitmask values for IR and RF use the same bit positions (bit 0 = transmitter), so a bit test against either constant produces the same result and the
+  // check does not need to branch on entity type. The `capabilities` field is declared on the infrared and radio-frequency schemas but not on the base shape, so we read
+  // it through a structural view as `number | undefined` (a wire-missing field surfaces as undefined). Treat missing as "no transmitter bit set" - we cannot transmit
+  // through a device that did not advertise the capability.
+  const capabilities = ((entity as { capabilities?: number }).capabilities) ?? 0;
+
+  if((capabilities & InfraredCapabilityFlags.TRANSMITTER) === 0) {
+
+    throw new ConnectionError("Entity " + id + " is not a transmitter (capabilities bitmask: " + String(capabilities) + ").", "ENTITY_NOT_TRANSMITTER");
+  }
 }
 
 /**

@@ -15,15 +15,15 @@
  * @module testing/mock-client
  */
 import type { ClientEventsMap, DeviceInfo, LogEventData } from "../esphome-client.ts";
-import type { CommandAndAwaitOptions, NonAwaitableEntityType } from "../command-runner.ts";
+import type { CommandAndAwaitOptions, NonAwaitableEntityType, TransmitEntityType } from "../command-runner.ts";
 import type { CommandFor, ENTITY_SCHEMAS, Entity, EntityType, StateEventFor, TelemetryEvent } from "../schemas/index.ts";
+import { DEFAULT_COMMAND_AWAIT_TIMEOUT_MS, assertTransmitter } from "../command-runner.ts";
 import { MOCK, createRecordingMock } from "./recording-mock.ts";
 import { BluetoothProxyApi } from "../bluetooth-proxy.ts";
 import { CameraApi } from "../camera.ts";
 import type { ClientCapabilities } from "../capabilities.ts";
 import { ConfigurationError } from "../errors.ts";
 import type { ConnectionHealth } from "../health.ts";
-import { DEFAULT_COMMAND_AWAIT_TIMEOUT_MS } from "../command-runner.ts";
 import type { EntityId } from "../entity-id.ts";
 import { EventBus } from "../event-bus.ts";
 import { HomeAssistantApi } from "../home-assistant.ts";
@@ -150,12 +150,36 @@ export class MockClient {
 
   /**
    * Record a command without executing wire-level work. The call is appended to {@link MockClient.commands} for assertion; the matching state-event channel is NOT
-   * automatically driven (tests should explicitly call {@link MockClient.emitState} when they want to simulate the device's response).
+   * automatically driven (tests should explicitly call {@link MockClient.emitState} when they want to simulate the device's response). Infrared and radio-frequency
+   * ids are a compile error here, as on the real client; a transmit goes through {@link transmitRawTimings}.
    *
    * @param id - The branded entity id.
    * @param options - The command options.
    */
-  public command<T extends EntityType>(id: EntityId<T>, options: CommandFor<typeof ENTITY_SCHEMAS[T]>): void {
+  public command<T extends Exclude<EntityType, TransmitEntityType>>(id: EntityId<T>, options: CommandFor<typeof ENTITY_SCHEMAS[T]>): void {
+
+    this.recordedCommands.push({ id, options, timestamp: Date.now() });
+  }
+
+  /**
+   * Record an infrared or radio-frequency transmit without executing wire-level work. Mirrors {@link EspHomeClient.transmitRawTimings}: the call is appended to
+   * {@link MockClient.commands} the same way {@link command} records, because the real transmit sends the entity's command message on the wire. A registered entity
+   * goes through the real client's transmitter check, so a receive-only entity is refused and nothing is recorded; an id the test never registered is recorded
+   * unchecked, as {@link command} records it.
+   *
+   * @param id - The branded infrared or radio-frequency entity id.
+   * @param options - The transmit parameters.
+   *
+   * @throws {ConnectionError} with code `ENTITY_NOT_TRANSMITTER` when the id is registered and the entity's `capabilities` bitmask lacks the transmitter bit.
+   */
+  public transmitRawTimings<T extends TransmitEntityType>(id: EntityId<T>, options: CommandFor<typeof ENTITY_SCHEMAS[T]>): void {
+
+    const entity = this.entityRegistry.get(id);
+
+    if(entity) {
+
+      assertTransmitter(entity, id);
+    }
 
     this.recordedCommands.push({ id, options, timestamp: Date.now() });
   }

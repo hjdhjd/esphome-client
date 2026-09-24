@@ -28,6 +28,7 @@ import { MediaPlayerCommand } from "../api-constants.ts";
 import type { ParseArgsConfig } from "node:util";
 import type { Interface as ReadlineInterface } from "node:readline/promises";
 import type { SubDevice } from "../sub-device.ts";
+import type { TransmitEntityType } from "../command-runner.ts";
 import { createInterface } from "node:readline/promises";
 import { setTimeout as delay } from "node:timers/promises";
 import { once } from "node:events";
@@ -616,15 +617,16 @@ export interface EntityWithId {
 
 /**
  * Structural client shape consumed by the CLI's per-entity-type dispatch (`executeControl`, `runInteractiveControl`, `handleInteractiveCommand`). Both
- * {@link EspHomeClient} and the testing mock client satisfy this; the CLI never reaches outside these three methods during entity control dispatch.
+ * {@link EspHomeClient} and the testing mock client satisfy this; the CLI never reaches outside these methods during entity control dispatch.
  *
  * @internal
  */
 export interface ControlClient {
 
-  command<T extends EntityType>(id: EntityId<T>, options: CommandFor<typeof ENTITY_SCHEMAS[T]>): void;
+  command<T extends Exclude<EntityType, TransmitEntityType>>(id: EntityId<T>, options: CommandFor<typeof ENTITY_SCHEMAS[T]>): void;
   deviceInfo(): Nullable<DeviceInfo>;
   getEntitiesWithIds(): EntityWithId[];
+  transmitRawTimings<T extends TransmitEntityType>(id: EntityId<T>, options: CommandFor<typeof ENTITY_SCHEMAS[T]>): void;
 }
 
 /**
@@ -1522,13 +1524,17 @@ export interface ControlContext {
  * The product of a control builder: the schema-typed command-options object to send plus a human-readable summary of the action for the {@link Printer}. Carrying the
  * summary alongside the options lets both the non-interactive and interactive callers render consistent feedback without re-deriving the per-type phrasing.
  *
+ * @remarks A {@link TransmitEntityType} builder also returns `transmit: true`, which sends the options through the client's capability-checked `transmitRawTimings`
+ * rather than `command()`. The conditional member makes the flag required on exactly those builders and absent on every other, so a table entry and its send path
+ * cannot disagree.
+ *
  * @internal
  */
-export interface BuiltCommand<T extends ControllableEntityType> {
+export type BuiltCommand<T extends ControllableEntityType> = {
 
   readonly options: CommandFor<typeof ENTITY_SCHEMAS[T]>;
   readonly summary: string;
-}
+} & (T extends TransmitEntityType ? { readonly transmit: true } : { readonly transmit?: never });
 
 /**
  * Translates a {@link ControlContext} into a {@link BuiltCommand} for one entity type, throwing {@link CliError} on any malformed or missing input. Each builder owns its
@@ -1542,7 +1548,8 @@ export type ControlBuilder<T extends ControllableEntityType> = (context: Control
 
 /**
  * The type-erased result of {@link buildControlCommand}. The options are fully schema-typed inside each builder (where the checking matters); at the dispatch boundary
- * the per-type link is gone, so the options surface as `unknown` and are bridged to the generic `command()` signature in exactly one place ({@link sendEntityCommand}).
+ * the per-type link is gone, so the options surface as `unknown` and are bridged to the client's send methods in exactly one place ({@link sendEntityCommand}), which
+ * branches on the builder's `transmit` flag.
  *
  * @internal
  */
@@ -1550,6 +1557,7 @@ export interface ResolvedControlCommand {
 
   readonly options: unknown;
   readonly summary: string;
+  readonly transmit?: true;
 }
 
 /**
@@ -1847,7 +1855,7 @@ export const CONTROL_BUILDERS: { readonly [T in ControllableEntityType]: Control
 
     const options = parseTransmitArgs(args, "IR");
 
-    return { options, summary: "Transmitting " + String(options.timings.length) + " IR timings via " + entity.name };
+    return { options, summary: "Transmitting " + String(options.timings.length) + " IR timings via " + entity.name, transmit: true };
   },
 
   light: ({ args, entity, options }) => {
@@ -1945,7 +1953,7 @@ export const CONTROL_BUILDERS: { readonly [T in ControllableEntityType]: Control
 
     const options = parseTransmitArgs(args, "RF");
 
-    return { options, summary: "Transmitting " + String(options.timings.length) + " RF timings via " + entity.name };
+    return { options, summary: "Transmitting " + String(options.timings.length) + " RF timings via " + entity.name, transmit: true };
   },
 
   select: ({ args, entity }) => {
@@ -2100,15 +2108,23 @@ export function buildControlCommand(entity: EntityWithId, args: readonly string[
 }
 
 /**
- * Send a resolved command's options to the device. This is the one place that bridges the type-erased {@link ResolvedControlCommand} options to the generic
- * `command()` signature: {@link buildControlCommand} has already validated the options against the entity's schema, but the compiler cannot re-derive that link
- * through the runtime-narrowed type, so the cast lives here and nowhere else.
+ * Send a resolved command's options to the device. This is the one place that bridges the type-erased {@link ResolvedControlCommand} options to the client's typed
+ * send methods: {@link buildControlCommand} has already validated the options against the entity's schema, but the compiler cannot re-derive that link through the
+ * runtime-narrowed type, so the casts live here and nowhere else. A transmit goes through `transmitRawTimings`, whose capability check refuses an entity without the
+ * transmitter bit; every other command goes through `command()`.
  *
  * @internal
  */
-export function sendEntityCommand(client: ControlClient, entity: EntityWithId, options: unknown): void {
+export function sendEntityCommand(client: ControlClient, entity: EntityWithId, resolved: ResolvedControlCommand): void {
 
-  (client.command as (id: string, commandOptions: unknown) => void)(entity.id, options);
+  if(resolved.transmit) {
+
+    (client.transmitRawTimings as (id: string, transmitOptions: unknown) => void)(entity.id, resolved.options);
+
+    return;
+  }
+
+  (client.command as (id: string, commandOptions: unknown) => void)(entity.id, resolved.options);
 }
 
 /**
@@ -2155,10 +2171,10 @@ export interface ExecuteControlInput {
 export function executeControl(input: ExecuteControlInput): void {
 
   const { client, commandArgs, commandOptions, entity, printer } = input;
-  const { options, summary } = buildControlCommand(entity, commandArgs.slice(1), commandOptions);
+  const resolved = buildControlCommand(entity, commandArgs.slice(1), commandOptions);
 
-  printer.info(summary + "...");
-  sendEntityCommand(client, entity, options);
+  printer.info(resolved.summary + "...");
+  sendEntityCommand(client, entity, resolved);
   printer.success("Command sent.");
 }
 
@@ -2289,10 +2305,10 @@ export function runInteractiveControl(parts: string[], client: ControlClient, pr
 
   try {
 
-    const { options, summary } = buildControlCommand(entity, parts.slice(2), EMPTY_COMMAND_OPTIONS);
+    const resolved = buildControlCommand(entity, parts.slice(2), EMPTY_COMMAND_OPTIONS);
 
-    sendEntityCommand(client, entity, options);
-    printer.success(summary);
+    sendEntityCommand(client, entity, resolved);
+    printer.success(resolved.summary);
   } catch(error) {
 
     // A CliError is a user-input problem (bad verb, missing value, read-only entity); report it and keep the REPL alive. Anything else is a real fault and propagates.

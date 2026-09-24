@@ -20,7 +20,7 @@ import type {
 } from "./bluetooth-proxy.ts";
 import type { ClientMetrics, EspHomeLogging, Nullable, PskResolver, ServiceEntity } from "./types.ts";
 import type { ClockFn, HeartbeatConfig, HeartbeatHost } from "./heartbeat.ts";
-import type { CommandAndAwaitOptions, CommandHost, NonAwaitableEntityType } from "./command-runner.ts";
+import type { CommandAndAwaitOptions, CommandHost, NonAwaitableEntityType, TransmitEntityType } from "./command-runner.ts";
 import type { CommandFor, StateEventFor } from "./schemas/derived.ts";
 import { ConnectionClosedByPeerError, ConnectionError, EspHomeError, PeerClosedDuringNoiseError, PermanentError } from "./errors.ts";
 import {
@@ -33,18 +33,17 @@ import type { FieldValue, ProtoField } from "./protocol/codec.ts";
 import { HealthState, disconnectedHealth, isConnectionLive } from "./health.ts";
 import type { HomeAssistantApiHost, HomeAssistantServiceEvent, HomeAssistantStateRequest } from "./home-assistant.ts";
 import type { InboundMessage, TransportLike, TransportOpenOptions } from "./transport.ts";
-import { InfraredCapabilityFlags, LogLevel } from "./api-constants.ts";
 import { MessageType, WireType, extractEntityKey, extractNumberField, extractStringField, extractTelemetryValue, messageTypeName } from "./protocol/index.ts";
 import type { SerialDataChunk, SerialProxyHost, SerialProxyInfo } from "./serial-proxy.ts";
 import { SerialProxyApi, extractSerialProxies } from "./serial-proxy.ts";
 import { Transport, formatHostPort, unbracketHost } from "./transport.ts";
 import type { VoiceAssistantHost, VoiceAssistantInboundContext } from "./voice-assistant.ts";
+import { assertTransmitter, runCommand, runCommandAndAwait } from "./command-runner.ts";
 import { authenticateIfNeeded, performDiscovery, performNoiseHandshake, performPlaintextHandshake } from "./lifecycle/handshake.ts";
 import { backoffDelay, nextBackoffDelay, resolveReconnectConfig } from "./reconnect.ts";
 import { decodeEntityFromSchema, decodeServiceEntity, getEntityTypeLabel } from "./discovery.ts";
 import { decodeProtobuf, encodeProtoFields } from "./protocol/codec.ts";
 import { disconnectedCapabilities, parseCapabilities } from "./capabilities.ts";
-import { runCommand, runCommandAndAwait } from "./command-runner.ts";
 import { BluetoothProxyApi } from "./bluetooth-proxy.ts";
 import { Buffer } from "node:buffer";
 import { CameraApi } from "./camera.ts";
@@ -59,6 +58,7 @@ import type { HeartbeatStalledError } from "./errors.ts";
 import { HomeAssistantApi } from "./home-assistant.ts";
 import { LatestStateCache } from "./latest-state-cache.ts";
 import type { LifecycleEvent } from "./lifecycle.ts";
+import { LogLevel } from "./api-constants.ts";
 import { LogSubscriptionManager } from "./log-subscription-manager.ts";
 import type { LogSubscriptionManagerHost } from "./log-subscription-manager.ts";
 import type { MessageHandlers } from "./message-receiver.ts";
@@ -2856,6 +2856,9 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
    * Fire-and-forget at the consumer level: encode failures and unknown ids are warned via the configured logger and dropped rather than thrown, so the call site
    * stays linear. To await a matching state event, use {@link EspHomeClient.commandAndAwait}.
    *
+   * Infrared and radio-frequency ids are a compile error here because a transmit must pass the transmitter-capability check, so they go through
+   * {@link EspHomeClient.transmitRawTimings}.
+   *
    * Usage:
    *
    * {@includeCode ./examples/showcase.ts#command-and-await}
@@ -2865,7 +2868,7 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
    * @param options - Type-narrowed command options for the entity type.
    *
    */
-  public command<T extends ExtendedEntityType<Extras>>(id: EntityId<T>, options: CommandFor<SchemaForExtended<T, Extras>>): void {
+  public command<T extends Exclude<ExtendedEntityType<Extras>, TransmitEntityType>>(id: EntityId<T>, options: CommandFor<SchemaForExtended<T, Extras>>): void {
 
     // The internal {@link runCommand} runner is parameterized over the built-in {@link EntityType} for tests' ergonomic continuity. The runtime is brand-erased - the
     // runner extracts the entity-type string from the id's prefix and consults the seam's per-instance schema resolver - so casting at this single boundary is sound:
@@ -2949,7 +2952,7 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
    * hardware cannot fulfill a transmit request, so failing eagerly surfaces the configuration mismatch.
    *
    */
-  public transmitRawTimings<T extends "infrared" | "radio_frequency">(id: EntityId<T>, options: CommandFor<typeof ENTITY_SCHEMAS[T]>): void {
+  public transmitRawTimings<T extends TransmitEntityType>(id: EntityId<T>, options: CommandFor<typeof ENTITY_SCHEMAS[T]>): void {
 
     const entity = this.registry.byId(id);
 
@@ -2958,16 +2961,9 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
       throw new ConnectionError("No entity is registered for " + id + ".", "ENTITY_NOT_FOUND");
     }
 
-    // The capability bitmask values for IR and RF use the same bit positions (bit 0 = transmitter). Bit-test against either constant produces the same result; we
-    // keep the bit-test inlined here so the host method does not need to branch on entity type. The `capabilities` field is declared on both schemas; the
-    // `Entity` discriminated union exposes it as `number | undefined` (a wire-missing field surfaces as undefined). Treat missing as "no transmitter bit set" - we
-    // cannot transmit through a device that did not advertise the capability.
-    const capabilities = ((entity as { capabilities?: number }).capabilities) ?? 0;
-
-    if((capabilities & InfraredCapabilityFlags.TRANSMITTER) === 0) {
-
-      throw new ConnectionError("Entity " + id + " is not a transmitter (capabilities bitmask: " + String(capabilities) + ").", "ENTITY_NOT_TRANSMITTER");
-    }
+    // A receive-only entity is refused before anything reaches the wire. The check lives in the command runner module so the testing mock refuses exactly the entities
+    // the client refuses.
+    assertTransmitter(entity, id);
 
     // Delegate to the schema-driven command runner. Both infrared and radio_frequency declare the same command messageType (136) and field layout, so encoder output is
     // wire-identical; the only consumer-visible distinction is the branded id's type tag carried through telemetry, not the transmit path.

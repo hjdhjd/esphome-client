@@ -2,12 +2,12 @@
  *
  * mock-client.test.ts: Helper-coverage-parity tests for the MockClient consumer-test double.
  */
+import { ConfigurationError, ConnectionError } from "../errors.ts";
+import { InfraredCapabilityFlags, LogLevel } from "../api-constants.ts";
 import { describe, test } from "node:test";
 import { mockDeviceInfo, mockEntity, mockHealth, mockStateMessage } from "./factories.ts";
 import { Buffer } from "node:buffer";
-import { ConfigurationError } from "../errors.ts";
 import { HealthState } from "../health.ts";
-import { LogLevel } from "../api-constants.ts";
 import { MOCK } from "./recording-mock.ts";
 import { MockClient } from "./mock-client.ts";
 import assert from "node:assert/strict";
@@ -91,6 +91,46 @@ describe("MockClient.command recording", () => {
 
     // Immediately read again - the live count should still be 1 because `commands` is a getter that returns a copy.
     assert.equal(client.commands.length, 1, "commands returns a snapshot, not a live mutable reference");
+  });
+});
+
+describe("MockClient.transmitRawTimings recording", () => {
+
+  test("records infrared and radio-frequency transmits in the command log in arrival order", () => {
+
+    const client = new MockClient();
+    const blaster = entityId("infrared", "blaster");
+    const remote = entityId("radio_frequency", "remote");
+
+    client.transmitRawTimings(blaster, { carrierFrequency: 38000, repeatCount: 1, timings: [ 9000, -4500 ] });
+    client.transmitRawTimings(remote, { carrierFrequency: 433920000, repeatCount: 3, timings: [ 350, -1050 ] });
+
+    assert.equal(client.commands.length, 2);
+    assert.equal(client.commands[0]?.id, blaster);
+    assert.deepEqual(client.commands[0]?.options, { carrierFrequency: 38000, repeatCount: 1, timings: [ 9000, -4500 ] });
+    assert.equal(client.commands[1]?.id, remote);
+    assert.deepEqual(client.commands[1]?.options, { carrierFrequency: 433920000, repeatCount: 3, timings: [ 350, -1050 ] });
+  });
+
+  test("refuses a registered receive-only entity with ENTITY_NOT_TRANSMITTER and records nothing, as the real client does", () => {
+
+    const client = new MockClient();
+    const receiver = entityId("infrared", "receiver");
+    const blaster = entityId("infrared", "blaster");
+    const options = { carrierFrequency: 38000, repeatCount: 1, timings: [ 9000, -4500 ] };
+
+    client.populateEntities([ mockEntity("infrared", "receiver", { capabilities: InfraredCapabilityFlags.RECEIVER }),
+      mockEntity("infrared", "blaster", { capabilities: InfraredCapabilityFlags.TRANSMITTER }) ]);
+
+    assert.throws(() => client.transmitRawTimings(receiver, options),
+      (err: unknown): boolean => (err instanceof ConnectionError) && (err.code === "ENTITY_NOT_TRANSMITTER"));
+    assert.equal(client.commands.length, 0, "a refused transmit must not reach the command log");
+
+    // A registered transmitter passes the same check and records, so the refusal is the capability rule and not a blanket refusal of registered entities.
+    client.transmitRawTimings(blaster, options);
+
+    assert.equal(client.commands.length, 1);
+    assert.equal(client.commands[0]?.id, blaster);
   });
 });
 

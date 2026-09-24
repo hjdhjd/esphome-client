@@ -2,15 +2,17 @@
  *
  * infrared-rf.types.test.ts: Type-level guarantees for the infrared and radio_frequency entity types.
  *
- * Locks in the schema-derived ClientEventsMap auto-extension, the brand distinction on transmitRawTimings, and the commandAndAwait exclusion list. Every
- * `@ts-expect-error` annotation below MUST fail to compile if removed; `npm run typecheck` (tsc against tsconfig.check.json) enforces this. The annotations live
- * inside helper functions that are never executed - the type checker walks them at compile time but the test runner only confirms the file parses cleanly.
+ * Locks in the schema-derived ClientEventsMap auto-extension, the brand distinction on transmitRawTimings, and the transmit-type exclusions on command and
+ * commandAndAwait. Every `@ts-expect-error` annotation below MUST fail to compile if removed; `npm run typecheck` (tsc against tsconfig.check.json) enforces this.
+ * The annotations live inside helper functions that are never executed - the type checker walks them at compile time but the test runner only confirms the file
+ * parses cleanly.
  */
 import type { Assert, Equal } from "./internal/type-assertions.ts";
 import type { ClientEventsMap, EspHomeClient } from "./esphome-client.ts";
 import { describe, test } from "node:test";
 import type { ENTITY_SCHEMAS } from "./schemas/index.ts";
 import type { EntityId } from "./entity-id.ts";
+import type { MockClient } from "./testing/mock-client.ts";
 import type { StateEventFor } from "./schemas/derived.ts";
 import assert from "node:assert/strict";
 
@@ -100,5 +102,44 @@ describe("EspHomeClient.commandAndAwait exclusion list", () => {
     };
 
     assert.equal(typeof rejectRadioFrequency, "function");
+  });
+});
+
+describe("EspHomeClient.command transmit exclusion", () => {
+
+  // A transmit must pass the transmitter-capability check in transmitRawTimings, so the generic command() refuses the transmit types at compile time. The mock
+  // mirrors the exclusion so a consumer test cannot compile a call the real client rejects.
+
+  test("rejects an EntityId<\"infrared\"> - the transmit goes through transmitRawTimings", () => {
+
+    const rejectInfrared = (client: EspHomeClient, id: EntityId<"infrared">): void => {
+
+      // @ts-expect-error - "infrared" is excluded from the command() surface; only transmitRawTimings checks the transmitter capability before sending.
+      client.command(id, { carrierFrequency: 38000, repeatCount: 1, timings: [ 1, -1 ] });
+    };
+
+    assert.equal(typeof rejectInfrared, "function");
+  });
+
+  test("rejects an EntityId<\"radio_frequency\"> - same rationale as infrared", () => {
+
+    const rejectRadioFrequency = (client: EspHomeClient, id: EntityId<"radio_frequency">): void => {
+
+      // @ts-expect-error - "radio_frequency" is excluded from the command() surface; only transmitRawTimings checks the transmitter capability before sending.
+      client.command(id, { carrierFrequency: 433920000, repeatCount: 1, timings: [ 1, -1 ] });
+    };
+
+    assert.equal(typeof rejectRadioFrequency, "function");
+  });
+
+  test("MockClient.command rejects an EntityId<\"infrared\"> exactly as the real client does", () => {
+
+    const rejectInfrared = (client: MockClient, id: EntityId<"infrared">): void => {
+
+      // @ts-expect-error - the mock mirrors the real command() exclusion of the transmit entity types.
+      client.command(id, { carrierFrequency: 38000, repeatCount: 1, timings: [ 1, -1 ] });
+    };
+
+    assert.equal(typeof rejectInfrared, "function");
   });
 });
