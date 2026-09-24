@@ -127,8 +127,9 @@ export function connectionUptimeMs(health: ConnectionHealth, now: number = Date.
 /**
  * Returns the "disconnected" health record. Used as the initial value before the first successful connect, and after every clean teardown.
  *
- * @remarks This is the pure baseline and carries no `lastPingRttMs`. On a live disconnect the host deliberately overlays the most recent `lastPingRttMs` onto this
- * baseline as a "last seen latency" diagnostic (the `disconnect` path in `esphome-client.ts`). The `disconnected` state
+ * @remarks This is the pure baseline and carries no `lastPingRttMs` and zero stalls. On a live disconnect the host deliberately overlays the most recent
+ * `lastPingRttMs` onto this baseline as a "last seen latency" diagnostic, and the current `consecutiveStalls` so the count survives the teardown between a stall and
+ * the reconnect (the `disconnect` path in `esphome-client.ts`); only inbound activity resets the count. The `disconnected` state
  * and the absent connect epoch (so {@link connectionUptimeMs} reads `0`) are themselves the staleness signal that the RTT was measured against the prior connection, so
  * the carry-forward is intentional... this helper and the host's overlay are two layers of one design, not a contradiction.
  *

@@ -12,7 +12,7 @@ import { HeartbeatStalledError } from "./errors.ts";
  * @remarks The scheduler owns the timer that detects inbound silence on the connection. It tracks the most recent inbound activity timestamp, sends `PING_REQUEST`
  * when idle past the configured interval, and surfaces a typed {@link HeartbeatStalledError} when no inbound activity follows within the stall timeout. The
  * scheduler is intentionally agnostic to the host's health-state machine - the host updates the cached {@link ConnectionHealth}'s `lastInboundActivityAt`
- * field on every stamp, but only emits `healthChange` on a genuine state transition (`STALLED` -> `CONNECTED`) or a stall, not on every stamp.
+ * field on every stamp, but only emits `healthChange` when a stamp resets the consecutive-stall count or on a stall, not on every stamp.
  *
  * @module heartbeat
  */
@@ -171,8 +171,8 @@ export class HeartbeatScheduler {
   }
 
   /**
-   * Record an inbound activity timestamp. Called from the host's per-message tap in the run-phase dispatch table. The host is responsible for transitioning the
-   * health record (e.g. `STALLED` -> `CONNECTED`) after the call - the scheduler itself is health-agnostic.
+   * Record an inbound activity timestamp. Called from the host's per-message tap in the run-phase dispatch table. The host is responsible for updating the health
+   * record (e.g. resetting the consecutive-stall count) after the call - the scheduler itself is health-agnostic.
    *
    * @param atMs - Optional explicit timestamp; defaults to the scheduler's clock. Used in tests to drive deterministic activity timelines.
    */

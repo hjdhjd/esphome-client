@@ -95,7 +95,7 @@ export class HandshakeError extends ConnectionError {}
  * - `HANDSHAKE_REJECTED` - The device rejected the handshake in-band for a reason other than a wrong key, such as a malformed or unexpected handshake frame
  *   (`lifecycle/handshake.ts`). The message carries the device's reason text. Not a key problem, so it stays transient; a wrong key is reported instead as a permanent
  *   {@link EncryptionKeyInvalidError}.
- * - `HANDSHAKE_TIMEOUT` - The per-step handshake timeout elapsed (`lifecycle/handshake.ts`). Carried by {@link NoiseHandshakeTimeoutError}.
+ * - `HANDSHAKE_TIMEOUT` - The handshake-phase timeout elapsed (`lifecycle/handshake.ts`). Carried by {@link NoiseHandshakeTimeoutError}.
  * - `INVALID_PSK_LENGTH` - The PSK is not exactly 32 bytes (`crypto-noise.ts`). Consumer-supplied configuration error; the connect-flow handshake re-tags this into a
  *   permanent {@link EncryptionKeyInvalidError}.
  * - `INVALID_REMOTE_KEY` - The remote ephemeral public key was malformed or a low-order point, so X25519 key agreement failed (`crypto-noise.ts`). The `diffieHellman`
@@ -142,7 +142,7 @@ export class NoiseHandshakeError extends HandshakeError {
 }
 
 /**
- * Noise handshake aborted because the per-step timeout elapsed.
+ * Noise handshake aborted because the handshake-phase timeout elapsed.
  */
 export class NoiseHandshakeTimeoutError extends NoiseHandshakeError {}
 

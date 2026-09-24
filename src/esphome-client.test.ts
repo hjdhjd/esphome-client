@@ -23,6 +23,7 @@ import type { ClockFn } from "./heartbeat.ts";
 import type { DeviceInfo } from "./esphome-client.ts";
 import { MessageType } from "./protocol/message-types.ts";
 import { MockTransport } from "./testing/mock-transport.ts";
+import type { NoiseCipherPair } from "./transport.ts";
 import type { ProtoField } from "./protocol/codec.ts";
 import type { TestContext } from "node:test";
 import { WaterHeaterMode } from "./api-constants.ts";
@@ -31,6 +32,7 @@ import assert from "node:assert/strict";
 import { connectionUptimeMs } from "./health.ts";
 import { defaultShouldRetry } from "./reconnect.ts";
 import { setTimeout as delay } from "node:timers/promises";
+import { disconnectedCapabilities } from "./capabilities.ts";
 import { entityId } from "./entity-id.ts";
 
 // Quiet logger used by every test that constructs an EspHomeClient. Prevents the host's debug/info logging from polluting the test runner output and makes warn/error
@@ -341,23 +343,35 @@ function statePayloadFor(type: EntityType, key: number, extras: { fieldNumber: n
 
 // MockTransport drive helpers.
 
+// The handshake responses a test answers a connect attempt with. Omitted fields default to a protocol 1.12 hello, the default device information, and an empty
+// entity and service discovery.
+interface HandshakeScript {
+
+  deviceInfo?: Buffer;
+  entities?: { type: EntityType; key: number; objectId: string; name: string }[];
+  helloResponsePayload?: Buffer;
+  services?: { name: string; key: number }[];
+}
+
 // Drive a fresh client through the canonical plaintext connect -> discover -> ready sequence using the supplied entity discovery list. After this resolves, the client
 // is fully connected, all entities are registered, and the run-phase dispatcher is consuming inbound messages. Tests that don't care about the discovery shape pass an
 // empty list; those that need entities present pass a list and assert against `client.getEntitiesWithIds()`.
-async function driveConnect(transport: MockTransport, client: EspHomeClient, options: {
-  entities?: { type: EntityType; key: number; objectId: string; name: string }[];
-  services?: { name: string; key: number }[];
-  deviceInfo?: Buffer;
-  helloResponsePayload?: Buffer;
-  signal?: AbortSignal;
-} = {}): Promise<void> {
-
-  const entities = options.entities ?? [];
-  const services = options.services ?? [];
-  const helloPayload = options.helloResponsePayload ?? HELLO_RESPONSE_PROTOCOL_1_12;
-  const deviceInfo = options.deviceInfo ?? DEVICE_INFO_RESPONSE_DEFAULT;
+async function driveConnect(transport: MockTransport, client: EspHomeClient, options: HandshakeScript & { signal?: AbortSignal } = {}): Promise<void> {
 
   const connectPromise = client.connect(options.signal !== undefined ? { signal: options.signal } : undefined);
+
+  await pushHandshake(transport, options);
+  await connectPromise;
+}
+
+// Answer a connect attempt already in flight with the canonical plaintext handshake responses. The attempt is either one driveConnect started or one the reconnect
+// supervisor started on its own, which a test cannot await directly.
+async function pushHandshake(transport: MockTransport, script: HandshakeScript = {}): Promise<void> {
+
+  const entities = script.entities ?? [];
+  const services = script.services ?? [];
+  const helloPayload = script.helloResponsePayload ?? HELLO_RESPONSE_PROTOCOL_1_12;
+  const deviceInfo = script.deviceInfo ?? DEVICE_INFO_RESPONSE_DEFAULT;
 
   // Push the canonical handshake responses. We pump them one-by-one with brief waits so the host's awaiters resolve in order.
   await Promise.resolve();
@@ -382,8 +396,6 @@ async function driveConnect(transport: MockTransport, client: EspHomeClient, opt
 
   await delay(2);
   transport.pushInbound(MessageType.LIST_ENTITIES_DONE_RESPONSE, LIST_ENTITIES_DONE_RESPONSE);
-
-  await connectPromise;
 }
 
 // 1. Construction and pre-connect smoke.
@@ -840,6 +852,199 @@ describe("EspHomeClient.connect - error and abort paths", () => {
     await assert.rejects(connectPromise, "abort during connect must reject");
   });
 
+  test("disconnect() while the handshake is parked rejects the pending connect() with a ConnectionError and leaves no transport", async () => {
+
+    const transport = new MockTransport();
+
+    // The handshake-phase timeout is short so a connect the disconnect failed to cancel would still settle inside the test, on the timeout instead of the abort.
+    const client = new EspHomeClient({
+
+      handshakeTimeoutMs: 1000, host: "test.local", logger: quietLogger(), reconnect: false, transportFactory: (): MockTransport => transport
+    });
+    const connectEvents: boolean[] = [];
+
+    client.on("connect", (encrypted): void => { connectEvents.push(encrypted); });
+
+    // No caller signal: only the client's own teardown can cancel this connect. The handshake parks awaiting a HELLO_RESPONSE that is never pushed.
+    const pending = client.connect();
+
+    await delay(10);
+
+    const disconnectedAt = Date.now();
+
+    client.disconnect();
+
+    await assert.rejects(pending, (err: unknown): boolean => {
+
+      assert.ok(err instanceof ConnectionError, "the cancelled connect must reject with a typed ConnectionError");
+      assert.equal(err.code, "CONNECT_FAILED", "the cancelled connect must carry the CONNECT_FAILED code");
+      assert.ok(err.cause instanceof DOMException, "the cause must be the abort the disconnect raised");
+      assert.equal(err.cause.name, "AbortError", "the cause must be an AbortError, not the handshake-phase timeout");
+
+      return true;
+    });
+
+    const elapsed = Date.now() - disconnectedAt;
+
+    assert.ok(elapsed < 500, "the disconnect must cancel the connect at once rather than leave it to the handshake-phase timeout: " + String(elapsed) + " ms");
+
+    // No transport survives the cancelled connect: the client holds none, and the parked transport was disposed (a disposed mock ends its iterator at once).
+    assert.equal((client as unknown as { transport: unknown }).transport, null, "the client must hold no transport after the cancelled connect");
+
+    const iteration = await Promise.race([ transport[Symbol.asyncIterator]().next(), delay(50).then((): string => "parked") ]);
+
+    assert.deepEqual(iteration, { done: true, value: undefined }, "the parked handshake transport must have been disposed");
+    assert.equal(client.health().state, "disconnected", "the client must remain disconnected");
+    assert.deepEqual(connectEvents, [], "a cancelled connect must never announce a session");
+  });
+
+  test("a pre-aborted signal rejects connect() with a ConnectionError whose cause is the AbortError", async () => {
+
+    const client = new EspHomeClient({ host: "test.local", logger: quietLogger(), reconnect: false, transportFactory: (): MockTransport => new MockTransport() });
+    const controller = new AbortController();
+
+    controller.abort();
+
+    await assert.rejects(client.connect({ signal: controller.signal }), (err: unknown): boolean => {
+
+      assert.ok(err instanceof ConnectionError, "a pre-aborted connect must reject with the same typed ConnectionError as every other connect failure");
+      assert.equal(err.code, "CONNECT_FAILED", "the pre-aborted connect must carry the CONNECT_FAILED code");
+      assert.ok(err.cause instanceof DOMException, "the cause must be the signal's abort reason");
+      assert.equal(err.cause.name, "AbortError", "the cause must be the AbortError the signal carries");
+
+      return true;
+    });
+  });
+
+  test("a pre-aborted connect() over a live session rejects typed, announces nothing, and leaves the session connected", async () => {
+
+    const transport = new MockTransport();
+    const vended: MockTransport[] = [];
+    const client = new EspHomeClient({
+
+      host: "test.local",
+      logger: quietLogger(),
+      reconnect: false,
+      transportFactory: (): MockTransport => {
+
+        const t = (vended.length === 0) ? transport : new MockTransport();
+
+        vended.push(t);
+
+        return t;
+      }
+    });
+
+    await driveConnect(transport, client, { signal: AbortSignal.timeout(2000) });
+
+    const events: string[] = [];
+
+    client.on("disconnect", (reason): void => { events.push("disconnect:" + String(reason)); });
+    client.on("healthChange", (health): void => { events.push("healthChange:" + health.state); });
+    client.on("lifecycle", (event): void => { events.push("lifecycle:" + event.kind); });
+
+    const controller = new AbortController();
+
+    controller.abort();
+
+    await assert.rejects(client.connect({ signal: controller.signal }), (err: unknown): boolean => {
+
+      assert.ok(err instanceof ConnectionError, "the pre-aborted connect must reject with a typed ConnectionError");
+      assert.ok(err.cause instanceof DOMException, "the cause must be the signal's abort reason");
+      assert.equal(err.cause.name, "AbortError", "the cause must be the AbortError the signal carries");
+
+      return true;
+    });
+
+    // The abort check runs before the supersede, so the live session is neither torn down nor announced as ended.
+    assert.deepEqual(events, [], "a pre-aborted connect must emit no disconnect, lifecycle, or health event for the session it never superseded");
+    assert.equal(client.health().state, "connected", "the live session must stay connected");
+    assert.equal((client as unknown as { transport: unknown }).transport, transport, "the live session's transport must stay attached");
+    assert.equal(vended.length, 1, "the pre-aborted connect must never open a transport");
+
+    client.disconnect();
+  });
+
+  test("an abort that lands while the transport is still opening rejects connect() with a typed ConnectionError", async () => {
+
+    // The factory settles only when the connect signal aborts, standing in for a TCP connect still in progress when the caller gives up.
+    const client = new EspHomeClient({
+
+      host: "test.local",
+      logger: quietLogger(),
+      reconnect: false,
+      transportFactory: (options): Promise<MockTransport> => new Promise<MockTransport>((_resolve, reject): void => {
+
+        options.signal?.addEventListener("abort", (): void => {
+
+          reject((options.signal?.reason instanceof Error) ? options.signal.reason : new DOMException("Aborted", "AbortError"));
+        }, { once: true });
+      })
+    });
+    const controller = new AbortController();
+    const pending = client.connect({ signal: controller.signal });
+
+    await delay(5);
+    controller.abort();
+
+    await assert.rejects(pending, (err: unknown): boolean => {
+
+      assert.ok(err instanceof ConnectionError, "an abort during the transport open must reject with a typed ConnectionError");
+      assert.equal(err.code, "CONNECT_FAILED", "the aborted open must carry the CONNECT_FAILED code");
+      assert.ok(err.cause instanceof DOMException, "the cause must be the abort reason the open rejected with");
+      assert.equal(err.cause.name, "AbortError", "the cause must be the AbortError the signal carries");
+
+      return true;
+    });
+
+    assert.equal(client.health().state, "disconnected", "the client must remain disconnected");
+  });
+
+  test("a transport factory that throws rejects connect() with a typed ConnectionError carrying the factory's error", async () => {
+
+    const factoryFault = new Error("Synthetic transport factory failure.");
+    const client = new EspHomeClient({
+
+      host: "test.local",
+      logger: quietLogger(),
+      reconnect: false,
+      transportFactory: (): MockTransport => { throw factoryFault; }
+    });
+
+    await assert.rejects(client.connect({ signal: AbortSignal.timeout(2000) }), (err: unknown): boolean => {
+
+      assert.ok(err instanceof ConnectionError, "a failed transport open must reject with a typed ConnectionError");
+      assert.equal(err.code, "CONNECT_FAILED", "the failed open must carry the CONNECT_FAILED code");
+      assert.equal(err.cause, factoryFault, "the cause must be the error the factory threw");
+
+      return true;
+    });
+
+    assert.equal(client.health().state, "disconnected", "the client must remain disconnected");
+  });
+
+  test("a listener that throws while a connect is announced rejects connect() with a typed error and leaves health disconnected", async () => {
+
+    const transport = new MockTransport();
+    const client = new EspHomeClient({ host: "test.local", logger: quietLogger(), reconnect: false, transportFactory: (): MockTransport => transport });
+    const listenerFault = new Error("Synthetic connect-listener fault.");
+
+    // The throw lands after the run-phase handoff has attached the transport and marked health connected, so the failed attempt itself must release that state.
+    client.on("connect", (): void => { throw listenerFault; });
+
+    await assert.rejects(driveConnect(transport, client, { signal: AbortSignal.timeout(2000) }), (err: unknown): boolean => {
+
+      assert.ok(err instanceof ConnectionError, "a throwing listener must surface as a typed ConnectionError");
+      assert.equal(err.code, "CONNECT_FAILED", "the failed attempt must carry the CONNECT_FAILED code");
+      assert.equal(err.cause, listenerFault, "the cause must be the error the listener threw");
+
+      return true;
+    });
+
+    assert.equal(client.health().state, "disconnected", "health must not stay connected once the failed attempt has torn the session down");
+    assert.equal((client as unknown as { transport: unknown }).transport, null, "the failed attempt must leave no transport attached");
+  });
+
   test("connect rejects with NegotiationFailedError when device announces an unsupported API major", async () => {
 
     const transport = new MockTransport();
@@ -993,7 +1198,7 @@ describe("EspHomeClient.connect - error and abort paths", () => {
       handshakeTimeoutMs: 60, host: "test.local", logger: quietLogger(), reconnect: false, transportFactory: (): MockTransport => transport
     });
 
-    // Don't push HELLO_RESPONSE; let the per-step handshake timer fire.
+    // Don't push HELLO_RESPONSE; let the handshake-phase timer fire.
     const connectPromise = client.connect();
 
     await assert.rejects(connectPromise);
@@ -1064,7 +1269,7 @@ describe("EspHomeClient.connect - error and abort paths", () => {
     const psk = Buffer.alloc(32, 0x55).toString("base64");
     const client = new EspHomeClient({ handshakeTimeoutMs: 100, host: "test.local", logger: quietLogger(), psk, reconnect: false, transportFactory });
 
-    // Push nothing: the per-step handshake timer fires, aborting nextNoiseHandshakeFrame -> NoiseHandshakeTimeoutError -> the gate fails it closed.
+    // Push nothing: the handshake-phase timer fires, aborting nextNoiseHandshakeFrame -> NoiseHandshakeTimeoutError -> the gate fails it closed.
     await assert.rejects(client.connect({ signal: AbortSignal.timeout(2000) }), (err: unknown) => {
 
       assert.ok(err instanceof EspHomeError, "a fail-closed noise timeout must reject with a typed client error");
@@ -1906,6 +2111,105 @@ describe("EspHomeClient.disconnect / disconnectAsync / dispose", () => {
     assert.equal(client.health().state, "disconnected");
   });
 
+  test("disconnect returns isEncrypted and capabilities() to their disconnected values after an encrypted session", async () => {
+
+    // The mock reports an encrypted wire once a cipher pair is installed, and the client reads encryption from the transport it connected over, so installing a stub
+    // pair before the connect yields an encrypted session without driving a full Noise handshake. The stub is never invoked: the mock does not encrypt.
+    const transport = new MockTransport();
+    const client = new EspHomeClient({ host: "test.local", logger: quietLogger(), reconnect: false, transportFactory: (): MockTransport => transport });
+
+    transport.installCipher({ receiveCipher: {}, sendCipher: {} } as unknown as NoiseCipherPair);
+    await driveConnect(transport, client, { signal: AbortSignal.timeout(2000) });
+
+    assert.equal(client.isEncrypted, true, "the session must be encrypted before the disconnect for the reset to be observable");
+    assert.equal(client.capabilities().encryption.active, true, "the connected capability record must report the encrypted wire");
+
+    client.disconnect();
+
+    assert.equal(client.isEncrypted, false, "isEncrypted must not report the torn-down session's encryption");
+    assert.deepEqual(client.capabilities(), disconnectedCapabilities(), "capabilities() must return the disconnected placeholder once the session ends");
+    assert.equal(client.deviceInfo(), null, "the torn-down session's device information must not outlive it");
+  });
+
+  test("connect() over a live session announces the superseded session's end before the new session's connect events and schedules no reconnect", async () => {
+
+    const firstTransport = new MockTransport();
+    const secondTransport = new MockTransport();
+    const transportQueue = [ firstTransport, secondTransport ];
+    const vended: MockTransport[] = [];
+    const attemptDelays: number[] = [];
+
+    // Reconnect is enabled with a short backoff so a reconnect wrongly scheduled for the superseded session would fire inside the wait below and vend a third transport.
+    const client = new EspHomeClient({
+
+      host: "test.local",
+      logger: quietLogger(),
+      reconnect: { initialDelayMs: 10, jitter: 0, onAttempt: (_attempt, delayMs): void => { attemptDelays.push(delayMs); } },
+      transportFactory: (): MockTransport => {
+
+        const t = transportQueue.shift() ?? new MockTransport();
+
+        vended.push(t);
+
+        return t;
+      }
+    });
+
+    await driveConnect(firstTransport, client, { signal: AbortSignal.timeout(2000) });
+
+    const events: string[] = [];
+
+    client.on("connect", (): void => { events.push("connect"); });
+    client.on("disconnect", (reason): void => { events.push("disconnect:" + String(reason)); });
+    client.on("healthChange", (health): void => { events.push("healthChange:" + health.state); });
+    client.on("lifecycle", (event): void => { events.push("lifecycle:" + event.kind); });
+
+    await driveConnect(secondTransport, client, { signal: AbortSignal.timeout(2000) });
+
+    // The full sequence: the superseded session's disconnect surface, then the new session's connect surface, with nothing in between and no reconnecting state.
+    assert.deepEqual(events, [
+
+      "healthChange:disconnected", "lifecycle:disconnect", "disconnect:superseded by a new connect", "connect", "healthChange:connected", "lifecycle:connect"
+    ]);
+
+    // Wait well past the reconnect backoff so a reconnect scheduled for the superseded session would have fired.
+    await delay(60);
+
+    assert.equal(attemptDelays.length, 0, "superseding a live session must not schedule an auto-reconnect of the session it replaces");
+    assert.equal(vended.length, 2, "no reconnect attempt may vend a third transport");
+    assert.equal(client.health().state, "connected", "the superseding session must remain live");
+
+    client.disconnect();
+  });
+
+  test("disconnect keeps the last-known state readable through latest() and snapshot()", async () => {
+
+    const transport = new MockTransport();
+    const client = new EspHomeClient({ host: "test.local", logger: quietLogger(), reconnect: false, transportFactory: (): MockTransport => transport });
+
+    await driveConnect(transport, client, {
+
+      entities: [{ key: 12, name: "S1", objectId: "shelf", type: "switch" }],
+      signal: AbortSignal.timeout(2000)
+    });
+
+    const id = entityId("switch", "shelf");
+
+    transport.pushInbound(MessageType.SWITCH_STATE_RESPONSE, statePayloadFor("switch", 12, [{ fieldNumber: 2, value: 1, wireType: WireType.VARINT }]));
+    await transport.whenIdle();
+
+    const lastState = client.latest(id);
+
+    assert.notEqual(lastState, null, "the state event must be recorded before the disconnect");
+
+    client.disconnect();
+
+    // latest() promises the last-known state until the next connect(), so the connection teardown must leave the latest-state cache alone.
+    assert.deepEqual(client.latest(id), lastState, "latest() must still return the last state after a disconnect");
+    assert.equal(client.snapshot().size, 1, "snapshot() must still hold the last state after a disconnect");
+    assert.deepEqual(client.snapshot().get(id), lastState, "snapshot() must hold the same last state latest() returns");
+  });
+
   test("disconnect rejects an in-flight sub-API correlator promptly, not after its per-await timeout", async () => {
 
     const transport = new MockTransport();
@@ -2460,6 +2764,23 @@ describe("EspHomeClient telemetry stream wrappers", () => {
     const stream = client.telemetryForId(entityId("sensor", "temperature"));
 
     assert.equal(typeof stream[Symbol.asyncIterator], "function");
+  });
+
+  test("telemetryForId() for an id the client has not discovered opens no bus stream and ends at once", async () => {
+
+    const client = new EspHomeClient({ host: "test.local", logger: quietLogger(), transportFactory: (): MockTransport => new MockTransport() });
+
+    // The bus is private; the listener count on the per-type channel is the observable for whether a stream was opened on it.
+    const bus = (client as unknown as { bus: { listenerCount: (event: string) => number } }).bus;
+    const before = bus.listenerCount("sensor");
+    const view = client.telemetryForId(entityId("sensor", "temperature"));
+
+    assert.equal(bus.listenerCount("sensor"), before, "an unknown id must not attach a listener to the per-type channel");
+
+    const iterator = view[Symbol.asyncIterator]();
+
+    assert.deepEqual(await iterator.next(), { done: true, value: undefined }, "the view for an unknown id must end at once");
+    assert.equal(bus.listenerCount("sensor"), before, "ending the view must leave the per-type channel's listener count unchanged");
   });
 
   test("telemetryReadable() returns a ReadableStream<TelemetryEvent>", () => {
@@ -4863,7 +5184,7 @@ describe("EspHomeClient reconnect loop end-to-end", () => {
     client.disconnect();
   });
 
-  test("a consumer disconnect during a parked reconnect backoff emits NO give-up typed disconnect from the loop", async () => {
+  test("a consumer disconnect during a parked reconnect backoff emits NO give-up typed disconnect from the loop, only a causeless release", async () => {
 
     const firstTransport = new MockTransport();
     const vended: MockTransport[] = [];
@@ -4901,17 +5222,171 @@ describe("EspHomeClient reconnect loop end-to-end", () => {
     // Wait well past the supervisor's backoff so a surviving loop would have woken, attempted, and (wrongly) emitted a give-up disconnect.
     await delay(120);
 
-    // The only typed disconnect is the run-phase one; the abort break emits NO give-up disconnect. We key on the typed lifecycle disconnect, not raw string-disconnect
-    // counts (the per-attempt and run-phase string disconnects are not the give-up signal).
-    assert.equal(lifecycleDisconnects.length, 1, "only the run-phase disconnect must fire; the consumer-abort break must not emit a give-up typed disconnect");
+    // The abort break emits NO give-up disconnect: a give-up carries the failed attempt's cause, and no attempt ran. What follows the run-phase disconnect is the loop
+    // releasing the reconnecting state it entered, causeless because no attempt failed. We key on the typed lifecycle disconnect, not raw string-disconnect counts (the
+    // per-attempt and run-phase string disconnects are not the give-up signal).
+    assert.equal(lifecycleDisconnects.length, 2, "the run-phase disconnect and the explicit-close release must each fire exactly once, with no give-up beside them");
 
-    const onlyDisconnect = lifecycleDisconnects[0];
+    const [ runPhaseDisconnect, releaseDisconnect ] = lifecycleDisconnects;
 
-    assert.ok(onlyDisconnect, "the single run-phase typed disconnect must be present");
-    assert.equal(onlyDisconnect.cause, runPhaseCause, "the single typed disconnect must be the run-phase one, carrying the peer-death cause");
+    assert.ok(runPhaseDisconnect, "the run-phase typed disconnect must be present");
+    assert.equal(runPhaseDisconnect.cause, runPhaseCause, "the first typed disconnect must be the run-phase one, carrying the peer-death cause");
+    assert.ok(releaseDisconnect, "the explicit close must release the reconnecting state through a typed disconnect");
+    assert.equal(releaseDisconnect.cause, undefined, "the release carries no cause because no attempt failed, so it cannot be a give-up");
+    assert.equal(client.health().state, "disconnected", "the release must leave health disconnected rather than reconnecting");
     assert.equal(vended.length, 1, "the consumer abort during backoff must prevent any reconnect attempt from vending a second transport");
 
     client.disconnect();
+  });
+
+  // Each close form cancels a reconnect loop parked in its backoff, and the loop then releases the reconnecting state it entered. The close itself returns before the
+  // loop settles, so the test awaits the loop's promise before asserting.
+  for(const close of [ "disconnect", "disconnectAsync" ] as const) {
+
+    test(close + "() during a parked reconnect backoff ends with health disconnected and exactly one healthChange to it", async () => {
+
+      const firstTransport = new MockTransport();
+      const transportQueue = [firstTransport];
+      const client = new EspHomeClient({ host: "test.local", logger: quietLogger(),
+        reconnect: { initialDelayMs: 80, jitter: 0, maxAttempts: 5 }, transportFactory: (): MockTransport => transportQueue.shift() ?? new MockTransport() });
+
+      await driveConnect(firstTransport, client, { signal: AbortSignal.timeout(2000) });
+
+      firstTransport.fail(new ConnectionClosedByPeerError("Synthetic transient run-phase peer death.", "PEER_CLOSED"));
+      await delay(15);
+
+      assert.equal(client.health().state, "reconnecting", "the supervisor must be parked in its backoff before the close");
+
+      const healthStates: string[] = [];
+
+      client.on("healthChange", (health): void => { healthStates.push(health.state); });
+
+      const loop = (client as unknown as { reconnectLoopPromise: Nullable<Promise<void>> }).reconnectLoopPromise;
+
+      await client[close]();
+      await loop;
+
+      // Wait past the backoff as well, so a transition the loop fired late would be counted.
+      await delay(100);
+
+      assert.deepEqual(healthStates, ["disconnected"], "the close must produce exactly one healthChange, to disconnected");
+      assert.equal(client.health().state, "disconnected", "health must end disconnected rather than frozen at reconnecting");
+    });
+  }
+
+  test("a manual connect() superseding a parked reconnect loop emits only the new session's connect events", async () => {
+
+    const firstTransport = new MockTransport();
+    const manualTransport = new MockTransport();
+    const transportQueue = [ firstTransport, manualTransport ];
+    const client = new EspHomeClient({ host: "test.local", logger: quietLogger(),
+      reconnect: { initialDelayMs: 80, jitter: 0, maxAttempts: 5 }, transportFactory: (): MockTransport => transportQueue.shift() ?? new MockTransport() });
+
+    await driveConnect(firstTransport, client, { signal: AbortSignal.timeout(2000) });
+
+    firstTransport.fail(new ConnectionClosedByPeerError("Synthetic transient run-phase peer death.", "PEER_CLOSED"));
+    await delay(15);
+
+    const events: string[] = [];
+
+    client.on("connect", (): void => { events.push("connect"); });
+    client.on("disconnect", (reason): void => { events.push("disconnect:" + String(reason)); });
+    client.on("healthChange", (health): void => { events.push("healthChange:" + health.state); });
+    client.on("lifecycle", (event): void => { events.push("lifecycle:" + event.kind); });
+
+    await driveConnect(manualTransport, client, { signal: AbortSignal.timeout(2000) });
+
+    // Wait past the superseded loop's backoff so an announcement it made late would be recorded too.
+    await delay(100);
+
+    // The loss the loop was recovering from was announced when it began, so superseding it adds no disconnect: the full sequence is the new session's connect surface.
+    assert.deepEqual(events, [ "connect", "healthChange:connected", "lifecycle:connect" ]);
+
+    client.disconnect();
+  });
+
+  test("a manual connect() superseding a parked reconnect loop that fails ends with health disconnected and one typed lifecycle disconnect", async () => {
+
+    const firstTransport = new MockTransport();
+    const manualTransport = new MockTransport();
+    const transportQueue = [ firstTransport, manualTransport ];
+    const client = new EspHomeClient({ host: "test.local", logger: quietLogger(),
+      reconnect: { initialDelayMs: 80, jitter: 0, maxAttempts: 5 }, transportFactory: (): MockTransport => transportQueue.shift() ?? new MockTransport() });
+
+    await driveConnect(firstTransport, client, { signal: AbortSignal.timeout(2000) });
+
+    firstTransport.fail(new ConnectionClosedByPeerError("Synthetic transient run-phase peer death.", "PEER_CLOSED"));
+    await delay(15);
+
+    const lifecycleDisconnects: { cause?: EspHomeError; kind: string }[] = [];
+
+    client.on("lifecycle", (event): void => { if(event.kind === "disconnect") { lifecycleDisconnects.push(event); } });
+
+    // The superseding connect fails inside its handshake: the device announces an API major the client does not support.
+    const pending = client.connect({ signal: AbortSignal.timeout(2000) });
+
+    await delay(10);
+    manualTransport.pushInbound(MessageType.HELLO_RESPONSE, HELLO_RESPONSE_PROTOCOL_2_0);
+
+    let rejection: unknown;
+
+    await assert.rejects(pending, (err: unknown): boolean => {
+
+      rejection = err;
+
+      return err instanceof NegotiationFailedError;
+    });
+
+    // The superseded loop left health reconnecting and no loop is running any more, so the failed connect releases that state with its own typed cause.
+    assert.equal(client.health().state, "disconnected", "health must not stay reconnecting after the superseding connect fails");
+    assert.equal(lifecycleDisconnects.length, 1, "the failed supersede must emit exactly one typed lifecycle disconnect");
+    assert.equal(lifecycleDisconnects[0]?.cause, rejection, "the lifecycle disconnect must carry the typed cause the connect rejected with");
+  });
+
+  test("a manual connect() superseding a parked reconnect loop whose transport fails to open rejects typed and ends with health disconnected", async () => {
+
+    const firstTransport = new MockTransport();
+    const factoryFault = new Error("Synthetic unreachable device.");
+    let opened = 0;
+    const client = new EspHomeClient({
+
+      host: "test.local",
+      logger: quietLogger(),
+      reconnect: { initialDelayMs: 200, jitter: 0, maxAttempts: 5 },
+      transportFactory: (): MockTransport => {
+
+        opened++;
+
+        if(opened === 1) {
+
+          return firstTransport;
+        }
+
+        throw factoryFault;
+      }
+    });
+
+    await driveConnect(firstTransport, client, { signal: AbortSignal.timeout(2000) });
+
+    firstTransport.fail(new ConnectionClosedByPeerError("Synthetic transient run-phase peer death.", "PEER_CLOSED"));
+    await delay(10);
+
+    const lifecycleDisconnects: { cause?: EspHomeError; kind: string }[] = [];
+
+    client.on("lifecycle", (event): void => { if(event.kind === "disconnect") { lifecycleDisconnects.push(event); } });
+
+    // The most likely failure of a reconnect by hand: the device is still unreachable, so the transport never opens.
+    await assert.rejects(client.connect({ signal: AbortSignal.timeout(2000) }), (err: unknown): boolean => {
+
+      assert.ok(err instanceof ConnectionError, "a failed transport open must reject with a typed ConnectionError");
+      assert.equal(err.cause, factoryFault, "the cause must be the error the transport open failed with");
+
+      return true;
+    });
+
+    assert.equal(client.health().state, "disconnected", "health must not stay reconnecting after the superseding connect fails to open");
+    assert.equal(lifecycleDisconnects.length, 1, "the failed supersede must emit exactly one typed lifecycle disconnect");
+    assert.ok(lifecycleDisconnects[0]?.cause instanceof ConnectionError, "the lifecycle disconnect must carry the typed cause");
   });
 
   test("voiceAssistant.subscribe sends SUBSCRIBE_VOICE_ASSISTANT_REQUEST after connect", async () => {
@@ -5080,7 +5555,8 @@ function buildClock(initial: number): { advance: (deltaMs: number) => void; cloc
 // only).
 // The injected clock governs the idle/stall/RTT arithmetic; `mock.timers.tick(tickMs)` fires the supervisory tick the clock cannot drive; `transport.whenIdle()` settles
 // pushed-inbound dispatch. B1/B2/B3 are anti-vacuity mutation-checked by reverting the `:1026` heartbeat-clock thread (the origin = `Date.now()` makes that reversal
-// detectable - each flips red). B5 pins pre-existing `connectTimeoutMs` / `AbortSignal.timeout` behavior and is EXEMPT from the seam-mutation-check.
+// detectable - each flips red). B4 is mutation-checked against the stall count's carry across the teardown and reconnect and its reset on inbound activity. B5 pins
+// pre-existing `connectTimeoutMs` / `AbortSignal.timeout` behavior and is EXEMPT from the seam-mutation-check.
 
 describe("EspHomeClient clock seam - live heartbeat stall / RTT / timeout integration", () => {
 
@@ -5263,6 +5739,81 @@ describe("EspHomeClient clock seam - live heartbeat stall / RTT / timeout integr
       mock.timers.tick(15000);
 
       assert.ok(healthStates.includes("stalled"), "a budget-crossing advance from the recovered state must still stall (the tick mechanism is live)");
+
+    } finally {
+
+      client.disconnect();
+      mock.timers.reset();
+    }
+  });
+
+  // B4 - the consecutive-stall count across stall-driven reconnects. A stall tears the session down, so the count has to survive the teardown and the reconnect to be
+  // consecutive at all, and only the reconnected session's first inbound frame proves it live and resets the count. The reconnect handshakes arrive through the
+  // setup-phase receiver rather than the run-phase activity tap, so they leave the count alone.
+  test("B4: the consecutive-stall count survives a stall-driven reconnect, reaches 2 on a second stall, and resets on inbound activity", async () => {
+
+    const clock = buildClock(Date.now());
+    const firstTransport = new MockTransport();
+    const secondTransport = new MockTransport();
+    const thirdTransport = new MockTransport();
+    const transportQueue = [ firstTransport, secondTransport, thirdTransport ];
+    const client = new EspHomeClient({
+
+      clock: clock.clock,
+      host: "test.local",
+      keepAlive: { intervalMs: 30000, stallTimeoutMs: 60000 },
+      logger: quietLogger(),
+      reconnect: { initialDelayMs: 10, jitter: 0 },
+      transportFactory: (): MockTransport => transportQueue.shift() ?? new MockTransport()
+    });
+
+    mock.timers.enable({ apis: ["setInterval"] });
+
+    try {
+
+      await driveConnect(firstTransport, client, { signal: AbortSignal.timeout(2000) });
+
+      // First stall: the budget-crossing tick tears the session down and the supervisor enters its backoff.
+      clock.advance(60000);
+      mock.timers.tick(15000);
+
+      assert.equal(client.health().state, "reconnecting", "the first stall must hand the connection to the reconnect supervisor");
+      assert.equal(client.health().consecutiveStalls, 1, "the stall count must survive the teardown into the reconnecting record");
+
+      // The backoff runs on real timers; once it has vended the second transport, answer the supervisor's own connect attempt and wait for it to complete.
+      const firstReconnect = client.once("connect", { signal: AbortSignal.timeout(2000) });
+
+      await delay(20);
+      await pushHandshake(secondTransport);
+      await firstReconnect;
+
+      assert.equal(client.health().state, "connected", "the supervisor must reconnect on the second transport");
+      assert.equal(client.health().consecutiveStalls, 1, "the reconnected session must carry the count until inbound activity proves it live");
+
+      // Second stall, with no run-phase traffic since the reconnect.
+      clock.advance(60000);
+      mock.timers.tick(15000);
+
+      assert.equal(client.health().consecutiveStalls, 2, "a second stall before any inbound activity must count consecutively");
+
+      const secondReconnect = client.once("connect", { signal: AbortSignal.timeout(2000) });
+
+      await delay(20);
+      await pushHandshake(thirdTransport);
+      await secondReconnect;
+
+      assert.equal(client.health().consecutiveStalls, 2, "the second reconnect must carry the count as well");
+
+      const stallCounts: number[] = [];
+
+      client.on("healthChange", (health): void => { stallCounts.push(health.consecutiveStalls); });
+
+      // The first run-phase frame on the reconnected session proves it live.
+      thirdTransport.pushInbound(MessageType.PING_RESPONSE, PING_RESPONSE_PAYLOAD);
+      await thirdTransport.whenIdle();
+
+      assert.equal(client.health().consecutiveStalls, 0, "inbound activity must reset the stall count");
+      assert.deepEqual(stallCounts, [0], "the reset must be broadcast once through healthChange");
 
     } finally {
 

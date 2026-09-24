@@ -253,7 +253,8 @@ export class EventBus<EventMap extends object> {
   }
 
   /**
-   * Emit a payload. Type-narrowed against `EventMap` so a typo in the event name or a payload-shape mismatch is a compile error.
+   * Emit a payload. Type-narrowed against `EventMap` so a typo in the event name or a payload-shape mismatch is a compile error. A listener that throws propagates the
+   * error to the emit site, which may be a timer or the reconnect supervisor rather than a consumer's own call, so each listener handles its own errors.
    *
    * @param event - The event name.
    * @param payload - The payload value, narrowed to `EventMap[event]`.
@@ -320,9 +321,12 @@ export class EventBus<EventMap extends object> {
 /**
  * An already-ended async-iterable - a `for await` over it completes immediately, yielding nothing. {@link EventBus.stream} returns this after dispose so a stream created
  * post-dispose ends cleanly (mirroring the defensive `on`/`once` handling) rather than parking forever: the one-shot `DISPOSE_CHANNEL` has already fired, so a freshly
- * constructed {@link BackpressureStream} would attach a dispose listener that never settles.
+ * constructed {@link BackpressureStream} would attach a dispose listener that never settles. The client returns it too for a stream that can never deliver, so no bus
+ * listener is attached for it. Exported for the client only; the public barrel does not re-export this module's values.
+ *
+ * @internal
  */
-function endedAsyncIterable<T>(): AsyncIterable<T> {
+export function endedAsyncIterable<T>(): AsyncIterable<T> {
 
   return { [Symbol.asyncIterator]: (): AsyncIterator<T> => ({ next: (): Promise<IteratorResult<T>> => Promise.resolve({ done: true, value: undefined }) }) };
 }

@@ -28,6 +28,7 @@ import {
   findSchemaByStateMessageTypeIn, getSchemaIn
 } from "./schemas/index.ts";
 import type { Entity, EntitySchema, EntityType, ExtendedEntityType, ExtraSchemaSet, SchemaForExtended, SchemasTable, TelemetryEvent } from "./schemas/index.ts";
+import { EventBus, endedAsyncIterable } from "./event-bus.ts";
 import type { FieldValue, ProtoField } from "./protocol/codec.ts";
 import { HealthState, disconnectedHealth, isConnectionLive } from "./health.ts";
 import type { HomeAssistantApiHost, HomeAssistantServiceEvent, HomeAssistantStateRequest } from "./home-assistant.ts";
@@ -53,7 +54,6 @@ import type { ConnectionHealth } from "./health.ts";
 import { Correlator } from "./correlator.ts";
 import type { EntityId } from "./entity-id.ts";
 import { EntityRegistry } from "./registries/entity-registry.ts";
-import { EventBus } from "./event-bus.ts";
 import { HeartbeatScheduler } from "./heartbeat.ts";
 import type { HeartbeatStalledError } from "./errors.ts";
 import { HomeAssistantApi } from "./home-assistant.ts";
@@ -86,8 +86,8 @@ const DEFAULT_MAX_FIELDS_PER_MESSAGE = 1024;
 const DEFAULT_MAX_RECV_BUFFER_BYTES = 4 * 1024 * 1024;
 const DEFAULT_MAX_IMAGE_BYTES = 8 * 1024 * 1024;
 
-// Default per-step handshake timeout. Bounds each individual handshake-message wait via AbortSignal.timeout composed with the user's signal at the connect() entry.
-// Tunable via EspHomeClientOptions.handshakeTimeoutMs.
+// Default handshake-phase timeout. Bounds each phase of the connect handshake (the noise handshake, the hello exchange, authentication, and entity discovery) with its
+// own AbortSignal.timeout, composed with the overall connect signal. Tunable via EspHomeClientOptions.handshakeTimeoutMs.
 const DEFAULT_HANDSHAKE_TIMEOUT_MS = 5000;
 
 // Default overall connect timeout. Bounds the transport open + handshake + discovery phases when the consumer does not supply their own AbortSignal. Composed with
@@ -485,8 +485,8 @@ export interface EspHomeClientOptions<Extras extends ExtraSchemaSet = {}> {
   gracefulDisconnectTimeoutMs?: number;
 
   /**
-   * Per-step handshake timeout in milliseconds. Bounds each individual handshake-message wait (server-hello, server-handshake, hello-response, list-entities done).
-   * Default 5000. Tune up for very slow devices, down for tighter test harnesses.
+   * Handshake-phase timeout in milliseconds. Bounds each phase of the connect handshake (the noise handshake, the hello exchange, authentication, and entity discovery)
+   * separately, so the messages within one phase share its window. Default 5000. Tune up for very slow devices, down for tighter test harnesses.
    */
   handshakeTimeoutMs?: number;
 
@@ -856,6 +856,10 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
   // over the connection state - guaranteeing the loop and a superseding manual connect never mutate `transport`/registries/health concurrently. `null` when no loop runs.
   private reconnectLoopPromise: Nullable<Promise<void>> = null;
 
+  // The abort controller of the most recent manual `connect()` still in flight, so a teardown can cancel a handshake the consumer has abandoned, the way
+  // `reconnectController` cancels the reconnect loop's attempts. `null` when no manual connect is in flight.
+  private connectController: Nullable<AbortController> = null;
+
   // The Noise encryption key resolver. A string key is held as a resolver that returns it, so the handshake has one key path for every key form; null means no key.
   private readonly resolvePsk: Nullable<PskResolver>;
 
@@ -875,8 +879,7 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
   private readonly maxRecvBufferBytes: number;
   private readonly maxImageBytes: number;
 
-  // Per-step handshake timeout in milliseconds. Bounds each individual handshake-message wait (server-hello, server-handshake, hello-response, etc.) declaratively
-  // via AbortSignal.timeout composition at each waitFor call.
+  // Handshake-phase timeout in milliseconds. Bounds each phase of the connect handshake declaratively via AbortSignal.timeout composition at each phase's call site.
   private readonly handshakeTimeoutMs: number;
 
   // Overall connect timeout in milliseconds. Bounds the entire connect() flow when the consumer does not pass their own AbortSignal. Composed with the user signal via
@@ -1165,10 +1168,9 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
   /**
    * Single source of truth for which managers participate in the `SubscriptionLifecycle` reset/reissue cycle. The eagerly-constructed log manager and
    * Home-Assistant bridge are always present; the lazily-instantiated sub-APIs (voice-assistant, serial, Bluetooth, Z-Wave, and any future addition) are included only
-   * once a consumer has accessed them, so the `null` entries are filtered out. The host loops over this list at three points: the disconnect boundary and connect-top
-   * both call `SubscriptionLifecycle.clearConnectionState` on each (disconnect is the primary reset; connect-top is a repeatable safety net for a `connect()` issued
-   * over a still-active connection), and connect-bottom calls `SubscriptionLifecycle.reissueOnReconnect` on each, so adding a future streaming sub-API to the lifecycle
-   * is a one-line edit here rather than scattered per-manager call sites.
+   * once a consumer has accessed them, so the `null` entries are filtered out. The connection teardown ({@link tearDownConnection}) calls
+   * `SubscriptionLifecycle.clearConnectionState` on each, and connect-bottom calls `SubscriptionLifecycle.reissueOnReconnect` on each, so adding a future streaming
+   * sub-API to the lifecycle is a one-line edit here rather than scattered per-manager call sites.
    *
    * @returns The live subscription-lifecycle participants, with un-instantiated lazy sub-APIs omitted.
    */
@@ -1197,85 +1199,84 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
    */
   public async connect(options?: { signal?: AbortSignal }): Promise<void> {
 
-    // A manual connect supersedes any in-flight auto-reconnect supervisor: abort the loop, then await its current connect attempt fully settling so two connect flows
-    // never mutate the connection state (`transport`, registries, health) concurrently. `cancelReconnect` is repeatable, so this is a no-op on a first connect with no
-    // loop running. The reconnect loop itself calls `connectInternal` (below), NOT this method, so it never aborts its own controller or awaits its own promise.
-    this.cancelReconnect();
+    // Every manual connect carries its own abort controller, composed with the caller's signal, so `disconnect()` can cancel a handshake still in flight the same way it
+    // cancels the reconnect loop. The controller exists before the superseded loop is awaited below, so a disconnect landing during that wait cancels this connect too.
+    // The field holds only the most recent manual connect's controller: concurrent manual connects are consumer misuse, and a newer one neither aborts nor waits on an
+    // older one.
+    const controller = new AbortController();
+    const signal = (options?.signal !== undefined) ? AbortSignal.any([ options.signal, controller.signal ]) : controller.signal;
 
-    const supersededLoop = this.reconnectLoopPromise;
+    this.connectController = controller;
 
-    if(supersededLoop) {
+    try {
 
-      // The loop never rejects - it handles every attempt error internally and breaks - so this await resolves once the superseded loop has fully torn down its current
-      // attempt. The `.catch` is belt-and-suspenders: a superseded loop's failure must never surface as this manual connect's rejection.
-      await supersededLoop.catch((): void => undefined);
+      // A manual connect supersedes any in-flight auto-reconnect supervisor: abort the loop, then await its current connect attempt fully settling so two connect flows
+      // never mutate the connection state (`transport`, registries, health) concurrently. `cancelReconnect` is repeatable, so this is a no-op on a first connect with no
+      // loop running. The reconnect loop itself calls `connectInternal` (below), NOT this method, so it never aborts its own controller or awaits its own promise.
+      this.cancelReconnect();
+
+      const supersededLoop = this.reconnectLoopPromise;
+
+      if(supersededLoop) {
+
+        // The loop never rejects - it handles every attempt error internally and breaks - so this await resolves once the superseded loop has fully torn down its current
+        // attempt. The `.catch` is belt-and-suspenders: a superseded loop's failure must never surface as this manual connect's rejection.
+        await supersededLoop.catch((): void => undefined);
+      }
+
+      await this.connectInternal({ signal });
+
+    } finally {
+
+      // A newer manual connect may have installed its own controller while this one was in flight; the field then belongs to it and stays.
+      if(this.connectController === controller) {
+
+        this.connectController = null;
+      }
     }
-
-    return this.connectInternal(options);
   }
 
   /**
-   * The actual connect flow: tear down any prior transport, reset per-connection state, run the handshake/discovery, and hand off to the run-phase drain. Private because
-   * every caller must first decide supersede policy: the public {@link connect} cancels and drains any in-flight reconnect loop before invoking this; the reconnect
-   * supervisor loop ({@link runReconnectLoop}) invokes this directly so it neither aborts its own controller nor deadlocks awaiting its own promise.
+   * The actual connect flow: supersede any live session, run the handshake/discovery, and hand off to the run-phase drain. Private because every caller must first
+   * decide supersede policy: the public {@link connect} cancels and drains any in-flight reconnect loop before invoking this; the reconnect supervisor loop
+   * ({@link runReconnectLoop}) invokes this directly so it neither aborts its own controller nor deadlocks awaiting its own promise.
    */
-  private async connectInternal(options?: { signal?: AbortSignal }): Promise<void> {
+  private async connectInternal(options: { signal: AbortSignal }): Promise<void> {
 
-    options?.signal?.throwIfAborted();
+    // Declared ahead of the try so the catch knows whether this attempt opened a handshake context, and tracked in `let` because the noise -> plaintext fallback
+    // constructs a brand-new context (Transport is single-shot) and reassigns this binding.
+    let context: HandshakeContext | undefined;
 
-    // Tear down any in-flight transport from a previous connect attempt. We constructed it (every transport comes from {@link openTransport}), so we always dispose it.
-    if(this.transport) {
-
-      await this.transport[Symbol.asyncDispose]();
-    }
-
-    this.transport = null;
-    this.runReceiver?.[Symbol.dispose]();
-    this.runReceiver = null;
-
-    // Reset entity and service discovery state for the new connection. The `EntityRegistry` owns the entity-identity indexes;
-    // the `ServiceRegistry` owns the user-defined-service identity indexes; the latest-state cache holds the last telemetry per
-    // branded id. All three reset in lock-step at connect time so a fresh session starts with no inherited state.
-    this.registry.clear();
-    this.serviceRegistry.clear();
-    this.latestCache.clear();
-
-    // Drop any in-flight multi-packet camera reassembly so partial images that arrived just before the previous session ended don't bleed into the new session.
-    for(const cameraApi of this.cameraInstances.values()) {
-
-      cameraApi.resetReassembly();
-    }
-
-    this.capabilitiesCache = disconnectedCapabilities();
-    this.subDeviceList = [];
-    this.remoteDeviceInfo = null;
-
-    // Reject any correlators inherited from a previous epoch. A `disconnectAsync` or `setNoiseEncryptionKey` left in flight when the consumer re-invokes `connect()`
-    // would otherwise hang forever; the typed `AbortError` rejection settles those inherited promises so callers do not wait on a response that never arrives.
-    this.disconnectCorrelator.rejectAll(new DOMException("Client reconnected before the prior request completed.", "AbortError"));
-    this.noiseKeyCorrelator.rejectAll(new DOMException("Client reconnected before the prior request completed.", "AbortError"));
-    this.deviceApiMinorVersion = 0;
-
-    // Every streaming sub-API implements the uniform `SubscriptionLifecycle` contract. The same reset runs at the disconnect boundary (see
-    // {@link disconnectInternal}); this connect-top loop is the repeatable safety net for a `connect()` issued over a still-active connection that never went through
-    // `disconnect`. Either way the host clears each participant's connection-scoped wire/cache state - a fresh ESPHome connection starts with no subscription, so the
-    // wire-side caches must be invalidated - while each manager preserves its own consumer subscriber ledgers / desired intent so parked iterators survive the reconnect.
-    // The matching {@link reissueOnReconnect} loop after the transport is up replays the surviving subscriptions. Per-manager specifics (which Correlators reject, which
-    // caches clear, which ledgers are preserved) live in each manager's own `clearConnectionState` documentation; the host does not duplicate them here.
-    for(const lifecycle of this.subscriptionLifecycles()) {
-
-      lifecycle.clearConnectionState();
-    }
-
-    this.connectStartMs = this.clock();
-
-    // Compose the user signal with our overall connect timeout. Either trigger aborts the in-flight connect.
-    const overallSignal = this.combineSignals(options?.signal, this.connectTimeoutMs);
-
-    // Tracked in `let` because the noise -> plaintext fallback constructs a brand-new context (Transport is single-shot) and reassigns this binding.
-    let context = await this.openHandshakeContext(overallSignal);
-
+    // One try covers the whole attempt, so every rejection - an already-aborted signal, a transport that fails to open, a handshake failure - leaves through the same
+    // catch and reaches the caller as a typed EspHomeError.
     try {
+
+      // The abort check comes first, ahead of the supersede below, so a connect whose signal is already aborted leaves a live session untouched.
+      options.signal.throwIfAborted();
+
+      // A connect issued over a live session supersedes it. The shared disconnect path tears that session down and announces its end, and marking the close explicit
+      // keeps that path from scheduling an auto-reconnect of the superseded session...a successful connect clears the mark. Without a live session the same call only
+      // runs the connection teardown, so every connect starts from the disconnected baseline.
+      if(this.transport || this.runReceiver) {
+
+        this.explicitlyClosed = true;
+      }
+
+      this.disconnectInternal("superseded by a new connect", undefined);
+
+      // Reset entity and service discovery state for the new connection. The `EntityRegistry` owns the entity-identity indexes; the `ServiceRegistry` owns the
+      // user-defined-service identity indexes; the latest-state cache holds the last telemetry per branded id. They reset in lock-step here at connect time rather than
+      // in the connection teardown, so the last-known device state stays readable after a disconnect while a fresh session still starts with no inherited state.
+      this.registry.clear();
+      this.serviceRegistry.clear();
+      this.latestCache.clear();
+
+      this.connectStartMs = this.clock();
+
+      // Compose the caller's signal with our overall connect timeout. Either trigger aborts the in-flight connect.
+      const overallSignal = this.combineSignals(options.signal, this.connectTimeoutMs);
+
+      context = await this.openHandshakeContext(overallSignal);
 
       try {
 
@@ -1405,14 +1406,15 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
       });
 
       // Stamp the connect epoch once and build the live health record atomically from it - the epoch is a property of the connected state, not a separate field, so it
-      // cannot drift from `state` and is gone the moment the record becomes a down variant. Heartbeat seeds its initial activity from the same local.
+      // cannot drift from `state` and is gone the moment the record becomes a down variant. Heartbeat seeds its initial activity from the same local. The stall count
+      // is carried forward: only inbound activity resets it, so a device that stalls again right after reconnecting keeps counting.
       const connectedAtMs = this.clock();
 
       this.heartbeat.start(connectedAtMs);
       this.healthRecord = {
 
         connectedAtMs,
-        consecutiveStalls: 0,
+        consecutiveStalls: this.healthRecord.consecutiveStalls,
         encrypted: context.transport.isEncrypted,
         lastInboundActivityAt: this.heartbeat.lastActivityAt,
         state: HealthState.CONNECTED
@@ -1435,12 +1437,18 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
 
     } catch(err) {
 
-      // Partial cleanup of the failed context. The receiver dispose settles every parked awaiter; the transport asyncDispose tears down the socket. Both are repeatable
-      // so calling them after the inner finally already disposed the interleave handlers is safe.
-      await this.disposeHandshakeContext(context);
+      // Only an attempt that opened a handshake context has anything of its own to undo. An attempt that failed before the open changed no connection-scoped state
+      // beyond the supersede, which already ran the connection teardown, and one stopped by the abort check never reached the supersede at all.
+      if(context) {
 
-      this.transport = null;
-      this.runReceiver = null;
+        // Partial cleanup of the failed context. The receiver dispose settles every parked awaiter; the transport asyncDispose tears down the socket. Both are
+        // repeatable so calling them after the inner finally already disposed the interleave handlers is safe.
+        await this.disposeHandshakeContext(context);
+
+        // The connection teardown returns the connection-scoped state to the disconnected baseline, including the transport and receiver that a failure after the
+        // run-phase handoff leaves attached. Its disposals repeat the ones above, which is safe.
+        this.tearDownConnection();
+      }
 
       const isAbort = (err instanceof DOMException) && ((err.name === "AbortError") || (err.name === "TimeoutError"));
 
@@ -1450,9 +1458,25 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
       const wrapped = (err instanceof EspHomeError) ? err : new ConnectionError("Connect failed: " + (err instanceof Error ? err.message : String(err)), "CONNECT_FAILED",
         { cause: err });
 
-      // Surface the disconnect to bus consumers. The payload is the human-readable reason; the typed cause is logged at debug level for diagnostics.
       this.log.debug("Connect failed: " + wrapped.name + ": " + wrapped.message);
-      this.emit("disconnect", wrapped.message);
+
+      // A session still attached here is one this attempt never superseded: the abort check stopped it first. That session carries on, so there is nothing to announce.
+      if(this.transport || this.runReceiver) {
+
+        throw wrapped;
+      }
+
+      // With no reconnect loop alive, a health record that is not yet disconnected belongs to this failed attempt: RECONNECTING inherited from a loop this connect
+      // superseded, or CONNECTED left by a throw after the run-phase handoff. The canonical disconnect surface releases it with the typed cause. A loop's own attempt
+      // leaves RECONNECTING to the loop, which retries or gives up itself, and a failure from the disconnected state keeps the legacy string-payload `disconnect`
+      // carrying the human-readable reason.
+      if((this.reconnectLoopPromise === null) && (this.healthRecord.state !== HealthState.DISCONNECTED)) {
+
+        this.emitDisconnected(wrapped.message, wrapped);
+      } else {
+
+        this.emit("disconnect", wrapped.message);
+      }
 
       throw wrapped;
     }
@@ -1625,8 +1649,8 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
   }
 
   /**
-   * Stamp the most recent inbound activity timestamp. Called from every dispatched run-phase handler via {@link tapInboundActivity}. Transitions a `stalled` health
-   * state back to `connected` because any inbound message proves liveness.
+   * Stamp the most recent inbound activity timestamp. Called from every dispatched run-phase handler via {@link tapInboundActivity}. Any inbound message proves the
+   * connection live, so it resets a non-zero consecutive-stall count.
    */
   private stampInboundActivity(): void {
 
@@ -1634,9 +1658,12 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
 
     const lastActivityAt = this.heartbeat.lastActivityAt;
 
-    if(this.healthRecord.state === HealthState.STALLED) {
+    // This is the single reset of the consecutive-stall count, and it applies in any state because a stalled record never sees inbound traffic: the stall handler
+    // tears the session down in the same synchronous call that marks it stalled, disposing the receiver that dispatches here. The count therefore carries into the
+    // reconnected session and returns to 0 on that session's first inbound message...the recovery signal, so it is broadcast.
+    if(this.healthRecord.consecutiveStalls !== 0) {
 
-      this.healthRecord = { ...this.healthRecord, consecutiveStalls: 0, lastInboundActivityAt: lastActivityAt, state: HealthState.CONNECTED };
+      this.healthRecord = { ...this.healthRecord, consecutiveStalls: 0, lastInboundActivityAt: lastActivityAt };
       this.emit("healthChange", this.healthRecord);
     } else if(this.healthRecord.lastInboundActivityAt !== lastActivityAt) {
 
@@ -1646,57 +1673,22 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
   }
 
   /**
-   * Internal disconnect path. Tears down the transport and receiver, fires the disconnect event with the supplied reason. Safe to call more than once.
+   * Internal disconnect path. Runs the connection teardown ({@link tearDownConnection}) and, when a live session was attached, announces its end with the supplied reason
+   * and hands the typed cause to the reconnect supervisor. Safe to call more than once.
    */
   private disconnectInternal(reason: string | undefined, cause: Error | undefined): void {
 
-    const transport = this.transport;
-    const receiver = this.runReceiver;
+    // A session is live while a transport or receiver is attached. The teardown detaches both, so we read liveness before it runs.
+    const live = (this.transport !== null) || (this.runReceiver !== null);
 
-    this.transport = null;
-    this.runReceiver = null;
-
-    receiver?.[Symbol.dispose]();
-
-    // Every transport we hold came from {@link openTransport} (default path) or the injected {@link EspHomeClientOptions.transportFactory}. Either way, the host owns
-    // it for this session - the factory contract requires a fresh transport per call. Dispose unconditionally.
-    if(transport) {
-
-      transport[Symbol.dispose]();
-    }
-
-    for(const cameraApi of this.cameraInstances.values()) {
-
-      cameraApi.resetReassembly();
-    }
-
-    this.heartbeat.stop();
-
-    // Reject any in-flight correlators so awaiting consumers see a typed `AbortError` immediately rather than waiting for their per-await timeout to fire. The reason
-    // is purely diagnostic; consumers branch on the standard `AbortError` name in their own catch blocks (the documented `false` return for `setNoiseEncryptionKey`,
-    // the timeout fall-through for `disconnectAsync`). On the happy path the correlators are already empty and this is a no-op.
-    const teardownReason = new DOMException("Connection torn down before the prior request completed.", "AbortError");
-
-    this.disconnectCorrelator.rejectAll(teardownReason);
-    this.noiseKeyCorrelator.rejectAll(teardownReason);
-
-    // Tear down every instantiated streaming sub-API's connection-scoped state at the disconnect boundary, the same reset the host runs at connect-top. Each
-    // participant's `clearConnectionState` rejects its in-flight per-key Correlators (BLE GATT, serial) with an `AbortError` and clears its connection-scoped
-    // wire/cache state, while preserving the consumer subscriber ledgers so the next `reissueOnReconnect` can replay them. Doing it here - not deferring to the
-    // next connect-top - means a parked GATT/serial await fails fast on disconnect instead of lingering to its per-await timeout, and connection-scoped reads
-    // (e.g. Bluetooth `isConnected`) report the disconnected truth at once. The connect-top loop remains as a repeatable safety net for a `connect()` issued
-    // over a still-active connection.
-    for(const lifecycle of this.subscriptionLifecycles()) {
-
-      lifecycle.clearConnectionState();
-    }
+    this.tearDownConnection();
 
     if(cause) {
 
       this.log.debug("Disconnect cause: " + cause.name + ": " + cause.message);
     }
 
-    if(transport || receiver) {
+    if(live) {
 
       // Narrow the disconnect cause to the typed hierarchy once and thread the same value to both the disconnect surface and the reconnect supervisor: the typed cause is
       // what consumers pattern-match on, and what the shouldRetry predicate filters permanent errors by. A non-EspHomeError cause is dropped to undefined here so neither
@@ -1712,10 +1704,67 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
   }
 
   /**
-   * Emit the canonical terminal-disconnect surface: transition {@link ConnectionHealth} to disconnected (carrying the last RTT forward as a diagnostic) and broadcast
-   * via `healthChange`, emit the typed `lifecycle` event (with the cause when present), and emit the legacy string-payload `disconnect` event. This is the single source
-   * of truth for the disconnect surface, shared by {@link EspHomeClient.disconnectInternal} (the run-phase teardown) and {@link EspHomeClient.runReconnectLoop} (the
-   * auto-reconnect give-up). The caller has already narrowed `cause` to the typed hierarchy, so this method does not re-narrow.
+   * Return every piece of connection-scoped state to the disconnected baseline. This is the single reset path for that state: the disconnect path (which every connect
+   * also runs first, announcing any live session it supersedes) and a failed connect attempt both run it, so no reset can drift between them. The entity and service
+   * registries and the latest-state cache are not reset here; they clear at connect time so the last-known device state stays readable after a disconnect. Safe to call
+   * more than once.
+   */
+  private tearDownConnection(): void {
+
+    const transport = this.transport;
+    const receiver = this.runReceiver;
+
+    this.transport = null;
+    this.runReceiver = null;
+
+    receiver?.[Symbol.dispose]();
+
+    // Every transport we hold came from {@link openTransport} (default path) or the injected {@link EspHomeClientOptions.transportFactory}. Either way, the host owns
+    // it for this session - the factory contract requires a fresh transport per call. Dispose unconditionally.
+    transport?.[Symbol.dispose]();
+
+    // Drop any in-flight multi-packet camera reassembly so a partial image from this session never bleeds into the next one.
+    for(const cameraApi of this.cameraInstances.values()) {
+
+      cameraApi.resetReassembly();
+    }
+
+    this.heartbeat.stop();
+
+    // Reject any in-flight correlators so awaiting consumers see a typed `AbortError` immediately rather than waiting for their per-await timeout to fire...a
+    // `disconnectAsync` or `setNoiseEncryptionKey` left in flight across a reconnect would otherwise wait on a response that never arrives. The reason is purely
+    // diagnostic; consumers branch on the standard `AbortError` name in their own catch blocks (the documented `false` return for `setNoiseEncryptionKey`, the timeout
+    // fall-through for `disconnectAsync`). On the happy path the correlators are already empty and this is a no-op.
+    const teardownReason = new DOMException("Connection torn down before the prior request completed.", "AbortError");
+
+    this.disconnectCorrelator.rejectAll(teardownReason);
+    this.noiseKeyCorrelator.rejectAll(teardownReason);
+
+    // Every streaming sub-API implements the uniform `SubscriptionLifecycle` contract. Each participant's `clearConnectionState` rejects its in-flight per-key
+    // Correlators (BLE GATT, serial) with an `AbortError` and clears its connection-scoped wire/cache state - a fresh ESPHome connection starts with no subscription -
+    // while preserving the consumer subscriber ledgers and desired intent so the next `reissueOnReconnect` can replay them. Running it at teardown means a parked
+    // GATT/serial await fails fast on disconnect instead of lingering to its per-await timeout, and connection-scoped reads (e.g. Bluetooth `isConnected`) report the
+    // disconnected truth at once. Per-manager specifics live in each manager's own `clearConnectionState` documentation.
+    for(const lifecycle of this.subscriptionLifecycles()) {
+
+      lifecycle.clearConnectionState();
+    }
+
+    // The session's negotiated and reported facts end with it, so `isEncrypted`, `capabilities()`, `deviceInfo()`, and `subDevices()` report the disconnected truth
+    // rather than the last session's values.
+    this.capabilitiesCache = disconnectedCapabilities();
+    this.subDeviceList = [];
+    this.remoteDeviceInfo = null;
+    this.deviceApiMinorVersion = 0;
+  }
+
+  /**
+   * Emit the canonical terminal-disconnect surface: transition {@link ConnectionHealth} to disconnected (carrying the last RTT forward as a diagnostic and the
+   * consecutive-stall count forward so it survives the teardown between a stall and the reconnect) and broadcast via `healthChange`, emit the typed `lifecycle` event
+   * (with the cause when present), and emit the legacy string-payload `disconnect` event. This is the single source of truth for the disconnect surface, shared by
+   * {@link EspHomeClient.disconnectInternal} (the run-phase teardown), {@link EspHomeClient.runReconnectLoop} (the auto-reconnect give-up and the release after an
+   * explicit close), and {@link EspHomeClient.connectInternal} (a failed attempt left holding a reconnecting or connected health record). The caller has already
+   * narrowed `cause` to the typed hierarchy, so this method does not re-narrow.
    *
    * @param reason - The human-readable disconnect reason carried on the legacy string `disconnect` event.
    * @param cause - The typed cause, already narrowed by the caller, or undefined for a causeless disconnect.
@@ -1729,6 +1778,7 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
     this.healthRecord = {
 
       ...disconnectedHealth(),
+      consecutiveStalls: this.healthRecord.consecutiveStalls,
       ...((previousRtt !== undefined) && { lastPingRttMs: previousRtt })
     };
     this.emit("healthChange", this.healthRecord);
@@ -1737,9 +1787,9 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
   }
 
   /**
-   * Synchronous disconnect: tear down the transport immediately so the device observes a TCP close. Cancels any in-flight reconnect loop and marks the client as
-   * explicitly closed so auto-reconnect does not pick the connection up again. Safe to call more than once. Use {@link EspHomeClient.disconnectAsync} when a graceful
-   * `DISCONNECT_REQUEST`/`DISCONNECT_RESPONSE` handshake is preferable.
+   * Synchronous disconnect: tear down the transport immediately so the device observes a TCP close. Cancels any in-flight reconnect loop or manual connect and marks
+   * the client as explicitly closed so auto-reconnect does not pick the connection up again. Safe to call more than once. Use {@link EspHomeClient.disconnectAsync} when
+   * a graceful `DISCONNECT_REQUEST`/`DISCONNECT_RESPONSE` handshake is preferable.
    *
    * Usage:
    *
@@ -1750,14 +1800,15 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
 
     this.explicitlyClosed = true;
     this.cancelReconnect();
+    this.connectController?.abort();
     this.disconnectInternal(undefined, undefined);
   }
 
   /**
    * Graceful asynchronous disconnect. Sends DISCONNECT_REQUEST and awaits DISCONNECT_RESPONSE up to {@link EspHomeClientOptions.gracefulDisconnectTimeoutMs} (default
    * 1000ms), then tears down the transport. On timeout, falls through to immediate teardown - the consumer is never blocked indefinitely. Marks the client explicitly
-   * closed and cancels any in-flight reconnect loop (mirroring {@link EspHomeClient.disconnect}), so a graceful disconnect stays disconnected rather than
-   * auto-reconnecting.
+   * closed and cancels any in-flight reconnect loop or manual connect (mirroring {@link EspHomeClient.disconnect}), so a graceful disconnect stays disconnected rather
+   * than auto-reconnecting.
    *
    * Usage:
    *
@@ -1771,9 +1822,10 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
     // Mark the client explicitly closed and cancel any in-flight reconnect loop BEFORE tearing down, mirroring the synchronous {@link EspHomeClient.disconnect}. Without
     // this, the `disconnectInternal` below calls `maybeScheduleReconnect`, and a non-permanent cause (the default `CONNECTION_DROPPED`) would silently reconnect about
     // 500ms after the graceful teardown - defeating the consumer's intent. Setting it before the no-op fast-path return also cancels a reconnect loop that is
-    // mid-backoff (between attempts, with no active transport yet).
+    // mid-backoff (between attempts, with no active transport yet) and a manual connect still in its handshake.
     this.explicitlyClosed = true;
     this.cancelReconnect();
+    this.connectController?.abort();
 
     const transport = this.transport;
 
@@ -1911,6 +1963,9 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
       return;
     }
 
+    // The most recent failed attempt's typed cause, carried by the release below when an explicit close ends the loop.
+    let lastCause: EspHomeError | undefined;
+
     while(!signal.aborted && !this.explicitlyClosed) {
 
       this.reconnectAttempts++;
@@ -1970,6 +2025,8 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
         const espError = (err instanceof EspHomeError) ? err : new ConnectionError("Reconnect attempt failed.", "RECONNECT_FAILED",
           { cause: err });
 
+        lastCause = espError;
+
         // Evaluate the consumer-supplied retry predicate defensively via the shared safeShouldRetry helper. The call is the only remaining throw site inside the catch
         // and there is no `finally`, so a predicate that throws would otherwise escape the loop entirely - skipping the loop-end cleanup, leaving `reconnectInProgress`
         // true and health frozen at RECONNECTING, and leaving the floated loop promise rejecting unhandled. The helper treats a throwing predicate as a give-up (the
@@ -2002,22 +2059,25 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
       }
     }
 
+    // The loop owns leaving the reconnecting state it entered. A give-up has already released it through emitDisconnected; an explicit close ends the loop without
+    // one, so we release it here with the last failed attempt's typed cause, when there is one. A manual connect that supersedes the loop also ends it but never marks
+    // the close explicit, so it announces nothing here: the loss it follows was announced when the loop began, and that connect now owns the connection state.
+    if(this.explicitlyClosed && (this.healthRecord.state === HealthState.RECONNECTING)) {
+
+      this.emitDisconnected("explicitly closed while reconnecting", lastCause);
+    }
+
     this.reconnectInProgress = false;
     this.reconnectController = null;
     this.reconnectLoopPromise = null;
   }
 
   /**
-   * Compose a user signal with an internal timeout. Either trigger aborts the returned signal. When `userSignal` is undefined, only the timeout applies.
+   * Compose a signal with an internal timeout. Either trigger aborts the returned signal.
    */
-  private combineSignals(userSignal: AbortSignal | undefined, timeoutMs: number): AbortSignal {
+  private combineSignals(signal: AbortSignal, timeoutMs: number): AbortSignal {
 
-    if(!userSignal) {
-
-      return AbortSignal.timeout(timeoutMs);
-    }
-
-    return AbortSignal.any([ userSignal, AbortSignal.timeout(timeoutMs) ]);
+    return AbortSignal.any([ signal, AbortSignal.timeout(timeoutMs) ]);
   }
 
   /**
@@ -2953,8 +3013,8 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
   }
 
   /**
-   * Async-iterable view of state updates for one specific entity. Filters {@link telemetryFor} on the entity's numeric key (resolved from the branded id at
-   * iteration start so the filter is O(1) per event).
+   * Async-iterable view of state updates for one specific entity. Filters {@link telemetryFor} on the entity's numeric key (resolved from the branded id when the view
+   * is requested, so the filter is O(1) per event). An id the client has not discovered yields a view that ends at once.
    *
    * Usage:
    *
@@ -2968,19 +3028,21 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
    */
   public telemetryForId<T extends ExtendedEntityType<Extras>>(id: EntityId<T>, options?: StreamOptions): AsyncIterable<StateEventFor<SchemaForExtended<T, Extras>>> {
 
+    // We resolve the target key once, before touching the bus. An entity the registry does not know yet (e.g., one subscribed to before discovery completes) can never
+    // match an event - we shouldn't fabricate a match against a key we don't have - so the consumer gets an already-ended view and re-acquires it once the entity is
+    // known. Opening a bus stream for it would attach a listener that no iteration ever releases.
+    const targetKey = this.registry.keyForId(id as EntityId);
+
+    if(targetKey === null) {
+
+      return endedAsyncIterable();
+    }
+
     const dash = id.indexOf("-");
     const entityType = ((dash > 0) ? id.slice(0, dash) : id) as T;
-    const targetKey = this.registry.keyForId(id as EntityId) ?? undefined;
     const stream = this.bus.stream(entityType as EntityType, options) as AsyncIterable<StateEventFor<SchemaForExtended<T, Extras>>>;
 
     return (async function *(): AsyncGenerator<StateEventFor<SchemaForExtended<T, Extras>>> {
-
-      // We pre-resolve the target key once. If the entity isn't known yet (e.g., subscribing before discovery completes), every event will be dropped until the consumer
-      // re-acquires the iterator after the entity is known. That's the correct behavior - we shouldn't fabricate a match against a key we don't have.
-      if(targetKey === undefined) {
-
-        return;
-      }
 
       for await (const event of stream) {
 
