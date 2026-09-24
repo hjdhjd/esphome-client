@@ -13,14 +13,17 @@
 import {
   CLILogger, CLIMATE_MODE_NAMES, CLI_COMMANDS, CLI_OPTIONS, CONTROL_BUILDERS, CliError, LEVEL_THEME, Printer, awaitQuietPeriod, buildControlCommand, dispatch,
   executeControl, findEntity, formatCapabilities, formatDeviceInfo, formatEntityList, formatReplayMetadata, formatSnapshotJson, formatSubDeviceList,
-  handleInteractiveCommand, isClimateMode, isCommandName, isControllableType, joinParts, parseFloatOption, parseIntOption, parseInvocation, parseJsonOption, parsePercent,
-  parseRgb, printInteractiveHelp, runCapabilities, runDevices, runInfo, runInteractiveControl, runList, runSnapshot, showUsage, tryParseIntStrict
+  handleInteractiveCommand, isClimateMode, isCommandName, isControllableType, isUserFacingError, joinParts, parseFloatOption, parseIntOption, parseInvocation,
+  parseJsonOption, parsePercent, parseRgb, printInteractiveHelp, runCapabilities, runDevices, runInfo, runInteractiveControl, runList, runSnapshot, showUsage,
+  tryParseIntStrict
 } from "./espc.ts";
 import type { CommandOptions, ControlClient, EntityWithId, Invocation, PrinterLevel } from "./espc.ts";
 import { describe, test } from "node:test";
 import { mockDeviceInfo, mockStateMessage } from "../testing/factories.ts";
+import type { AddressInfo } from "node:net";
 import type { CaptureMetadata } from "./capture.ts";
 import type { ClientCapabilities } from "../capabilities.ts";
+import { ConnectionRefusedError } from "../errors.ts";
 import type { DeviceInfo } from "../esphome-client.ts";
 import { ENTITY_SCHEMAS } from "../schemas/index.ts";
 import type { Entity } from "../schemas/index.ts";
@@ -28,8 +31,10 @@ import type { EntityId } from "../entity-id.ts";
 import { MockClient } from "../testing/mock-client.ts";
 import type { Nullable } from "../types.ts";
 import assert from "node:assert/strict";
+import { createServer } from "node:net";
 import { setTimeout as delay } from "node:timers/promises";
 import { entityId } from "../entity-id.ts";
+import { once } from "node:events";
 
 // In-memory writer used to capture stdout/stderr through the Printer's IO seam. Both `process.stdout` and `process.stderr` satisfy the `PrinterWritable` shape with
 // `write(data: string): unknown`; this minimal stand-in honors the same contract while accumulating writes for assertion. The `chunks` array preserves write order so
@@ -172,6 +177,40 @@ const EMPTY_OPTIONS: CommandOptions = {
   type: undefined,
   wait: undefined
 };
+
+// Base64 keys on either side of the 32-byte Noise key length. Both decode cleanly, so the length rule is the only check that tells them apart.
+const SHORT_PSK = Buffer.alloc(31, 0x5a).toString("base64");
+const VALID_PSK = Buffer.alloc(32, 0x5a).toString("base64");
+
+// A loopback TCP listener that counts inbound connections and closes each one on arrival. The --psk boundary tests point the CLI at it, so "no connection was
+// attempted" is an observed count rather than an inference from a fast rejection. Disposing it closes the listener.
+interface CountingListener extends AsyncDisposable {
+
+  readonly connections: () => number;
+  readonly port: number;
+}
+
+// Open a CountingListener on an ephemeral loopback port.
+async function openCountingListener(): Promise<CountingListener> {
+
+  let connections = 0;
+
+  const server = createServer((socket) => {
+
+    connections++;
+    socket.destroy();
+  });
+
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+
+  return {
+
+    [Symbol.asyncDispose]: async (): Promise<void> => server[Symbol.asyncDispose](),
+    connections: (): number => connections,
+    port: (server.address() as AddressInfo).port
+  };
+}
 
 // Hand-verified output fixtures. Each fixture's provenance is documented inline so a reader unfamiliar with the CLI can reconstruct the expected bytes from first
 // principles.
@@ -482,6 +521,19 @@ describe("CliError - construction and identity", () => {
     const generic = new Error("plain");
 
     assert.equal(generic instanceof CliError, false);
+  });
+});
+
+describe("isUserFacingError - the failure classification the binary and the REPL share", () => {
+
+  test("agrees with the binary's framing: a usage error and a typed client error are user-facing, anything else is a bug", () => {
+
+    // The subprocess tests in test/e2e/cli-help.test.ts drive the binary through an unknown command (a CliError) and a refused connection (ConnectionRefusedError, an
+    // EspHomeError), and each prints as its message alone. Anything the predicate rejects carries the "Fatal:" prefix.
+    const thrown: unknown[] = [ new CliError("Unknown command: nonsensecommand"), new ConnectionRefusedError("Connection refused."), new TypeError("x is not a function"),
+      "a thrown string" ];
+
+    assert.deepEqual(thrown.map((error): boolean => isUserFacingError(error)), [ true, true, false, false ]);
   });
 });
 
@@ -1023,6 +1075,30 @@ describe("dispatch - routes Invocation kinds through the printer", () => {
     const inv = parseInvocation([ "snapshot", "--host", "0.0.0.0", "--wait", "abc" ]);
 
     await assert.rejects(dispatch(inv, makePrinter().printer), (err: unknown) => (err instanceof CliError) && err.message.includes("--wait"));
+  });
+
+  test("a malformed --psk rejects before createClient constructs or connects a client", async () => {
+
+    // The client checks the key only where the handshake uses it, after the socket opens, so the CLI validates it where createClient hands it over. A key the
+    // boundary missed would reach the listener before failing, so its zero count is the evidence that no client was constructed and no connection was attempted.
+    await using listener = await openCountingListener();
+
+    const inv = parseInvocation([ "info", "--host", "127.0.0.1", "--port", String(listener.port), "--psk", SHORT_PSK ]);
+
+    await assert.rejects(dispatch(inv, makePrinter().printer), (err: unknown): boolean => (err instanceof CliError) && err.message.startsWith("--psk "));
+    assert.equal(listener.connections(), 0, "a malformed key must fail before any connection attempt");
+  });
+
+  test("a well-formed --psk passes the boundary and reaches the socket", async () => {
+
+    // A 32-byte key clears the check, so the command proceeds to the connection attempt, which the listener closes. The rejection must therefore NOT be a --psk usage
+    // error, and the listener must see the connection the malformed-key test proves never happens.
+    await using listener = await openCountingListener();
+
+    const inv = parseInvocation([ "info", "--host", "127.0.0.1", "--port", String(listener.port), "--psk", VALID_PSK ]);
+
+    await assert.rejects(dispatch(inv, makePrinter().printer), (err: unknown): boolean => !((err instanceof CliError) && err.message.startsWith("--psk ")));
+    assert.ok(listener.connections() > 0, "a well-formed key must reach the connection attempt");
   });
 
   test("monitor accepts a fractional --duration - float-unified with watch and record", async () => {
@@ -3322,6 +3398,22 @@ describe("dispatch - command-kind path (createClient-free handlers)", () => {
 
       return (err instanceof CliError) && err.message.includes("record requires an output file path");
     });
+  });
+
+  test("record with a malformed --psk rejects before the capture recorder connects", async () => {
+
+    // The record handoff validates the key the same way createClient does, so recordCapture never opens a connection with it. The listener's zero count is the
+    // evidence; the output path is never written because the recorder is never reached.
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+
+    await using listener = await openCountingListener();
+
+    const outputPath = join(tmpdir(), "espc-psk-boundary.bin");
+    const inv = parseInvocation([ "record", outputPath, "--host", "127.0.0.1", "--port", String(listener.port), "--psk", SHORT_PSK ]);
+
+    await assert.rejects(dispatch(inv, makePrinter().printer), (err: unknown): boolean => (err instanceof CliError) && err.message.startsWith("--psk "));
+    assert.equal(listener.connections(), 0, "a malformed key must fail before the recorder opens a connection");
   });
 
   test("replay with no positional rejects with the missing-path CliError", async () => {

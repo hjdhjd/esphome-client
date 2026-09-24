@@ -105,8 +105,10 @@ export interface ReissuableSubscriptionContractOptions<A> {
 
   /**
    * Open a subscription on the sub-API and return a handle whose {@link ContractSubscription.release} tears it down. The harness drives the subscribe / reconnect /
-   * dispose lifecycle through this handle WITHOUT iterating the underlying stream - so the production async-generator `finally` cleanup must run from `release()` (an
-   * iterator `return()` in practice), not from stream exhaustion.
+   * dispose lifecycle through this handle WITHOUT iterating the underlying stream - so the production async-generator `finally` cleanup must run from `release()`, not
+   * from stream exhaustion. Every implementer releases the same way: it opens the iterator under an `AbortController` and starts a single `next()` so the generator
+   * parks inside its `try` / `finally`; `release()` aborts the controller, the parked `next()` rejects, and the generator's `finally` runs the subscription release.
+   * `release()` then awaits the parked promise, swallowing the expected abort rejection, so that cleanup has run before the harness asserts on the wire effects.
    *
    * @param api - The sub-API instance the harness constructed via {@link setup}.
    * @returns A handle whose `release` disposes the subscriber.

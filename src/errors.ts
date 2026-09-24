@@ -85,7 +85,8 @@ export class HandshakeError extends ConnectionError {}
  * Tagged codes for noise-handshake failure modes that consumers can pattern-match on.
  *
  * @remarks Each code names a specific failure mode the consumer can pattern-match on. The throw sites live in `crypto-noise.ts` (low-level cipher / handshake state),
- * `lifecycle/handshake.ts` (orchestration), and `transport.ts` (the two `PEER_*_NOISE` codes carried by the {@link PeerClosedDuringNoiseError} subclass).
+ * `lifecycle/handshake.ts` (orchestration), and `transport.ts` (the frame writer's `MSG_TOO_LONG` guard and every `PEER_*_NOISE` code, each carried by the
+ * {@link PeerClosedDuringNoiseError} subclass).
  *
  * Code table:
  *
@@ -101,7 +102,8 @@ export class HandshakeError extends ConnectionError {}
  * - `INVALID_REMOTE_KEY` - The remote ephemeral public key was malformed or a low-order point, so X25519 key agreement failed (`crypto-noise.ts`). The `diffieHellman`
  *   primitive rejected the peer key; the connect-flow handshake re-tags this into a permanent {@link EncryptionKeyInvalidError}.
  * - `MISSING_KEYS` - A Diffie-Hellman or post-handshake step required keys that were not yet initialized (`crypto-noise.ts`, `lifecycle/handshake.ts`).
- * - `MSG_TOO_LONG` - Outbound noise message exceeded the 65535-byte protocol limit (`crypto-noise.ts`). Indicates an oversized payload.
+ * - `MSG_TOO_LONG` - Outbound noise message exceeded the 65535-byte protocol limit, `NOISE_MAX_MESSAGE_LEN`, which the frame writer (`transport.ts`) and the cipher
+ *   (`crypto-noise.ts`) enforce. Indicates an oversized payload.
  * - `NONCE_EXHAUSTED` - The ChaCha20-Poly1305 nonce reached the reserved maximum 2^64 - 1 (`crypto-noise.ts`). Per Noise §5.1 that nonce is reserved for rekey and must
  *   never encrypt or decrypt a transport message; physically unreachable in practice (it would require 2^64 messages on one connection).
  * - `NOT_INITIALIZED` - Reserved for future use; no current throw site constructs this code. Kept in the union for forward compatibility.

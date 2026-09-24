@@ -11,11 +11,12 @@
  * the CLI_COMMANDS registry, handlers).
  */
 
-import { CliError, Printer, dispatch, parseInvocation } from "./espc.ts";
+import { Printer, dispatch, isUserFacingError, parseInvocation } from "./espc.ts";
 
-// Single termination point for the CLI. CliError is treated as a user-facing message (no stack); anything else is reported with a "Fatal:" prefix because it indicates
-// an internal bug worth investigating. The process exits 1 in either case. Production uses Printer.fromEnvironment so color and TTY detection follow NO_COLOR /
-// FORCE_COLOR / isTTY at the system boundary; the library itself takes Printer as a parameter so tests can inject a captured Printer with explicit flags.
+// Single termination point for the CLI. A failure isUserFacingError classifies as the user's to read (a usage mistake, an unreachable device, a rejected encryption key)
+// prints as its message alone (no stack); anything else is reported with a "Fatal:" prefix because it indicates an internal bug worth investigating. The process exits 1
+// in either case. Production uses Printer.fromEnvironment so color and TTY detection follow NO_COLOR / FORCE_COLOR / isTTY at the system boundary; the library itself
+// takes Printer as a parameter so tests can inject a captured Printer with explicit flags.
 const printer = Printer.fromEnvironment();
 
 try {
@@ -23,7 +24,7 @@ try {
   await dispatch(parseInvocation(), printer);
 } catch(error) {
 
-  if(error instanceof CliError) {
+  if(isUserFacingError(error)) {
 
     printer.error(error.message);
   } else {

@@ -632,14 +632,17 @@ describe("CLI control dispatch for transmit entities", () => {
     client.disconnect();
   });
 
-  test("runInteractiveControl refuses an infrared transmit on a receive-only entity with ENTITY_NOT_TRANSMITTER and sends nothing", async () => {
+  test("runInteractiveControl reports an infrared transmit refused on a receive-only entity, keeps the REPL alive, and sends nothing", async () => {
 
     const transport = new MockTransport();
     const client = new EspHomeClient({ host: "test.local", logger: quietLogger(), reconnect: false, transportFactory: (): MockTransport => transport });
+    const errors: string[] = [];
+    const capturing = new Printer({ stderr: { write: (data: string): boolean => errors.push(data) > 0 }, stdout: discard });
 
     await connectReceiveOnly(transport, client);
 
-    assert.throws(() => runInteractiveControl([ "control", "infrared-rx_only", "9000,-4500,560,-560" ], client, printer), isNotTransmitter);
+    assert.doesNotThrow(() => runInteractiveControl([ "control", "infrared-rx_only", "9000,-4500,560,-560" ], client, capturing));
+    assert.match(errors.join(""), /infrared-rx_only is not a transmitter/);
 
     await delay(2);
 

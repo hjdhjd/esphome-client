@@ -24,7 +24,9 @@ import type { CaptureMetadata } from "./capture.ts";
 import type { ClientCapabilities } from "../capabilities.ts";
 import { ENTITY_SCHEMAS } from "../schemas/index.ts";
 import type { EntityId } from "../entity-id.ts";
+import { EspHomeError } from "../errors.ts";
 import { MediaPlayerCommand } from "../api-constants.ts";
+import { NOISE_PSK_LEN } from "../crypto-noise.ts";
 import type { ParseArgsConfig } from "node:util";
 import type { Interface as ReadlineInterface } from "node:readline/promises";
 import type { SubDevice } from "../sub-device.ts";
@@ -75,8 +77,8 @@ type Mutable<T> = { -readonly [K in keyof T]: T[K] };
 type LightCommandOptions = Mutable<CommandFor<typeof ENTITY_SCHEMAS["light"]>>;
 
 /**
- * Marker error type for user-facing CLI failures. The top-level catch prints the message verbatim and exits 1; non-CliError throws are reported with a "Fatal:"
- * prefix.
+ * Marker error type for user-facing CLI failures. The top-level catch prints the message verbatim and exits 1, the framing it also gives a typed client
+ * `EspHomeError`; any other throw is reported with a "Fatal:" prefix.
  *
  * @remarks Throwing one of these is the canonical way to abort a command - the pattern lets handlers `throw` instead of `process.exit`, which keeps `using` cleanup
  * working and lets ESLint and TypeScript see case-block bodies as terminated (no `break` after `process.exit` and no unreachable code).
@@ -90,6 +92,17 @@ export class CliError extends Error {
     super(message);
     this.name = "CliError";
   }
+}
+
+/**
+ * Whether a thrown value is a user-facing failure: a CLI usage error ({@link CliError}) or a typed client `EspHomeError` is the user's to read and prints as its message
+ * alone, while anything else is a bug and stays "Fatal".
+ *
+ * @internal
+ */
+export function isUserFacingError(error: unknown): error is CliError | EspHomeError {
+
+  return (error instanceof CliError) || (error instanceof EspHomeError);
 }
 
 /**
@@ -279,6 +292,35 @@ export function parseJsonOption(value: string, source: string): unknown {
 
     throw new CliError("Invalid JSON for " + source + ": " + detail);
   }
+}
+
+/**
+ * Validate a `--psk` encryption key before it reaches a connection. The client checks the key only where the Noise handshake uses it, after the socket has opened and
+ * the device has answered, so the CLI applies the same rule up front: the key must decode from base64 to exactly {@link NOISE_PSK_LEN} bytes, through the same
+ * `Buffer.from(value, "base64")` decode the handshake runs, so the CLI and the client accept exactly the same keys. A malformed key then fails as a usage error with no
+ * connection attempt. An empty value passes through unchanged because the client treats it as no key configured. Each command calls this where it hands the key to a
+ * connection rather than in {@link parseInvocation}, which passes the raw flag through.
+ *
+ * @param value - The raw `--psk` string from the parsed argv, or `undefined` when the flag is absent.
+ * @returns The value unchanged.
+ * @throws {@link CliError} when `value` is a non-empty string that does not decode to a key of the required length.
+ * @internal
+ */
+function parsePskOption(value: string | undefined): string | undefined {
+
+  if(!value) {
+
+    return value;
+  }
+
+  const keyLength = Buffer.from(value, "base64").length;
+
+  if(keyLength !== NOISE_PSK_LEN) {
+
+    throw new CliError("--psk must be a base64-encoded " + String(NOISE_PSK_LEN) + "-byte encryption key; the supplied key decodes to " + String(keyLength) + " bytes.");
+  }
+
+  return value;
 }
 
 /**
@@ -712,6 +754,8 @@ async function createClient(options: ParsedOptions, printer: Printer): Promise<E
     throw new CliError("--host option is required.");
   }
 
+  const psk = parsePskOption(options.psk);
+
   // We omit `psk` entirely when absent rather than passing explicit `undefined`; under exactOptionalPropertyTypes, "field omitted" and "field present with undefined"
   // are semantically distinct, and the library's contract treats absence as "no PSK configured."
   // The --reconnect flag accepts "false" (disable) or a JSON object literal (override defaults). Anything else is treated as "use defaults." Malformed JSON inside the
@@ -729,7 +773,7 @@ async function createClient(options: ParsedOptions, printer: Printer): Promise<E
     ...((keepAliveOption !== undefined) && { keepAlive: keepAliveOption }),
     logger: new CLILogger(printer, options.verbose),
     port: options.port || 6053,
-    ...((options.psk !== undefined) && { psk: options.psk }),
+    ...((psk !== undefined) && { psk }),
     ...((reconnectOption !== undefined) && { reconnect: reconnectOption })
   };
 
@@ -869,6 +913,7 @@ async function handleRecord(invocation: CommandInvocation, printer: Printer): Pr
     throw new CliError("--host option is required.");
   }
 
+  const psk = parsePskOption(options.psk);
   const outputPath = commandArgs.at(0);
 
   if(outputPath === undefined) {
@@ -889,7 +934,7 @@ async function handleRecord(invocation: CommandInvocation, printer: Printer): Pr
     logger: new CLILogger(printer, options.verbose),
     outputPath,
     port: options.port,
-    psk: options.psk ?? null,
+    psk: psk ?? null,
     ...((scenario !== undefined) && { scenario })
   });
 
@@ -2276,8 +2321,9 @@ export function handleInteractiveCommand(line: string, client: ControlClient, pr
 
 /**
  * REPL `control` command dispatch. Shares the schema-exhaustive {@link CONTROL_BUILDERS} registry with {@link executeControl} via {@link buildControlCommand}, so the
- * interactive and non-interactive surfaces can never drift in entity-type coverage. The only behavioral difference is failure handling: a {@link CliError} from a
- * builder is reported via `printer.error()` and the loop continues, rather than propagating to a top-level catch.
+ * interactive and non-interactive surfaces can never drift in entity-type coverage. The only behavioral difference is failure handling: a user-facing failure
+ * ({@link isUserFacingError}), such as a {@link CliError} from a builder or the client refusing a transmit, is reported via `printer.error()` and the loop continues,
+ * rather than propagating to a top-level catch.
  *
  * @internal
  */
@@ -2311,8 +2357,9 @@ export function runInteractiveControl(parts: string[], client: ControlClient, pr
     printer.success(resolved.summary);
   } catch(error) {
 
-    // A CliError is a user-input problem (bad verb, missing value, read-only entity); report it and keep the REPL alive. Anything else is a real fault and propagates.
-    if(error instanceof CliError) {
+    // A user-facing failure is the user's to correct...a CliError for bad input (bad verb, missing value, read-only entity) or a typed client error such as a transmit
+    // refused on a receive-only entity. Report it and keep the REPL alive. Anything else is a real fault and propagates.
+    if(isUserFacingError(error)) {
 
       printer.error(error.message);
 
@@ -2395,7 +2442,7 @@ export interface CliCommand {
 
 /**
  * Uniform handler signature shared by every command in {@link CLI_COMMANDS}. Each handler takes the typed invocation and the {@link Printer} and returns a promise
- * that resolves on success or rejects with {@link CliError} (or another `Error` subclass for internal bugs).
+ * that resolves on success or rejects with {@link CliError} or a typed client `EspHomeError` for a user-facing failure (or another `Error` subclass for internal bugs).
  *
  * @internal
  */
@@ -2484,7 +2531,7 @@ export const CLI_COMMANDS = {
   list: {
 
     description: "List all discovered entities (optionally filtered by --type)",
-    examples: [ "espc --host esp-device.local --psk MySecret123 list", "espc --host esp.local list --type light" ],
+    examples: [ "espc --host esp-device.local --psk 4O0XTmCE5U90wilMy+/C2DJZP8Cub7nQfigF3hP5q4M= list", "espc --host esp.local list --type light" ],
     handler: handleList,
     usage: "espc -h <host> list [--type <type>]"
   },

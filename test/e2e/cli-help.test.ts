@@ -97,6 +97,17 @@ describe("CLI help-path coverage (subprocess invocation against dist/util/espc-b
     assert.match(stderr, /connection refused|connect|failed/i, "missing TCP listener must be surfaced");
   });
 
+  test("a typed client error is framed as a user-facing failure without the internal-bug prefix", () => {
+
+    // A refused connection surfaces as the client's typed ConnectionRefusedError, an EspHomeError. The bin frames it the way it frames a CliError, as the message alone
+    // with exit status 1, and reserves the "Fatal:" prefix for errors outside both families.
+    const { status, stderr } = runCli([ "-h", "127.0.0.1", "info" ]);
+
+    assert.equal(status, 1, "a user-facing failure exits 1");
+    assert.match(stderr, /connection refused/i, "the typed client error's message must be surfaced");
+    assert.doesNotMatch(stderr, /Fatal:/, "a typed client error must not carry the internal-bug prefix");
+  });
+
   test("record command without --host fails clearly", () => {
 
     const { status, stderr } = runCli([ "record" ]);
