@@ -240,10 +240,10 @@ export class ReissuableSubscription<K, V, D> {
   }
 
   /**
-   * Reset ONLY the connection-scoped wire cache. Called from the host's `connect()` when the previous connection's state is being torn down. ESPHome starts every fresh
-   * connection with no subscription, so the cache must be invalidated - but the `subscribers` ledger is intentionally NOT cleared, exactly as
-   * {@link LogSubscriptionManager.clearConnectionState} preserves its per-iterator subscriber map. Consumer iterators are still open across
-   * the reconnect cycle and rely on subscription continuity; clearing the ledger here is the precise bug this primitive exists to prevent.
+   * Reset ONLY the connection-scoped wire cache. Called through the owning manager's `clearConnectionState`, which the host runs on every disconnect and again at the
+   * top of every connect attempt. ESPHome starts every fresh connection with no subscription, so the cache must be invalidated - but the `subscribers` ledger is
+   * intentionally NOT cleared, exactly as {@link LogSubscriptionManager.clearConnectionState} preserves its per-iterator subscriber map. Consumer iterators are still
+   * open across the reconnect cycle and rely on subscription continuity; clearing the ledger here is the precise bug this primitive exists to prevent.
    */
   public clearConnectionState(): void {
 

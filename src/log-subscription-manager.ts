@@ -159,7 +159,7 @@ export class LogSubscriptionManager implements SubscriptionLifecycle {
   }
 
   /**
-   * Reset ONLY the connection-scoped wire cache. Called from the host's `connect()` when the previous connection's state is being torn down. The device starts every
+   * Reset ONLY the connection-scoped wire cache. The host runs it on every disconnect and again at the top of every connect attempt. The device starts every
    * fresh connection with no subscription, so the cached device-side level must be invalidated; the subscriber ledger - the iterators AND the imperative pin - is
    * intentionally PRESERVED, because consumer iterators are still open across the reconnect cycle and the imperative level is a first-class surviving desire. Delegates
    * to the subscription's {@link ReissuableSubscription.clearConnectionState}.

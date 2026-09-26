@@ -2635,9 +2635,8 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
     // We emit a strongly-typed union on the generic telemetry channel. This is the most flexible subscription path.
     this.emit("telemetry", data);
 
-    // We also emit a per-type channel using the tag as the event name. This enables targeted subscriptions. The cast at the boundary is sound by construction:
-    // `data.type` is the tag, and `data` matches the per-type variant of the union; TypeScript cannot prove this through the generic emit signature, so we
-    // narrow at the known boundary.
+    // We also emit on the per-type channel named by the event's tag, which enables targeted subscriptions. `data.type` is the tag of `data`'s own variant, so the
+    // channel and payload match by construction; the compiler checks the call only against the union of every per-type payload, which `data` satisfies as-is.
     this.emit(data.type, data);
 
     // We keep a concise debug record for quick tracing during development and diagnostics. The event is passed as a deferred parameter rather than pre-serialized, so the
@@ -3080,8 +3079,9 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
 
   /**
    * Refcounted async-iterable view of device log messages at the requested level. The first iterator opened sends `SUBSCRIBE_LOGS_REQUEST(level)` on the wire;
-   * opening a second iterator at a higher verbosity upgrades the device-side subscription. ESPHome has no unsubscribe path, so the subscription persists at the
-   * highest level any iterator has requested for the lifetime of the connection (downgrades on the last close are a best-effort re-subscribe at the new maximum).
+   * opening a second iterator at a higher verbosity upgrades the device-side subscription. Closing the iterator that holds the highest level sends a downgrade to the
+   * next-highest level still held (by another iterator or by {@link EspHomeClient.subscribeToLogs}) at once. ESPHome has no unsubscribe path, so closing the last one
+   * sends nothing and the device keeps its last level until the connection drops.
    *
    * Usage:
    *

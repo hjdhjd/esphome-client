@@ -129,9 +129,10 @@ export class ZWaveProxyApi implements SubscriptionLifecycle {
   }
 
   /**
-   * Reset ONLY connection-scoped state. Called by the host on `connect()`. Clears the cached home id (a fresh connection re-derives it from the new device-info) and the
-   * frame subscription's connection-scoped wire cache (the device starts every fresh connection with no subscription). The subscriber ledger is PRESERVED: iterators
-   * alive across the reconnect cycle stay live, and the host's {@link reissueOnReconnect} call after the new connection is up re-issues SUBSCRIBE for them.
+   * Reset ONLY connection-scoped state. Called by the host on every disconnect and again at the top of every connect attempt. Clears the cached home id (a fresh
+   * connection re-derives it from the new device-info) and the frame subscription's connection-scoped wire cache (the device starts every fresh connection with no
+   * subscription). The subscriber ledger is PRESERVED: iterators alive across the reconnect cycle stay live, and the host's {@link reissueOnReconnect} call after the
+   * new connection is up re-issues SUBSCRIBE for them.
    */
   public clearConnectionState(): void {
 

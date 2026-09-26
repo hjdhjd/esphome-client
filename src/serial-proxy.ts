@@ -200,10 +200,11 @@ export class SerialProxyApi implements SubscriptionLifecycle {
   }
 
   /**
-   * Reset ONLY connection-scoped state. Called by the host on `connect()`. Rejects every pending {@link flush} and {@link getModemPins} await with an `AbortError`
-   * (in-flight request/response state cannot outlive the connection it was issued on) and clears the data subscription's connection-scoped wire cache (the device starts
-   * every fresh connection with no subscription). The subscriber ledger is PRESERVED: iterators alive across the reconnect cycle stay live, and the host's
-   * {@link reissueOnReconnect} call after the new connection is up re-issues SUBSCRIBE for each instance with surviving subscribers.
+   * Reset ONLY connection-scoped state. Called by the host on every disconnect and again at the top of every connect attempt. Rejects every pending {@link flush} and
+   * {@link getModemPins} await with an `AbortError` (in-flight request/response state cannot outlive the connection it was issued on) and clears the data
+   * subscription's connection-scoped wire cache (the device starts every fresh connection with no subscription). The subscriber ledger is PRESERVED: iterators alive
+   * across the reconnect cycle stay live, and the host's {@link reissueOnReconnect} call after the new connection is up re-issues SUBSCRIBE for each instance with
+   * surviving subscribers.
    */
   public clearConnectionState(): void {
 
