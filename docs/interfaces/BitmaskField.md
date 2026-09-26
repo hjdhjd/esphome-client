@@ -10,7 +10,7 @@ Defines a field that participates in a bitmask-aggregated has-pattern. Used by e
 single uint32 bitmask field instead of emitting one boolean per option (compare [HasPatternField](HasPatternField.md)). The encoder ORs each present option's `bit` into a running
 mask, emits the value fields, then writes the aggregated mask under the schema's `bitmaskFieldNumber`.
 
-Currently used by water heater commands; reusable for any future entity that adopts the same bitmask shape.
+Water heater commands use this shape, and any entity type whose wire format carries the same aggregated bitmask can adopt it.
 
 ## Properties
 

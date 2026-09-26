@@ -10,6 +10,7 @@
 function parseEntityId(value): Nullable<{
   id: EntityId;
   type:   | "number"
+     | "select"
      | "alarm_control_panel"
      | "binary_sensor"
      | "button"
@@ -25,7 +26,6 @@ function parseEntityId(value): Nullable<{
      | "lock"
      | "media_player"
      | "radio_frequency"
-     | "select"
      | "sensor"
      | "siren"
      | "switch"
@@ -52,6 +52,7 @@ matches a known entity type, or `null` otherwise.
 [`Nullable`](../type-aliases/Nullable.md)\<\{
   `id`: [`EntityId`](../type-aliases/EntityId.md);
   `type`:   \| `"number"`
+     \| `"select"`
      \| `"alarm_control_panel"`
      \| `"binary_sensor"`
      \| `"button"`
@@ -67,7 +68,6 @@ matches a known entity type, or `null` otherwise.
      \| `"lock"`
      \| `"media_player"`
      \| `"radio_frequency"`
-     \| `"select"`
      \| `"sensor"`
      \| `"siren"`
      \| `"switch"`

@@ -749,7 +749,7 @@ wants the post-command state in one await rather than wiring up a separate subsc
 | ------ | ------ | ------ |
 | `id` | [`EntityId`](../type-aliases/EntityId.md)\<`T`\> | Branded entity id. |
 | `options` | [`CommandFor`](../type-aliases/CommandFor.md)\<[`SchemaForExtended`](../type-aliases/SchemaForExtended.md)\<`T`, `Extras`\>\> | Type-narrowed command options for the entity type. |
-| `awaitOptions?` | [`CommandAndAwaitOptions`](../interfaces/CommandAndAwaitOptions.md)\<`T` & \| `"number"` \| `"alarm_control_panel"` \| `"climate"` \| `"cover"` \| `"date"` \| `"datetime"` \| `"event"` \| `"fan"` \| `"light"` \| `"lock"` \| `"media_player"` \| `"select"` \| `"siren"` \| `"switch"` \| `"text"` \| `"time"` \| `"update"` \| `"valve"` \| `"water_heater"`\> | Optional cancellation signal, custom timeout, and predicate that further narrows the matching state event. |
+| `awaitOptions?` | [`CommandAndAwaitOptions`](../interfaces/CommandAndAwaitOptions.md)\<`T` & \| `"number"` \| `"select"` \| `"alarm_control_panel"` \| `"climate"` \| `"cover"` \| `"date"` \| `"datetime"` \| `"event"` \| `"fan"` \| `"light"` \| `"lock"` \| `"media_player"` \| `"siren"` \| `"switch"` \| `"text"` \| `"time"` \| `"update"` \| `"valve"` \| `"water_heater"`\> | Optional cancellation signal, custom timeout, and predicate that further narrows the matching state event. |
 
 #### Returns
 
@@ -790,12 +790,22 @@ export async function commandAndAwaitExample(client: EspHomeClient): Promise<voi
 
 #### Throws
 
+(`SCHEMA_UNKNOWN` / `COMMAND_UNSUPPORTED`) when no schema, or no command schema, is registered for the entity type. Nothing is sent.
+
+#### Throws
+
+(`ENUM_VALUE_UNKNOWN` / `VALUE_OUT_OF_RANGE`) when a command field receives an unknown enum alias or a value outside the integer domain
+its wire type carries. Nothing is sent.
+
+#### Throws
+
 (`AWAIT_STREAM_CLOSED`) when the underlying telemetry stream ends before a matching state event arrives - typically because the
 connection dropped while the await was pending.
 
 #### Throws
 
-(`AbortError` / `TimeoutError`) when the caller's signal aborts or the default 2000ms deadline elapses.
+(`TimeoutError`) when the deadline elapses (2000ms unless `awaitOptions.timeoutMs` overrides it), or (`AbortError`) when the caller's signal
+aborts; a signal aborted with an `Error` reason rejects with that reason instead.
 
 ***
 
@@ -919,7 +929,7 @@ disconnectAsync(): Promise<void>;
 Graceful asynchronous disconnect. Sends DISCONNECT_REQUEST and awaits DISCONNECT_RESPONSE up to [EspHomeClientOptions.gracefulDisconnectTimeoutMs](../interfaces/EspHomeClientOptions.md#gracefuldisconnecttimeoutms) (default
 1000ms), then tears down the transport. On timeout, falls through to immediate teardown - the consumer is never blocked indefinitely. Marks the client explicitly
 closed and cancels any in-flight reconnect loop or manual connect (mirroring [EspHomeClient.disconnect](#disconnect)), so a graceful disconnect stays disconnected rather
-than auto-reconnecting.
+than auto-reconnecting. Concurrent calls share the disconnect already in flight: the device sees one `DISCONNECT_REQUEST`, and every call resolves when it settles.
 
 Usage:
 
@@ -1487,8 +1497,9 @@ logs(level, options?): AsyncIterable<LogEventData>;
 ```
 
 Refcounted async-iterable view of device log messages at the requested level. The first iterator opened sends `SUBSCRIBE_LOGS_REQUEST(level)` on the wire;
-opening a second iterator at a higher verbosity upgrades the device-side subscription. ESPHome has no unsubscribe path, so the subscription persists at the
-highest level any iterator has requested for the lifetime of the connection (downgrades on the last close are a best-effort re-subscribe at the new maximum).
+opening a second iterator at a higher verbosity upgrades the device-side subscription. Closing the iterator that holds the highest level sends a downgrade to the
+next-highest level still held (by another iterator or by [EspHomeClient.subscribeToLogs](#subscribetologs)) at once. ESPHome has no unsubscribe path, so closing the last one
+sends nothing and the device keeps its last level until the connection drops.
 
 Usage:
 

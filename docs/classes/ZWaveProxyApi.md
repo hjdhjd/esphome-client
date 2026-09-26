@@ -38,9 +38,10 @@ individual bit semantics are upstream concerns not surfaced here.
 clearConnectionState(): void;
 ```
 
-Reset ONLY connection-scoped state. Called by the host on `connect()`. Clears the cached home id (a fresh connection re-derives it from the new device-info) and the
-frame subscription's connection-scoped wire cache (the device starts every fresh connection with no subscription). The subscriber ledger is PRESERVED: iterators
-alive across the reconnect cycle stay live, and the host's [reissueOnReconnect](#reissueonreconnect) call after the new connection is up re-issues SUBSCRIBE for them.
+Reset ONLY connection-scoped state. Called by the host on every disconnect and again at the top of every connect attempt. Clears the cached home id (a fresh
+connection re-derives it from the new device-info) and the frame subscription's connection-scoped wire cache (the device starts every fresh connection with no
+subscription). The subscriber ledger is PRESERVED: iterators alive across the reconnect cycle stay live, and the host's [reissueOnReconnect](#reissueonreconnect) call after the
+new connection is up re-issues SUBSCRIBE for them.
 
 #### Returns
 
@@ -66,6 +67,9 @@ SUBSCRIBE is sent regardless of consumer count). The subscription survives recon
 
 Each yielded `Buffer` is one frame as received from the device's Z-Wave radio Serial API; this library does not validate, parse, or modify the contents. Consumers
 route the stream into a Z-Wave-aware library (e.g., `zwave-js`) for protocol-level handling.
+
+The view releases its subscriber once, on whichever ends it first: the signal aborting, the iterator's `return()` or `throw()` (including a `break` out of
+`for await`), or the bus ending the stream. A view abandoned before it is ever iterated still releases when its signal aborts or its `return()` runs.
 
 Usage:
 

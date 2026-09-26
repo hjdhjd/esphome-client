@@ -10,8 +10,8 @@ A command was issued before the client connected, or after it disconnected. Indi
 
 ## Remarks
 
-Reserved as a forward-compat slot. The current host class returns `false` from `command()` and rejects with [ConfigurationError](ConfigurationError.md)
-`UNKNOWN_ENTITY_ID` from [EspHomeClient.commandAndAwait](EspHomeClient.md#commandandawait) when an entity has not been discovered, rather than throwing this class. Available to
+Reserved as a forward-compat slot. When an entity has not been discovered, the host class's `command()`, which returns `void`, drops the command with a
+warning, and [EspHomeClient.commandAndAwait](EspHomeClient.md#commandandawait) rejects with [ConfigurationError](ConfigurationError.md) `UNKNOWN_ENTITY_ID`; neither throws this class. Available to
 consumer-supplied wrappers that want stricter pre-flight enforcement.
 
 ## Extends

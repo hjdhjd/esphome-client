@@ -26,7 +26,7 @@ export async function alarmControlPanelCommandExample(client: EspHomeClient): Pr
   }, {
 
     // The schema's state-side enumMappings narrows event.state to the AlarmControlPanelState literal-union, so this comparison is a typed compile-time check rather
-    // than a stringly-numeric guess. Forgetting which numeric value corresponds to "armed away" is no longer a thing the consumer has to remember.
+    // than a stringly-numeric guess. The consumer never has to remember which numeric value corresponds to "armed away".
     predicate: (event): boolean => event.state === AlarmControlPanelState.ARMED_AWAY,
     timeoutMs: 30000
   });

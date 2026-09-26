@@ -153,17 +153,22 @@ Checks whether this cipher state has an encryption key set.
 InitializeKey(key): void;
 ```
 
-Initializes the cipher state with a new key, resetting the nonce counter to zero.
+Initializes the cipher state with a new key, resetting the nonce counter to zero. The cipher state holds the key buffer by reference and zero-fills it when a later
+key replaces it or the state is destroyed, so each cipher state needs a key buffer of its own.
 
 #### Parameters
 
-| Parameter | Type |
-| ------ | ------ |
-| `key` | [`Nullable`](../type-aliases/Nullable.md)\<`Buffer`\<`ArrayBufferLike`\>\> |
+| Parameter | Type | Description |
+| ------ | ------ | ------ |
+| `key` | [`Nullable`](../type-aliases/Nullable.md)\<`Buffer`\<`ArrayBufferLike`\>\> | The 32-byte cipher key, or `null` to clear the key and return the cipher state to passthrough. |
 
 #### Returns
 
 `void`
+
+#### Throws
+
+If a non-null key is not exactly 32 bytes (code `INVALID_PSK_LENGTH`). A refused key leaves the cipher state unchanged.
 
 ***
 
@@ -173,7 +178,9 @@ Initializes the cipher state with a new key, resetting the nonce counter to zero
 Rekey(): void;
 ```
 
-Rekeys the cipher state by encrypting zeros with the maximum nonce value, providing forward secrecy.
+Rekeys the cipher state as Noise Protocol Framework §5.1 defines it: the key becomes the first 32 bytes of 32 zero bytes encrypted under the reserved maximum
+nonce, and the nonce counter keeps its current value, so this cipher state stays in step with any peer that follows the specification. The replaced key is
+zero-filled, so exposing the new key later does not expose traffic protected by the key it replaced. A no-op when no key is set.
 
 #### Returns
 

@@ -18,7 +18,7 @@ conflict with the upstream schema.
 
 | Parameter | Type | Description |
 | ------ | ------ | ------ |
-| `base` | \| `"number"` \| `"alarm_control_panel"` \| `"binary_sensor"` \| `"button"` \| `"camera"` \| `"climate"` \| `"cover"` \| `"date"` \| `"datetime"` \| `"event"` \| `"fan"` \| `"infrared"` \| `"light"` \| `"lock"` \| `"media_player"` \| `"radio_frequency"` \| `"select"` \| `"sensor"` \| `"siren"` \| `"switch"` \| `"text"` \| `"text_sensor"` \| `"time"` \| `"update"` \| `"valve"` \| `"water_heater"` | The upstream entity type to extend. |
+| `base` | \| `"number"` \| `"select"` \| `"alarm_control_panel"` \| `"binary_sensor"` \| `"button"` \| `"camera"` \| `"climate"` \| `"cover"` \| `"date"` \| `"datetime"` \| `"event"` \| `"fan"` \| `"infrared"` \| `"light"` \| `"lock"` \| `"media_player"` \| `"radio_frequency"` \| `"sensor"` \| `"siren"` \| `"switch"` \| `"text"` \| `"text_sensor"` \| `"time"` \| `"update"` \| `"valve"` \| `"water_heater"` | The upstream entity type to extend. |
 | `additions` | [`SchemaExtensions`](../interfaces/SchemaExtensions.md) | Additional fields to merge into listEntities or state. |
 
 ## Returns

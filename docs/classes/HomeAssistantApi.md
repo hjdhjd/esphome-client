@@ -12,14 +12,14 @@ Owns the entire Home-Assistant-bridge surface: the outbound subscribe-and-respon
 ## Remarks
 
 The bridge's four outbound methods ([HomeAssistantApi.subscribeServices](#subscribeservices), [HomeAssistantApi.subscribeStates](#subscribestates), [HomeAssistantApi.sendState](#sendstate),
-[HomeAssistantApi.respondToAction](#respondtoaction)) are fire-and-forget by contract: they encode a payload and hand it to the host `send` seam, which routes
+[HomeAssistantApi.respondToAction](#respondtoaction)) are fire-and-forget by contract: they encode a payload and hand it to the host's `send` hook, which routes
 through the host's `frameAndSend`. Failure modes are surfaced through the transport's existing error path (a disconnected client throws on send via the transport
 layer; the bridge does not duplicate that detection because doing so would create a second source of truth for connection state). Not every outbound method is an
 unconditional passthrough: [HomeAssistantApi.sendState](#sendstate)'s optional `attribute` argument encodes field 3 only when the caller passes a non-empty string, and
 [HomeAssistantApi.respondToAction](#respondtoaction)'s `options.errorMessage` / `options.responseData` each encode their field only when the caller supplies a value, matching
 ESPHome's proto contract for those optional fields.
 
-The [HomeAssistantApi.inboundContext](#inboundcontext) accessor returns a frozen object built once at construction time from the seam's `bus`, `log`, and `decode` members.
+The [HomeAssistantApi.inboundContext](#inboundcontext) accessor returns a frozen object built once at construction time from the host's `bus`, `log`, and `decode` members.
 The frozen-and-memoized shape means the per-message dispatch in `run-phase-handlers` performs zero allocations on the inbound HA-bridge hot path.
 
 ## Implements

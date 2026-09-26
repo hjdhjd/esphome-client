@@ -20,4 +20,4 @@ ergonomic consumer use.
 | <a id="key"></a> `key` | `number` |
 | <a id="name"></a> `name` | `string` |
 | <a id="objectid"></a> `objectId` | `string` |
-| <a id="type"></a> `type` | \| `"number"` \| `"alarm_control_panel"` \| `"binary_sensor"` \| `"button"` \| `"camera"` \| `"climate"` \| `"cover"` \| `"date"` \| `"datetime"` \| `"event"` \| `"fan"` \| `"infrared"` \| `"light"` \| `"lock"` \| `"media_player"` \| `"radio_frequency"` \| `"select"` \| `"sensor"` \| `"siren"` \| `"switch"` \| `"text"` \| `"text_sensor"` \| `"time"` \| `"update"` \| `"valve"` \| `"water_heater"` |
+| <a id="type"></a> `type` | \| `"number"` \| `"select"` \| `"alarm_control_panel"` \| `"binary_sensor"` \| `"button"` \| `"camera"` \| `"climate"` \| `"cover"` \| `"date"` \| `"datetime"` \| `"event"` \| `"fan"` \| `"infrared"` \| `"light"` \| `"lock"` \| `"media_player"` \| `"radio_frequency"` \| `"sensor"` \| `"siren"` \| `"switch"` \| `"text"` \| `"text_sensor"` \| `"time"` \| `"update"` \| `"valve"` \| `"water_heater"` |

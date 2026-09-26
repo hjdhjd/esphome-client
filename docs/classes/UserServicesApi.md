@@ -10,7 +10,7 @@ User-defined services sub-API. Exposes the discovered service catalog and the tw
 
 ## Remarks
 
-Stateless aside from the seam reference. Construct one instance per host; the singleton lifetime is managed by the host's `services` lazy getter.
+Stateless aside from the host reference. Construct one instance per host; the singleton lifetime is managed by the host's `services` lazy getter.
 
 ## Methods
 

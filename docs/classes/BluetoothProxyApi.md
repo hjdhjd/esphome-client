@@ -63,6 +63,9 @@ Each yielded [BluetoothLERawAdvertisement](../interfaces/BluetoothLERawAdvertise
 (`BluetoothLERawAdvertisementsResponse.advertisements`); the handler fans them out before they reach the iterator so consumers filter / count / aggregate
 per-advertisement, not per-batch.
 
+The view releases its subscriber once, on whichever ends it first: the signal aborting, the iterator's `return()` or `throw()` (including a `break` out of
+`for await`), or the bus ending the stream. A view abandoned before it is ever iterated still releases when its signal aborts or its `return()` runs.
+
 #### Parameters
 
 | Parameter | Type | Description |
@@ -248,6 +251,9 @@ connectionsFree(options?): AsyncIterable<ConnectionsFreeData>;
 
 Backpressured async-iterable view of connection-slot capacity changes. First iterator issues `SubscribeBluetoothConnectionsFreeRequest`; the iterator yields every
 push the device sends thereafter. The wire-side subscription is shared across iterators and survives reconnect via [reissueOnReconnect](#reissueonreconnect).
+
+The view releases its subscriber once, on whichever ends it first: the signal aborting, the iterator's `return()` or `throw()` (including a `break` out of
+`for await`), or the bus ending the stream. A view abandoned before it is ever iterated still releases when its signal aborts or its `return()` runs.
 
 Usage:
 
@@ -593,7 +599,11 @@ notify(
 ```
 
 Iterate notification data for a (address, handle) pair. The iterator filters the global `bluetoothNotifyData` bus event so each consumer only sees notifications
-for the handle they care about. Multiple concurrent iterators on the same (address, handle) all receive every push.
+for the handle they care about, and the filter runs as each chunk is emitted, so another handle's chunks never occupy this view's queue. Multiple concurrent
+iterators on the same (address, handle) all receive every push.
+
+The view releases its ledger entry once, on whichever ends it first: the signal aborting, the iterator's `return()` or `throw()` (including a `break` out of
+`for await`), or the bus ending the stream. A view abandoned before it is ever iterated still releases when its signal aborts or its `return()` runs.
 
 Note that [setNotify](#setnotify) and [notify](#notify) are intentionally separate. `setNotify(enable=true)` issues the wire-side enable and awaits its response; `notify()`
 is purely a client-side iterator over the resulting bus events. This mirrors how a BLE programmer thinks: "enable notify on this handle, then iterate the stream."

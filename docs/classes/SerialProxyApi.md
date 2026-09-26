@@ -20,10 +20,11 @@ Serial-proxy sub-API. Single instance per client; created lazily on first access
 clearConnectionState(): void;
 ```
 
-Reset ONLY connection-scoped state. Called by the host on `connect()`. Rejects every pending [flush](#flush) and [getModemPins](#getmodempins) await with an `AbortError`
-(in-flight request/response state cannot outlive the connection it was issued on) and clears the data subscription's connection-scoped wire cache (the device starts
-every fresh connection with no subscription). The subscriber ledger is PRESERVED: iterators alive across the reconnect cycle stay live, and the host's
-[reissueOnReconnect](#reissueonreconnect) call after the new connection is up re-issues SUBSCRIBE for each instance with surviving subscribers.
+Reset ONLY connection-scoped state. Called by the host on every disconnect and again at the top of every connect attempt. Rejects every pending [flush](#flush) and
+[getModemPins](#getmodempins) await with an `AbortError` (in-flight request/response state cannot outlive the connection it was issued on) and clears the data
+subscription's connection-scoped wire cache (the device starts every fresh connection with no subscription). The subscriber ledger is PRESERVED: iterators alive
+across the reconnect cycle stay live, and the host's [reissueOnReconnect](#reissueonreconnect) call after the new connection is up re-issues SUBSCRIBE for each instance with
+surviving subscribers.
 
 #### Returns
 
@@ -112,8 +113,12 @@ The first iterator on an instance issues a wire-side `SerialProxyRequest(SUBSCRI
 Concurrent iterators on the same instance share the wire-side subscription (only one SUBSCRIBE is sent regardless of consumer count). The subscription survives
 reconnect via [reissueOnReconnect](#reissueonreconnect).
 
-Per-instance filtering happens in the wrapper generator: the `serialData` bus emits chunks for every instance, and the generator yields only those whose `instance`
-matches the iterator's argument. Two iterators on different instances do not see each other's chunks.
+Per-instance filtering happens as each chunk is emitted: the `serialData` bus emits chunks for every instance, and the view's selector keeps only those whose
+`instance` matches the iterator's argument, so another instance's chunks never occupy this view's queue. Two iterators on different instances do not see each
+other's chunks.
+
+The view releases its subscriber once, on whichever ends it first: the signal aborting, the iterator's `return()` or `throw()` (including a `break` out of
+`for await`), or the bus ending the stream. A view abandoned before it is ever iterated still releases when its signal aborts or its `return()` runs.
 
 Usage:
 

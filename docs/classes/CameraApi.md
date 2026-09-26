@@ -133,8 +133,12 @@ correlate the rejection.
 stream(options?): AsyncIterable<Buffer<ArrayBufferLike>>;
 ```
 
-Stream images continuously. Sends `CAMERA_IMAGE_REQUEST(stream=true)` and yields each reassembled image as it arrives. Iteration ends on signal abort or when the
-consumer breaks out of the `for await`.
+Stream images continuously. Sends `CAMERA_IMAGE_REQUEST(stream=true)` when called and yields each reassembled image as it arrives. Iteration ends on signal abort
+or when the consumer breaks out of the `for await`.
+
+The view sends the request with the stream flag cleared once, on whichever ends it first: the signal aborting, the iterator's `return()` or `throw()` (including a
+`break` out of `for await`), or the bus ending the stream. A view abandoned before it is ever iterated still sends that stop when its signal aborts or its
+`return()` runs.
 
 Usage:
 
