@@ -159,7 +159,7 @@ export interface ClientCapabilities {
   zwaveProxy: {
 
     featureFlags: number;
-    homeId: number | null;
+    homeId: Nullable<number>;
     supported: boolean;
   };
 }

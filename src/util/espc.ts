@@ -120,7 +120,7 @@ const STRICT_INT_PATTERN = /^-?\d+$/;
  *
  * @internal
  */
-export function tryParseIntStrict(value: string): number | null {
+export function tryParseIntStrict(value: string): Nullable<number> {
 
   if(!STRICT_INT_PATTERN.test(value)) {
 

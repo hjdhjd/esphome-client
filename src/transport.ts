@@ -329,7 +329,7 @@ export class Transport implements TransportLike {
   /**
    * Pending fatal error. When set, awaiters reject with this rather than yielding from their queues.
    */
-  private terminationError: Error | null = null;
+  private terminationError: Nullable<Error> = null;
 
   private constructor(options: TransportOpenOptions) {
 

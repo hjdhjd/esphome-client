@@ -367,7 +367,7 @@ class BackpressureStream<T> implements AsyncIterableIterator<T> {
   /**
    * Pending error. When set, the next `next()` call throws this rather than yielding from the queue. Used by signal abort and backpressure throw modes.
    */
-  private error: Error | null = null;
+  private error: Nullable<Error> = null;
 
   /**
    * Listener cleanup. Runs once on first terminal state; safe to call more than once through the `closed` guard.

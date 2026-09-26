@@ -19,7 +19,7 @@
  *
  * @module user-services
  */
-import type { EspHomeLogging, ServiceEntity } from "./types.ts";
+import type { EspHomeLogging, Nullable, ServiceEntity } from "./types.ts";
 import { MessageType, WireType } from "./protocol/index.ts";
 import { encodeProtoFields, zigzagEncode } from "./protocol/codec.ts";
 import { Buffer } from "node:buffer";
@@ -173,7 +173,7 @@ export class UserServicesApi {
  * repeated float, 9 repeated string. The `if`/`else if` chain checks the four scalar variants before the four repeated variants; because at most one
  * variant is ever set on a given argument value, the chain resolves to the correct field regardless of the order in which the checks run.
  */
-function encodeServiceArgument(argValue: ExecuteServiceArgumentValue): Buffer | null {
+function encodeServiceArgument(argValue: ExecuteServiceArgumentValue): Nullable<Buffer> {
 
   const argFields: ProtoField[] = [];
 

@@ -56,9 +56,9 @@ export const DEFAULT_COMMAND_AWAIT_TIMEOUT_MS = 2000;
 export type TransmitEntityType = "infrared" | "radio_frequency";
 
 /**
- * Type-level constraint on the entity types {@link runCommandAndAwait} accepts. Excludes the read-only, stateless, and non-key-bearing entity types whose state
- * schemas do not respond to commands - calling `commandAndAwait` against them would hang until timeout. The exclusion is kept in sync with the host method's own
- * type-level constraint.
+ * Type-level constraint on the entity types {@link EspHomeClient.commandAndAwait} accepts. Excludes the read-only, stateless, and non-key-bearing entity types
+ * whose state schemas do not respond to commands - calling `commandAndAwait` against them would hang until timeout. The exclusion is kept in sync with the host
+ * method's own type-level constraint.
  *
  * @remarks `binary_sensor`, `sensor`, and `text_sensor` are read-only - they emit state but no command surface exists. `button` is stateless on the wire (the device
  * acknowledges with no telemetry). `camera` is excluded because its schema declares no `command` block, so a generic entity command can never be encoded for it;
@@ -69,12 +69,13 @@ export type TransmitEntityType = "infrared" | "radio_frequency";
 export type NonAwaitableEntityType = "binary_sensor" | "button" | "camera" | "sensor" | "text_sensor" | TransmitEntityType;
 
 /**
- * Entity types accepted by {@link runCommandAndAwait}. The complement of {@link NonAwaitableEntityType} relative to the canonical {@link EntityType} set.
+ * Entity types accepted by {@link EspHomeClient.commandAndAwait}. The complement of {@link NonAwaitableEntityType} relative to the canonical {@link EntityType} set.
  */
 export type CommandAndAwaitable = Exclude<EntityType, NonAwaitableEntityType>;
 
 /**
- * Per-call options for {@link runCommandAndAwait}. All fields are optional; defaults: 2000ms timeout, no caller signal, predicate accepts any state event for the entity.
+ * Per-call options for {@link EspHomeClient.commandAndAwait}. All fields are optional; defaults: 2000ms timeout, no caller signal, predicate accepts any state event
+ * for the entity.
  *
  * @typeParam T - Entity type tag carried by the branded id.
  */
@@ -97,7 +98,7 @@ export interface CommandAndAwaitOptions<T extends CommandAndAwaitable> {
   signal?: AbortSignal;
 
   /**
-   * Optional override for the await timeout. Defaults to {@link DEFAULT_COMMAND_AWAIT_TIMEOUT_MS} (2000ms).
+   * Optional override for the await timeout, in milliseconds. Defaults to 2000ms.
    */
   timeoutMs?: number;
 }

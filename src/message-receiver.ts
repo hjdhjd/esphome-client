@@ -127,7 +127,7 @@ export class MessageReceiver implements AsyncDisposable {
   /**
    * Pending fatal error from the transport. Surfaced into every awaiter on settle.
    */
-  private pumpError: Error | null = null;
+  private pumpError: Nullable<Error> = null;
 
   /**
    * Run-phase terminal-completion callback. `null` until {@link startDrain} fires. Invoked exactly once via `settleTerminal` when the pump ends during the run

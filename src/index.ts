@@ -14,7 +14,8 @@
  * The set of barreled modules covers the connection/lifecycle surface (`esphome-client`, `lifecycle`, `health`, `reconnect`, `capabilities`), the entity model
  * (`entity-id`, `schemas`, `sub-device`), the named wire-enum constants (`api-constants`) and the API feature-version table (`api-feature-versions`), the sub-APIs
  * (`bluetooth-proxy`, `camera`, `home-assistant`, `serial-proxy`, `user-services`, `voice-assistant`, `zwave-proxy`), the typed error hierarchy (`errors`), the
- * stream backpressure options, and the protocol-level primitives (`protocol`, `crypto-noise`, `types`).
+ * stream backpressure options, the type constraints and await options the command methods' signatures name (`command-runner`), and the protocol-level primitives
+ * (`protocol`, `crypto-noise`, `types`).
  *
  * @module esphome-client
  */
@@ -23,6 +24,7 @@ export * from "./api-feature-versions.ts";
 export * from "./bluetooth-proxy.ts";
 export * from "./camera.ts";
 export * from "./capabilities.ts";
+export type { CommandAndAwaitOptions, CommandAndAwaitable, NonAwaitableEntityType, TransmitEntityType } from "./command-runner.ts";
 export * from "./crypto-noise.ts";
 export * from "./entity-id.ts";
 export * from "./errors.ts";

@@ -1818,9 +1818,9 @@ export class BluetoothProxyApi implements SubscriptionLifecycle {
    *
    * @param payload - Raw protobuf bytes.
    */
-  private decodeAddressHandleData(payload: Buffer): { address: bigint; data: Buffer; handle: number } | null {
+  private decodeAddressHandleData(payload: Buffer): Nullable<{ address: bigint; data: Buffer; handle: number }> {
 
-    let address: bigint | null = null;
+    let address: Nullable<bigint> = null;
     let handle = 0;
     let data: Buffer = Buffer.alloc(0);
 
@@ -1894,9 +1894,9 @@ export class BluetoothProxyApi implements SubscriptionLifecycle {
    *
    * @param payload - Raw protobuf bytes.
    */
-  private decodeAddressAndHandle(payload: Buffer): { address: bigint; handle: number } | null {
+  private decodeAddressAndHandle(payload: Buffer): Nullable<{ address: bigint; handle: number }> {
 
-    let address: bigint | null = null;
+    let address: Nullable<bigint> = null;
     let handle = 0;
 
     try {
@@ -1962,9 +1962,9 @@ export class BluetoothProxyApi implements SubscriptionLifecycle {
    *
    * @param payload - Raw protobuf bytes.
    */
-  private decodeAddressHandleAndError(payload: Buffer): { address: bigint; error: number; handle: number } | null {
+  private decodeAddressHandleAndError(payload: Buffer): Nullable<{ address: bigint; error: number; handle: number }> {
 
-    let address: bigint | null = null;
+    let address: Nullable<bigint> = null;
     let handle = 0;
     let error = 0;
 
@@ -2036,9 +2036,9 @@ export class BluetoothProxyApi implements SubscriptionLifecycle {
    *
    * @param payload - Raw protobuf bytes.
    */
-  private decodeAddressFlagAndError(payload: Buffer): { address: bigint; error: number; flag: boolean } | null {
+  private decodeAddressFlagAndError(payload: Buffer): Nullable<{ address: bigint; error: number; flag: boolean }> {
 
-    let address: bigint | null = null;
+    let address: Nullable<bigint> = null;
     let flag = false;
     let error = 0;
 
@@ -2108,9 +2108,9 @@ export class BluetoothProxyApi implements SubscriptionLifecycle {
    *
    * @param payload - Raw protobuf bytes.
    */
-  private decodeAddressAndError(payload: Buffer): { address: bigint; error: number } | null {
+  private decodeAddressAndError(payload: Buffer): Nullable<{ address: bigint; error: number }> {
 
-    let address: bigint | null = null;
+    let address: Nullable<bigint> = null;
     let error = 0;
 
     try {
@@ -2177,9 +2177,9 @@ export class BluetoothProxyApi implements SubscriptionLifecycle {
    * @param payload - The protobuf-encoded payload.
    * @returns The decoded fields, or `null` when the address is missing.
    */
-  private decodeAddressWithFlags(payload: Buffer): { address: bigint; connected: boolean; error: number; mtu: number } | null {
+  private decodeAddressWithFlags(payload: Buffer): Nullable<{ address: bigint; connected: boolean; error: number; mtu: number }> {
 
-    let address: bigint | null = null;
+    let address: Nullable<bigint> = null;
     let connected = false;
     let mtu = 0;
     let error = 0;
@@ -2271,9 +2271,9 @@ export class BluetoothProxyApi implements SubscriptionLifecycle {
    * Decode a `BluetoothGATTGetServicesResponse` (id 71). Returns the address plus the list of nested services; each service is parsed via
    * {@link decodeBluetoothGATTService}.
    */
-  private decodeGetServicesResponse(payload: Buffer): { address: bigint; services: BluetoothGATTService[] } | null {
+  private decodeGetServicesResponse(payload: Buffer): Nullable<{ address: bigint; services: BluetoothGATTService[] }> {
 
-    let address: bigint | null = null;
+    let address: Nullable<bigint> = null;
     const services: BluetoothGATTService[] = [];
 
     try {
@@ -2341,7 +2341,7 @@ export class BluetoothProxyApi implements SubscriptionLifecycle {
   /**
    * Decode a payload that carries only a uint64 `address` field at field 1. Used for `BluetoothGATTGetServicesDoneResponse` (id 72).
    */
-  private decodeAddressOnly(payload: Buffer): bigint | null {
+  private decodeAddressOnly(payload: Buffer): Nullable<bigint> {
 
     try {
 
