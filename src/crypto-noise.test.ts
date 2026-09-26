@@ -61,6 +61,66 @@ describe("CipherState", () => {
     assert.equal(cs.HasKey(), false);
   });
 
+  test("InitializeKey refuses a key that is not 32 bytes with INVALID_PSK_LENGTH, and the handshake constructor still refuses a 31-byte psk", () => {
+
+    // A consumer driving a CipherState directly gets the typed error at install time rather than Node's raw RangeError at the first encrypt. The refused key must leave
+    // the installed key and nonce in place, so the keyed state keeps round-tripping with its peer afterward; the frame before the refusal moves both counters off zero,
+    // which makes a nonce reset on the refused install visible.
+    const enc = new CipherState();
+    const dec = new CipherState();
+
+    enc.InitializeKey(Buffer.alloc(32, 0x21));
+    dec.InitializeKey(Buffer.alloc(32, 0x21));
+    assert.deepEqual(dec.DecryptWithAd(Buffer.alloc(0), enc.EncryptWithAd(Buffer.alloc(0), Buffer.from("before"))), Buffer.from("before"));
+
+    assert.throws(() => enc.InitializeKey(Buffer.alloc(31)), { code: "INVALID_PSK_LENGTH", name: "NoiseHandshakeError" });
+    assert.throws(() => enc.InitializeKey(Buffer.alloc(33)), { code: "INVALID_PSK_LENGTH", name: "NoiseHandshakeError" });
+    assert.equal(enc.HasKey(), true, "a refused key must leave the installed key in place");
+    assert.deepEqual(dec.DecryptWithAd(Buffer.alloc(0), enc.EncryptWithAd(Buffer.alloc(0), Buffer.from("kept"))), Buffer.from("kept"));
+
+    // The psk never reaches InitializeKey (it feeds MixKeyAndHash, whose HKDF output is always 32 bytes), so the constructor's check remains the psk's only validation.
+    assert.throws(() => createHandshake({ psk: Buffer.alloc(31), role: "initiator" }), { code: "INVALID_PSK_LENGTH", name: "NoiseHandshakeError" });
+  });
+
+  test("Rekey and InitializeKey zero-fill the key they replace", () => {
+
+    // A rekey protects earlier traffic only if the key it replaces does not linger in a reachable buffer, and a fresh key replaces the prior one on the same terms.
+    const rekeyed = Buffer.alloc(32, 0x5c);
+    const cs = new CipherState();
+
+    cs.InitializeKey(rekeyed);
+    cs.Rekey();
+
+    assert.equal(rekeyed.every((b: number): boolean => b === 0), true, "Rekey must zero-fill the key it replaces");
+    assert.equal(cs.HasKey(), true, "Rekey must leave a key installed");
+
+    const first = Buffer.alloc(32, 0x5d);
+    const second = Buffer.alloc(32, 0x5e);
+    const other = new CipherState();
+
+    other.InitializeKey(first);
+    other.InitializeKey(second);
+
+    assert.equal(first.every((b: number): boolean => b === 0), true, "InitializeKey must zero-fill the key it replaces");
+    assert.equal(second.every((b: number): boolean => b === 0x5e), true, "InitializeKey must leave the key it installs intact");
+  });
+
+  test("InitializeKey with the key buffer it already holds restarts the nonce without wiping the key", () => {
+
+    // Installing a key zero-fills the key it replaces, so re-installing the same buffer to restart the nonce must skip the wipe or it would zero the key it installs.
+    const key = Buffer.alloc(32, 0x66);
+    const cs = new CipherState();
+
+    cs.InitializeKey(key);
+
+    const first = cs.EncryptWithAd(Buffer.alloc(0), Buffer.from("again"));
+
+    cs.InitializeKey(key);
+
+    assert.equal(key.every((b: number): boolean => b === 0x66), true, "re-installing the held buffer must leave its bytes intact");
+    assert.deepEqual(cs.EncryptWithAd(Buffer.alloc(0), Buffer.from("again")), first, "the restarted nonce under the same key must reproduce the nonce-0 ciphertext");
+  });
+
   test("EncryptWithAd returns plaintext unchanged when no key is set (passthrough during handshake)", () => {
 
     const cs = new CipherState();
@@ -191,12 +251,13 @@ describe("CipherState", () => {
     // The Noise spec defines Rekey as "encrypt 32 zeros with the maximum nonce; the first 32 bytes of the result become the new key." The contract is that Rekey is
     // observable (the post-Rekey ciphertexts differ from the pre-Rekey ciphertexts under the original key) and that Rekey is symmetric (peers that both Rekey at the
     // same point in the stream still decrypt each other's traffic). We assert both: divergence under the old key, and continued round-trip when both sides Rekey.
+    // Each cipher state gets a key buffer of its own, because a rekey zero-fills the key it replaces and would wipe a shared buffer under the peer.
     const a = new CipherState();
     const b = new CipherState();
-    const key = Buffer.alloc(32, 0x77);
+    const key = (): Buffer => Buffer.alloc(32, 0x77);
 
-    a.InitializeKey(key);
-    b.InitializeKey(key);
+    a.InitializeKey(key());
+    b.InitializeKey(key());
 
     // Pre-Rekey baseline: a sends, b decrypts.
     const ctBefore = a.EncryptWithAd(Buffer.alloc(0), Buffer.from("before"));
@@ -216,7 +277,7 @@ describe("CipherState", () => {
     // Sanity check that Rekey actually replaced the key: a re-encryption of the same plaintext on a fresh CipherState that did NOT Rekey produces different bytes.
     const fresh = new CipherState();
 
-    fresh.InitializeKey(key);
+    fresh.InitializeKey(key());
     fresh.EncryptWithAd(Buffer.alloc(0), Buffer.from("before"));
 
     const ctFreshAfter = fresh.EncryptWithAd(Buffer.alloc(0), Buffer.from("after"));
@@ -836,7 +897,7 @@ describe("Known-Answer Tests (reference vectors)", () => {
 
   // KAT-1 pins the CipherState nonce construction against an explicitly-written literal nonce. Every other CipherState test in this file is a symmetric round-trip
   // (encrypt then decrypt with the same code), so a wrong nonce byte-layout - wrong endianness, or the counter at offset 0 instead of offset 4 - would round-trip
-  // perfectly because both directions would share the mistake. updateNonce() builds the 12-byte nonce as [00 00 00 00][LE64(n)] (src/crypto-noise.ts:235-236); this KAT
+  // perfectly because both directions would share the mistake. updateNonce() builds the 12-byte nonce as [00 00 00 00][LE64(n)] (src/crypto-noise.ts:261-262); this KAT
   // drives the private counter to n=5 and asserts our output equals the same plaintext encrypted under the literal nonce [0,0,0,0, 5,0,0,0,0,0,0,0]. A non-zero counter
   // is used deliberately so the LE64 advance is exercised, not just the all-zero n=0 case. The key, ad, and plaintext are arbitrary fixed test constants.
   const kat1Key = Buffer.from("2b7e151628aed2a6abf7158809cf4f3c2b7e151628aed2a6abf7158809cf4f3c", "hex");
@@ -924,6 +985,50 @@ describe("Known-Answer Tests (reference vectors)", () => {
     const responder = createHandshake({ prologue: kat2Prologue, psk: kat2Psk, role: "responder" });
 
     assert.throws(() => responder.readMessage(tampered), { code: "AUTH_FAILED", name: "NoiseHandshakeError" });
+  });
+
+  // KAT-3 holds the rekey fixed against a reference computed here from literal nonces, independent of updateNonce() and Rekey(). Noise §5.1 defines REKEY(k) as the
+  // first 32 bytes of ENCRYPT(k, 2^64 - 1, empty ad, 32 zero bytes) and leaves the nonce counter where it was, so after two transport messages (nonces 0 and 1) and a
+  // rekey, the third message is protected by the derived key under nonce 2. A rekey that restarted the counter would produce the nonce-0 ciphertext and fail the byte
+  // comparison, and a rekey nonce with the wrong layout would derive a different key. The key, ad, and plaintext are KAT-1's.
+  const kat3RekeyNonce = Buffer.from([ 0, 0, 0, 0, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff ]);
+  const kat3RekeyCipher = createCipheriv("chacha20-poly1305", kat1Key, kat3RekeyNonce, { authTagLength: 16 });
+
+  kat3RekeyCipher.setAAD(Buffer.alloc(0), { plaintextLength: 32 });
+
+  const kat3RekeyedKey = Buffer.concat([ kat3RekeyCipher.update(Buffer.alloc(32)), kat3RekeyCipher.final() ]).subarray(0, 32);
+  const kat3LiteralNonce = Buffer.from([ 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0 ]);
+  const kat3Cipher = createCipheriv("chacha20-poly1305", kat3RekeyedKey, kat3LiteralNonce, { authTagLength: 16 });
+
+  kat3Cipher.setAAD(kat1Ad, { plaintextLength: kat1Plaintext.length });
+
+  const kat3Expected = Buffer.concat([ kat3Cipher.update(kat1Plaintext), kat3Cipher.final(), kat3Cipher.getAuthTag() ]);
+
+  test("KAT-3: EncryptWithAd after a Rekey uses the rekeyed key and continues the nonce counter", () => {
+
+    // Two real transport messages advance the counter to 2 before the rekey, so the byte comparison reads both the derived key and the carried-over nonce.
+    const enc = new CipherState();
+
+    enc.InitializeKey(Buffer.from(kat1Key));
+    enc.EncryptWithAd(kat1Ad, kat1Plaintext);
+    enc.EncryptWithAd(kat1Ad, kat1Plaintext);
+    enc.Rekey();
+    assert.deepEqual(Buffer.from(enc.EncryptWithAd(kat1Ad, kat1Plaintext)), kat3Expected);
+  });
+
+  test("KAT-3: DecryptWithAd after a Rekey recovers the plaintext from the rekeyed nonce-2 reference ciphertext", () => {
+
+    // The receive side carries its counter across the rekey too. A separately keyed sender advances it through two real frames; each cipher state holds its own key
+    // buffer because a rekey zero-fills the key it replaces.
+    const enc = new CipherState();
+    const dec = new CipherState();
+
+    enc.InitializeKey(Buffer.from(kat1Key));
+    dec.InitializeKey(Buffer.from(kat1Key));
+    assert.deepEqual(dec.DecryptWithAd(kat1Ad, enc.EncryptWithAd(kat1Ad, kat1Plaintext)), kat1Plaintext);
+    assert.deepEqual(dec.DecryptWithAd(kat1Ad, enc.EncryptWithAd(kat1Ad, kat1Plaintext)), kat1Plaintext);
+    dec.Rekey();
+    assert.deepEqual(Buffer.from(dec.DecryptWithAd(kat1Ad, kat3Expected)), kat1Plaintext);
   });
 });
 

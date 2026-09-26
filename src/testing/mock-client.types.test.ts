@@ -12,6 +12,7 @@ import type { EspHomeClient } from "../esphome-client.ts";
 import { MockClient } from "./mock-client.ts";
 import assert from "node:assert/strict";
 import { entityId } from "../entity-id.ts";
+import { mockEntity } from "./factories.ts";
 
 // This file pins MockClient as a faithful test double of EspHomeClient's consumption surface, in two complementary layers that catch different failure modes.
 //
@@ -188,6 +189,8 @@ describe("MockClient surface mirror", () => {
 
     const client = new MockClient();
     const switchId = entityId("switch", "x");
+
+    client.populateEntities([mockEntity("switch", "x")]);
 
     // @ts-expect-error - command<"switch"> requires a switch-shaped options object; rgb is light-only and not assignable here.
     client.command(switchId, { rgb: { b: 0, g: 0, r: 0 } });

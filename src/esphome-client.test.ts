@@ -42,6 +42,9 @@ function quietLogger(): { debug: () => void; info: () => void; warn: () => void;
   return { debug: (): void => undefined, error: (): void => undefined, info: (): void => undefined, warn: (): void => undefined };
 }
 
+// The warn sentence the client logs when a consumer's event listener throws.
+const LISTENER_FAULT_WARNING = "A client event listener threw; the remaining listeners still received the event.";
+
 interface LogCapture {
 
   debug: string[];
@@ -1023,26 +1026,33 @@ describe("EspHomeClient.connect - error and abort paths", () => {
     assert.equal(client.health().state, "disconnected", "the client must remain disconnected");
   });
 
-  test("a listener that throws while a connect is announced rejects connect() with a typed error and leaves health disconnected", async () => {
+  test("a listener that throws while a connect is announced is reported through the logger and connect() resolves connected", async () => {
 
     const transport = new MockTransport();
-    const client = new EspHomeClient({ host: "test.local", logger: quietLogger(), reconnect: false, transportFactory: (): MockTransport => transport });
-    const listenerFault = new Error("Synthetic connect-listener fault.");
+    const warnings: unknown[][] = [];
+    const client = new EspHomeClient({
 
-    // The throw lands after the run-phase handoff has attached the transport and marked health connected, so the failed attempt itself must release that state.
-    client.on("connect", (): void => { throw listenerFault; });
-
-    await assert.rejects(driveConnect(transport, client, { signal: AbortSignal.timeout(2000) }), (err: unknown): boolean => {
-
-      assert.ok(err instanceof ConnectionError, "a throwing listener must surface as a typed ConnectionError");
-      assert.equal(err.code, "CONNECT_FAILED", "the failed attempt must carry the CONNECT_FAILED code");
-      assert.equal(err.cause, listenerFault, "the cause must be the error the listener threw");
-
-      return true;
+      host: "test.local",
+      logger: { ...quietLogger(), warn: (...args: unknown[]): void => { warnings.push(args); } },
+      reconnect: false,
+      transportFactory: (): MockTransport => transport
     });
+    const listenerFault = new Error("Synthetic connect-listener fault.");
+    const siblingAnnouncements: boolean[] = [];
 
-    assert.equal(client.health().state, "disconnected", "health must not stay connected once the failed attempt has torn the session down");
-    assert.equal((client as unknown as { transport: unknown }).transport, null, "the failed attempt must leave no transport attached");
+    // The throw lands inside the connect flow's own announcement, after the run-phase handoff has attached the transport and marked health connected. The bus reports
+    // it through the logger, so the flow completes and a listener registered after the throwing one still receives the announcement.
+    client.on("connect", (): void => { throw listenerFault; });
+    client.on("connect", (encrypted): void => { siblingAnnouncements.push(encrypted); });
+
+    await driveConnect(transport, client, { signal: AbortSignal.timeout(2000) });
+
+    assert.equal(client.health().state, "connected", "a throwing listener must not unwind the connect flow");
+    assert.deepEqual(siblingAnnouncements, [false], "the sibling listener must still receive the announcement");
+    assert.deepEqual(warnings, [[ LISTENER_FAULT_WARNING, { error: listenerFault, event: "connect" } ]],
+      "the fault must be reported once through the logger with the error and the event name");
+
+    client.disconnect();
   });
 
   test("connect rejects with NegotiationFailedError when device announces an unsupported API major", async () => {
@@ -2261,6 +2271,24 @@ describe("EspHomeClient.disconnect / disconnectAsync / dispose", () => {
     assert.equal(client.health().state, "disconnected");
   });
 
+  test("concurrent disconnectAsync calls share one graceful disconnect: the device sees one DISCONNECT_REQUEST and both calls resolve", async () => {
+
+    const transport = new MockTransport();
+    const client = new EspHomeClient({ host: "test.local", logger: quietLogger(), reconnect: false, transportFactory: (): MockTransport => transport });
+
+    await driveConnect(transport, client, { signal: AbortSignal.timeout(2000) });
+
+    const first = client.disconnectAsync();
+    const second = client.disconnectAsync();
+
+    await delay(5);
+    transport.pushInbound(MessageType.DISCONNECT_RESPONSE, DISCONNECT_RESPONSE_PAYLOAD);
+    await Promise.all([ first, second ]);
+
+    assert.equal(transport.outboundFrames.filter((f): boolean => f.type === MessageType.DISCONNECT_REQUEST).length, 1, "the calls must share one request");
+    assert.equal(client.health().state, "disconnected");
+  });
+
   test("disconnectAsync falls through to teardown on graceful timeout", async () => {
 
     const transport = new MockTransport();
@@ -2834,6 +2862,26 @@ describe("EspHomeClient telemetry stream wrappers", () => {
     client.disconnect();
 
     assert.equal(events[0], 100);
+  });
+
+  test("return() on a telemetryForId view that was never iterated detaches its bus listener", async () => {
+
+    const transport = new MockTransport();
+    const client = new EspHomeClient({ host: "test.local", logger: quietLogger(), reconnect: false, transportFactory: (): MockTransport => transport });
+
+    await driveConnect(transport, client, { entities: [{ key: 100, name: "L1", objectId: "lamp_one", type: "light" }], signal: AbortSignal.timeout(2000) });
+
+    // The bus is private; the listener count on the per-type channel is the observable for whether the view still holds its stream.
+    const bus = (client as unknown as { bus: { listenerCount: (event: string) => number } }).bus;
+    const before = bus.listenerCount("light");
+    const iterator = client.telemetryForId(entityId("light", "lamp_one"))[Symbol.asyncIterator]();
+
+    assert.equal(bus.listenerCount("light"), before + 1, "the view attaches its listener when it is requested");
+
+    await iterator.return!();
+
+    assert.equal(bus.listenerCount("light"), before, "return() must detach the listener even though the view was never iterated");
+    client.disconnect();
   });
 });
 
@@ -4236,6 +4284,23 @@ describe("EspHomeClient heartbeat + ping", () => {
     client.disconnect();
   });
 
+  test("a GET_TIME_REQUEST the device sends during setup is answered once the run phase starts", async () => {
+
+    const transport = new MockTransport();
+    const client = new EspHomeClient({ host: "test.local", keepAlive: false, logger: quietLogger(), reconnect: false, transportFactory: (): MockTransport => transport });
+    const connecting = client.connect({ signal: AbortSignal.timeout(2000) });
+
+    // The request lands ahead of the HELLO response, so no setup-phase wait claims it: it waits in the receiver's buffer until the run-phase hand-off replays it.
+    await delay(5);
+    transport.pushInbound(MessageType.GET_TIME_REQUEST, Buffer.alloc(0));
+    await pushHandshake(transport);
+    await connecting;
+    await delay(10);
+
+    assert.equal(transport.outboundFrames.filter((f): boolean => f.type === MessageType.GET_TIME_RESPONSE).length, 1, "the buffered request must be answered once");
+    client.disconnect();
+  });
+
   test("inbound GET_TIME_RESPONSE emits 'timeSync' event", async () => {
 
     const transport = new MockTransport();
@@ -5625,6 +5690,49 @@ describe("EspHomeClient clock seam - live heartbeat stall / RTT / timeout integr
       assert.ok(disconnectReasons.includes("heartbeat stalled"), "the legacy disconnect event must carry the 'heartbeat stalled' reason");
       assert.ok(attemptDelays.length > 0, "the stall teardown must schedule an auto-reconnect attempt");
       assert.ok(recordedMetrics.some((m) => m.name === "heartbeat.stalled"), "the stall must emit the heartbeat.stalled counter metric");
+
+    } finally {
+
+      client.disconnect();
+      mock.timers.reset();
+    }
+  });
+
+  // A consumer's healthChange listener runs inside the scheduler's timer tick when a stall fires. Its fault must be reported through the logger rather than escape the
+  // tick, and the stall must still run its teardown.
+  test("a healthChange listener that throws during a heartbeat stall is reported through the logger and the stall still tears the client down", async () => {
+
+    const clock = buildClock(Date.now());
+    const transport = new MockTransport();
+    const warnings: unknown[][] = [];
+    const listenerFault = new Error("Synthetic health-listener fault.");
+    const client = new EspHomeClient({
+
+      clock: clock.clock,
+      host: "test.local",
+      keepAlive: { intervalMs: 30000, stallTimeoutMs: 60000 },
+      logger: { ...quietLogger(), warn: (...args: unknown[]): void => { warnings.push(args); } },
+      reconnect: false,
+      transportFactory: (): MockTransport => transport
+    });
+
+    mock.timers.enable({ apis: ["setInterval"] });
+
+    try {
+
+      await driveConnect(transport, client, { signal: AbortSignal.timeout(2000) });
+
+      // The listener attaches after the connect, so its first throw is the stall's STALLED transition, raised from inside the scheduler's tick. It detaches when this
+      // block exits, so the cleanup below runs without it however the assertions end.
+      using _faulty = client.on("healthChange", (): void => { throw listenerFault; });
+
+      clock.advance(60000);
+
+      assert.doesNotThrow(() => { mock.timers.tick(15000); }, "a throwing health listener must not escape the heartbeat timer");
+      assert.equal(client.health().state, "disconnected", "the stall must still tear the client down");
+      assert.deepEqual(warnings.filter(([message]) => message === LISTENER_FAULT_WARNING), [
+        [ LISTENER_FAULT_WARNING, { error: listenerFault, event: "healthChange" } ], [ LISTENER_FAULT_WARNING, { error: listenerFault, event: "healthChange" } ]
+      ], "both health transitions the stall drives must report the listener's fault through the logger");
 
     } finally {
 

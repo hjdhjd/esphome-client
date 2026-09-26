@@ -278,7 +278,7 @@ describe("CameraApi.stream", () => {
     const iterator = cam.stream()[Symbol.asyncIterator]();
     const nextFrame = iterator.next();
 
-    // Yield so the stream subscription attaches before we emit.
+    // The view attached its listener when stream() returned; yielding a turn before emitting shows that frames arriving later still reach the parked next().
     await new Promise((resolve) => setImmediate(resolve));
 
     // A foreign camera's frame (different branded id, colliding name) must be skipped by the id tag.
@@ -295,22 +295,24 @@ describe("CameraApi.stream", () => {
     await iterator.return?.();
   });
 
-  test("starts the device stream on first iteration and stops it only when the consumer ends iteration", async () => {
+  test("starts the device stream when the view is requested and stops it only when the consumer ends iteration", async () => {
 
     const host = makeHost();
     const cam = new CameraApi(host, entityId("camera", "front"));
 
     const iterator = cam.stream()[Symbol.asyncIterator]();
+
+    // Edge: requesting the view sends exactly one CameraImageRequest with single=false, stream=true, before any iteration. Bytes hand-verified against api.proto's
+    // CameraImageRequest: field 1 (single) VARINT 0 -> tag 0x08 value 0x00; field 2 (stream) VARINT 1 -> tag 0x10 value 0x01.
+    assert.equal(host.sent.length, 1, "requesting a stream view must send exactly one request");
+    assert.deepEqual(host.sent[0]?.payload, Buffer.from([ 0x08, 0x00, 0x10, 0x01 ]), "the start request must encode single=false, stream=true");
+
     const nextFrame = iterator.next();
 
-    // Yield so the generator runs startStream() and the bus subscription attaches.
+    // Negative: iterating sends nothing further - the stop request (both flags clear) must NOT fire until the consumer stops iterating.
     await new Promise((resolve) => setImmediate(resolve));
 
-    // Edge: starting the stream sends exactly one CameraImageRequest with single=false, stream=true. Bytes hand-verified against api.proto's CameraImageRequest: field 1
-    // (single) VARINT 0 -> tag 0x08 value 0x00; field 2 (stream) VARINT 1 -> tag 0x10 value 0x01. Negative: the stop request (both flags clear) must NOT have fired yet -
-    // the generator's finally clears the stream flag only when the consumer stops iterating.
-    assert.equal(host.sent.length, 1, "starting a stream must send exactly one request");
-    assert.deepEqual(host.sent[0]?.payload, Buffer.from([ 0x08, 0x00, 0x10, 0x01 ]), "the start request must encode single=false, stream=true");
+    assert.equal(host.sent.length, 1, "iterating must not send another request");
 
     // Deliver one frame so the consumer completes a clean iteration before ending the stream.
     cam.acceptChunk(Buffer.from([0x42]), true, "front", 1);
@@ -319,11 +321,52 @@ describe("CameraApi.stream", () => {
 
     assert.deepEqual(frame.value, Buffer.from([0x42]), "the stream must yield this camera's frame");
 
-    // Ending iteration runs the generator's finally, which sends the both-flags-false stop request.
+    // Ending iteration runs the view's close hook, which sends the both-flags-false stop request.
     await iterator.return?.();
 
     assert.equal(host.sent.length, 2, "ending iteration must send exactly one additional (stop) request");
     assert.deepEqual(host.sent[1]?.payload, Buffer.from([ 0x08, 0x00, 0x10, 0x00 ]), "the stop request must encode single=false, stream=false (both flags clear)");
+  });
+});
+
+describe("CameraApi.stream: a never-iterated view stops eagerly", () => {
+
+  test("aborting the signal of a never-iterated view sends the stop request and detaches its listener, and a later return() sends nothing further", async () => {
+
+    const host = makeHost();
+    const cam = new CameraApi(host, entityId("camera", "front"));
+    const controller = new AbortController();
+    const listenersBefore = host.bus.listenerCount("camera");
+    const iterator = cam.stream({ signal: controller.signal })[Symbol.asyncIterator]();
+
+    assert.equal(host.sent.length, 1, "requesting the view sends the start request");
+    assert.equal(host.bus.listenerCount("camera"), listenersBefore + 1);
+
+    // The abort alone ends the view: no next() ever ran, yet the stop request goes out and the bus listener detaches.
+    controller.abort();
+
+    assert.equal(host.sent.length, 2, "the abort must stop a view that was never iterated");
+    assert.deepEqual(host.sent[1]?.payload, Buffer.from([ 0x08, 0x00, 0x10, 0x00 ]), "the stop request must encode single=false, stream=false (both flags clear)");
+    assert.equal(host.bus.listenerCount("camera"), listenersBefore);
+
+    // A later return() finds the view already closed, so it sends no second stop.
+    await iterator.return!();
+
+    assert.equal(host.sent.length, 2);
+  });
+
+  test("return() on a never-iterated view sends the stop request without a signal", async () => {
+
+    const host = makeHost();
+    const cam = new CameraApi(host, entityId("camera", "front"));
+    const listenersBefore = host.bus.listenerCount("camera");
+    const iterator = cam.stream()[Symbol.asyncIterator]();
+
+    await iterator.return!();
+
+    assert.equal(host.sent.length, 2, "return() must stop a view that was never iterated");
+    assert.deepEqual(host.sent[1]?.payload, Buffer.from([ 0x08, 0x00, 0x10, 0x00 ]), "the stop request must encode single=false, stream=false (both flags clear)");
+    assert.equal(host.bus.listenerCount("camera"), listenersBefore);
   });
 });
 

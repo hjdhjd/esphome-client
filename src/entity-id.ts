@@ -164,7 +164,7 @@ export function parseEntityId(value: string): Nullable<{ id: EntityId; type: Ent
   // the minter would accept is rejected here - an internal inconsistency, since the returned id is already lower-cased below.
   const type = value.slice(0, dash).toLowerCase();
 
-  if(!(type in ENTITY_SCHEMAS)) {
+  if(!Object.hasOwn(ENTITY_SCHEMAS, type)) {
 
     return null;
   }

@@ -122,6 +122,16 @@ describe("parseEntityId", () => {
     assert.equal(parseEntityId("notatype-x"), null, "unknown type prefixes must not parse");
   });
 
+  test("returns null for a prefix that names an Object.prototype member rather than an entity type", () => {
+
+    // Membership is an own-property check, so a key the registry inherits from Object.prototype is not an entity type. The prefix is lower-cased before the check, so
+    // the inherited keys that survive lower-casing are the ones that reach it.
+    for(const prefix of [ "__proto__", "constructor" ]) {
+
+      assert.equal(parseEntityId(prefix + "-x"), null, "the inherited key '" + prefix + "' must not parse as an entity type");
+    }
+  });
+
   test("returns null for an empty string", () => {
 
     assert.equal(parseEntityId(""), null, "empty input does not parse");

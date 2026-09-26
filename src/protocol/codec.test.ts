@@ -2,7 +2,7 @@
  *
  * codec.test.ts: Unit tests for the varint and protobuf encode/decode primitives in codec.ts.
  */
-import { MAX_VARINT_BYTES, decodeProtobuf, encodeProtoFields, encodeVarint, readVarint } from "./codec.ts";
+import { MAX_VARINT_BYTES, decodeProtobuf, encodeProtoFields, encodeVarint, readLengthDelimited, readVarint } from "./codec.ts";
 import { MalformedVarintError, TruncatedMessageError } from "../errors.ts";
 import { describe, test } from "node:test";
 import { Buffer } from "node:buffer";
@@ -145,6 +145,28 @@ describe("readVarint", () => {
   test("throws RangeError when offset is past the buffer end", () => {
 
     assert.throws(() => readVarint(Buffer.alloc(0), 0), { name: "RangeError" }, "reading past end of buffer must throw RangeError");
+  });
+});
+
+describe("readLengthDelimited", () => {
+
+  test("returns the body and the prefix-plus-body byte count when the declared length exactly fits the buffer", () => {
+
+    // A leading byte puts the length prefix at a non-zero offset; the prefix declares three bytes and exactly three follow, so the body ends on the buffer's last byte.
+    const buffer = Buffer.from([ 0xff, 0x03, 0x61, 0x62, 0x63 ]);
+    const [ body, bytesRead ] = readLengthDelimited(buffer, 1);
+
+    assert.deepEqual(body, Buffer.from([ 0x61, 0x62, 0x63 ]));
+    assert.equal(bytesRead, 4, "the count covers the one-byte prefix and the three-byte body");
+  });
+
+  test("throws TruncatedMessageError when the declared length runs past the buffer end", () => {
+
+    // The prefix declares five bytes but only two follow. A clamped two-byte slice would pass for a short body, so the reader must refuse it with the typed error.
+    const truncated = Buffer.from([ 0x05, 0x68, 0x69 ]);
+
+    assert.throws(() => readLengthDelimited(truncated, 0), TruncatedMessageError, "a declared length past the end must raise the typed truncation error");
+    assert.throws(() => readLengthDelimited(truncated, 0), { code: "TRUNCATED_MESSAGE", message: "LENGTH_DELIMITED field declares 5 bytes but only 2 remain." });
   });
 });
 

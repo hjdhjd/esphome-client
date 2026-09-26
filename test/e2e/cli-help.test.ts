@@ -7,6 +7,7 @@
  */
 import { describe, test } from "node:test";
 import { dirname, join } from "node:path";
+import { Buffer } from "node:buffer";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -142,6 +143,29 @@ describe("CLI help-path coverage (subprocess invocation against dist/util/espc-b
       assert.equal(status, 0);
       assert.match(stdout, /Replay scenario: basic-discovery/);
       assert.match(stdout, /synthesized/);
+    } finally {
+
+      rmSync(directory, { force: true, recursive: true });
+    }
+  });
+
+  test("a corrupt capture is framed as a user-facing failure without the internal-bug prefix", () => {
+
+    // The capture declares a three-byte payload but carries one byte, so the decode fails. A corrupt capture is the user's file to replace, so the bin prints the
+    // failure as its message alone with exit status 1, the framing it gives any CLI usage error.
+    const directory = mkdtempSync(join(tmpdir(), "espc-cli-replay-corrupt-"));
+    const binPath = join(directory, "corrupt.bin");
+
+    writeFileSync(binPath, Buffer.from([ 0x05, 0x03, 0x01 ]));
+    writeFileSync(join(directory, "corrupt.json"), JSON.stringify({ scenario: "corrupt", schemaVersion: "v1.0.0", source: "synthesized" }));
+
+    try {
+
+      const { status, stderr } = runCli([ "replay", binPath ]);
+
+      assert.equal(status, 1, "a user-facing failure exits 1");
+      assert.match(stderr, /Capture is truncated or corrupt/, "the capture failure's message must be surfaced");
+      assert.doesNotMatch(stderr, /Fatal:/, "a corrupt capture must not carry the internal-bug prefix");
     } finally {
 
       rmSync(directory, { force: true, recursive: true });

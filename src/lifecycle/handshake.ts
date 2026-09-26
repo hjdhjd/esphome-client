@@ -7,12 +7,13 @@ import { API_FEATURE_VERSIONS, deviceSupports } from "../api-feature-versions.ts
 import type { ClientMetrics, EspHomeLogging, NoiseServerHello, Nullable, PskResolver } from "../types.ts";
 import {
   EncryptionKeyInvalidError, EncryptionKeyMissingError, EncryptionRequiredError, NegotiationFailedError,
-  NoiseHandshakeError, NoiseHandshakeTimeoutError, PeerClosedDuringNoiseError, PlaintextHandshakeError, ProtocolError
+  NoiseHandshakeError, NoiseHandshakeTimeoutError, PlaintextHandshakeError, ProtocolError
 } from "../errors.ts";
 import { MessageType, WireType } from "../protocol/index.ts";
 import { decodeProtobuf, encodeProtoFields } from "../protocol/codec.ts";
 import { extractNumberField, extractStringField } from "../protocol/field-extractors.ts";
 import { Buffer } from "node:buffer";
+import type { ClockFn } from "../heartbeat.ts";
 import type { FieldValue } from "../protocol/codec.ts";
 import type { HandshakeState } from "../crypto-noise.ts";
 import type { MessageReceiver } from "../message-receiver.ts";
@@ -51,13 +52,15 @@ export interface ClientApiVersion {
 
 /**
  * Inputs required to run the noise handshake. The `resolvePsk` resolver supplies the base64 key for the device once its server hello has been read; when null, callers
- * must skip noise entirely - the helper rejects with {@link EncryptionKeyMissingError} if invoked without one.
+ * must skip noise entirely - the helper rejects with {@link EncryptionKeyMissingError} if invoked without one. The handshake's duration metric reads the injected
+ * `now` clock, the same clock as every other elapsed-time measurement the client makes.
  */
 export interface NoiseHandshakeInput {
 
   readonly expectedServerName: Nullable<string>;
   readonly log: EspHomeLogging;
   readonly metrics: ClientMetrics | undefined;
+  readonly now: ClockFn;
   readonly resolvePsk: Nullable<PskResolver>;
   readonly signal: AbortSignal;
   readonly transport: TransportLike;
@@ -140,7 +143,7 @@ const KEY_REJECTED_REASON = "Handshake MAC failure";
  */
 export async function performNoiseHandshake(input: NoiseHandshakeInput): Promise<void> {
 
-  const { expectedServerName, log, metrics, resolvePsk, signal, transport } = input;
+  const { expectedServerName, log, metrics, now, resolvePsk, signal, transport } = input;
 
   if(!resolvePsk) {
 
@@ -149,7 +152,7 @@ export async function performNoiseHandshake(input: NoiseHandshakeInput): Promise
 
   transport.enterNoiseHandshake();
 
-  const startedAt = Date.now();
+  const startedAt = now();
 
   // The handshake state exists only once the key is resolved, after the server hello. The catch below tears down whatever state was built, if any.
   let noiseClient: Nullable<HandshakeState> = null;
@@ -261,7 +264,7 @@ export async function performNoiseHandshake(input: NoiseHandshakeInput): Promise
 
     transport.installCipher({ receiveCipher: noiseClient.receiveCipher, sendCipher: noiseClient.sendCipher });
 
-    metrics?.timing("noise.handshake.duration_ms", Date.now() - startedAt);
+    metrics?.timing("noise.handshake.duration_ms", now() - startedAt);
     log.debug("Noise handshake complete, encryption enabled.");
 
     // The cipher pair is now owned by the transport. Wipe the spent handshake secrets (PSK, chaining key, handshake hash, ephemeral) WITHOUT touching the live ciphers -
@@ -466,7 +469,8 @@ export async function performDiscovery(input: DiscoveryInput): Promise<void> {
   await transport.send(MessageType.DEVICE_INFO_REQUEST, Buffer.alloc(0));
 
   // Wait for the discovery sequence to terminate. We accept any list-entities response, the device info, or the done sentinel; everything else flows to interleave
-  // handlers (PING_REQUEST replies, etc.) or the per-type buffer.
+  // handlers (PING_REQUEST replies, etc.) or the receiver's buffer. The receiver hands accepted messages over in arrival order, so the done sentinel never overtakes an
+  // entity response that arrived before it.
   const accepted: number[] = [ MessageType.DEVICE_INFO_RESPONSE, MessageType.LIST_ENTITIES_DONE_RESPONSE, ...listEntitiesMessageTypes ];
 
   const nextMessage = async (): Promise<Awaited<ReturnType<typeof receiver.waitFor>>> => receiver.waitFor(accepted, { signal });
@@ -538,6 +542,3 @@ function decodeProtobufWithLog(payload: Buffer, maxFieldsPerMessage: number, log
 
   return decodeProtobuf(payload, { maxFieldsPerMessage, warn: (m): void => { log.warn(m); } });
 }
-
-// Re-export PeerClosedDuringNoiseError so callers wiring the handshake module see the full set of typed connect-flow errors at one import site.
-export { PeerClosedDuringNoiseError };

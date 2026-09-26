@@ -223,6 +223,15 @@ describe("encodeEntityCommand", () => {
     }
   });
 
+  test("refuses an alias that names an Object.prototype member with enum_value_unknown naming the alias", () => {
+
+    // Alias membership is an own-property check, so an inherited key such as `constructor` is an unknown alias like any other rather than a mapping entry.
+    const climateId = entityId("climate", "thermostat");
+    const result = encodeEntityCommand({ deviceId: undefined, id: climateId, key: 3, options: { mode: "constructor" }, resolveSchema: defaultResolveSchema });
+
+    assert.deepEqual(result, { detail: "field 'mode' received unknown enum value 'constructor'", ok: false, reason: "enum_value_unknown" });
+  });
+
   test("refuses an out-of-range fixed32 value with value_out_of_range instead of throwing (datetime epochSeconds)", () => {
 
     // The fixed32 writer throws a RangeError outside the uint32 range, which would escape the fire-and-forget command path. The encoder returns the refusal instead.

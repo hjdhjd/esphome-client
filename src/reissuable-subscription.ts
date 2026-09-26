@@ -7,9 +7,9 @@
  * Single source of truth for the reset/reissue subscription-continuity mechanic the streaming sub-APIs need.
  *
  * @remarks A {@link ReissuableSubscription} generalizes {@link LogSubscriptionManager}'s two-lifetime split into a single primitive that every streaming sub-API
- * shares instead of each hand-rolling its own. A naive design using one shared refcount integer, incremented outside the async generator and zeroed by `reset()`,
- * would leave a consumer iterator parked in `for await` across a reconnect permanently deaf, because the `releaseSubscription` "count still > 0" guard would swallow
- * the survivor's post-reconnect unsubscribe. This primitive avoids that whole class of bug by keeping the two state lifetimes in physically separate stores: a
+ * shares instead of each hand-rolling its own. A naive design using one shared refcount integer, incremented when a view opens and zeroed by `reset()`, would leave a
+ * consumer iterator parked in `for await` across a reconnect permanently deaf, because a "count still > 0" guard on the view's release would swallow the survivor's
+ * post-reconnect unsubscribe. This primitive avoids that whole class of bug by keeping the two state lifetimes in physically separate stores: a
  * reconnect-surviving subscriber ledger and a connection-scoped wire cache.
  *
  * Two state lifetimes, two backing maps:
@@ -49,7 +49,7 @@
  * });
  *
  * const handle = logs.acquire(GLOBAL, LogLevel.DEBUG);
- * // ... later, on the iterator's finally block ...
+ * // ... later, from the view's close hook ...
  * logs.release(handle);
  * ```
  *
@@ -196,7 +196,7 @@ export class ReissuableSubscription<K, V, D> {
 
   /**
    * Register a fresh subscriber for `key` contributing `intent`, then recompute the key's desired wire-state. The returned symbol is the consumer's release token - hold
-   * it and pass it to {@link release} when the subscriber goes away (typically from an async generator's `finally` block).
+   * it and pass it to {@link release} when the subscriber goes away (typically from the close hook of the bus stream that backs the consumer's view).
    *
    * @remarks The fresh symbol is minted per call so register / release pair by identity. The recompute runs synchronously here so the cache reflects the new aggregate
    * immediately; if the new subscriber changes the key's reduced desired-state, `onChange(key, desired)` fires.

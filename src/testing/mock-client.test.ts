@@ -3,7 +3,7 @@
  * mock-client.test.ts: Helper-coverage-parity tests for the MockClient consumer-test double.
  */
 import { ConfigurationError, ConnectionError } from "../errors.ts";
-import { InfraredCapabilityFlags, LogLevel } from "../api-constants.ts";
+import { InfraredCapabilityFlags, LogLevel, RadioFrequencyCapabilityFlags } from "../api-constants.ts";
 import { describe, test } from "node:test";
 import { mockDeviceInfo, mockEntity, mockHealth, mockStateMessage } from "./factories.ts";
 import { Buffer } from "node:buffer";
@@ -59,6 +59,7 @@ describe("MockClient.command recording", () => {
     const client = new MockClient();
     const id = entityId("light", "kitchen");
 
+    client.populateEntities([mockEntity("light", "kitchen")]);
     client.command(id, { state: true });
     client.command(id, { brightness: 0.5 });
 
@@ -67,12 +68,33 @@ describe("MockClient.command recording", () => {
     assert.deepEqual(client.commands[1]?.options, { brightness: 0.5 });
   });
 
+  test("drops a command for an id the test never registered and records nothing, as the real client does", () => {
+
+    const client = new MockClient();
+    const kitchen = entityId("light", "kitchen");
+
+    client.populateEntities([mockEntity("light", "kitchen")]);
+    client.command(entityId("light", "cellar"), { state: true });
+
+    assert.equal(client.commands.length, 0, "a command for an unregistered id must not reach the command log");
+
+    // The registered id still records, so the drop is the registration rule and not a blanket refusal.
+    client.command(kitchen, { state: true });
+
+    assert.equal(client.commands.length, 1);
+    assert.equal(client.commands[0]?.id, kitchen);
+  });
+
   test("clearCommands empties the recorded log", () => {
 
     const client = new MockClient();
     const id = entityId("switch", "front");
 
+    client.populateEntities([mockEntity("switch", "front")]);
     client.command(id, { state: true });
+
+    assert.equal(client.commands.length, 1);
+
     client.clearCommands();
 
     assert.equal(client.commands.length, 0);
@@ -83,6 +105,7 @@ describe("MockClient.command recording", () => {
     const client = new MockClient();
     const id = entityId("switch", "x");
 
+    client.populateEntities([mockEntity("switch", "x")]);
     client.command(id, { state: true });
 
     const snapshot = client.commands;
@@ -102,6 +125,8 @@ describe("MockClient.transmitRawTimings recording", () => {
     const blaster = entityId("infrared", "blaster");
     const remote = entityId("radio_frequency", "remote");
 
+    client.populateEntities([ mockEntity("infrared", "blaster", { capabilities: InfraredCapabilityFlags.TRANSMITTER }),
+      mockEntity("radio_frequency", "remote", { capabilities: RadioFrequencyCapabilityFlags.TRANSMITTER }) ]);
     client.transmitRawTimings(blaster, { carrierFrequency: 38000, repeatCount: 1, timings: [ 9000, -4500 ] });
     client.transmitRawTimings(remote, { carrierFrequency: 433920000, repeatCount: 3, timings: [ 350, -1050 ] });
 
@@ -131,6 +156,18 @@ describe("MockClient.transmitRawTimings recording", () => {
 
     assert.equal(client.commands.length, 1);
     assert.equal(client.commands[0]?.id, blaster);
+  });
+
+  test("refuses an id the test never registered with ENTITY_NOT_FOUND and records nothing, as the real client does", () => {
+
+    const client = new MockClient();
+    const options = { carrierFrequency: 38000, repeatCount: 1, timings: [ 9000, -4500 ] };
+
+    assert.throws(() => client.transmitRawTimings(entityId("infrared", "blaster"), options), (err: unknown): boolean => {
+
+      return (err instanceof ConnectionError) && (err.code === "ENTITY_NOT_FOUND") && (err.message === "No entity is registered for infrared-blaster.");
+    });
+    assert.equal(client.commands.length, 0, "a refused transmit must not reach the command log");
   });
 });
 
@@ -705,6 +742,30 @@ describe("MockClient.telemetryForId", () => {
     assert.equal(value?.state, true);
 
     await iter.return?.();
+  });
+
+  test("a never-iterated view detaches its bus listener on return() and on an abort of its signal", async () => {
+
+    const client = new MockClient();
+    const controller = new AbortController();
+
+    client.populateEntities([mockEntity("light", "kitchen")]);
+
+    // The bus is private; the listener count on the per-type channel is the observable for whether the view still holds its stream.
+    const bus = (client as unknown as { bus: { listenerCount: (event: string) => number } }).bus;
+    const returned = client.telemetryForId(entityId("light", "kitchen"))[Symbol.asyncIterator]();
+
+    client.telemetryForId(entityId("light", "kitchen"), { signal: controller.signal });
+
+    assert.equal(bus.listenerCount("light"), 2, "each view attaches its listener when it is requested");
+
+    await returned.return!();
+
+    assert.equal(bus.listenerCount("light"), 1, "return() must detach the listener even though the view was never iterated");
+
+    controller.abort();
+
+    assert.equal(bus.listenerCount("light"), 0, "the abort must detach the listener even though the view was never iterated");
   });
 });
 

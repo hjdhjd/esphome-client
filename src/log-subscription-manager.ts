@@ -30,9 +30,9 @@
  * chokepoint; each still has a dedicated negative test in `log-subscription-manager.test.ts`.
  *
  * Backpressure lives in the {@link EventBus} - this module does not duplicate the queue / `dropOldest` / `dropNewest` / `throw` policy.
- * {@link LogSubscriptionManager.subscribe} returns a thin iterator over `bus.stream("log", options)` plus a per-iterator level filter; the EventBus
- * handles the high-water mark, the consumer signal's effect on the stream, and the dispose-on-end cleanup. The manager's responsibility is purely subscription + wire
- * coordination, which is why its own listener on that signal does one thing: release the view's subscriber.
+ * {@link LogSubscriptionManager.subscribe} returns the `bus.stream("log", ...)` iterator itself, handing the bus a per-view level filter and the view's release; the
+ * EventBus handles the high-water mark, the consumer signal's effect on the stream, and running the release once on every terminal path. The manager's
+ * responsibility is purely subscription + wire coordination.
  *
  * @module log-subscription-manager
  */
@@ -247,18 +247,18 @@ export class LogSubscriptionManager implements SubscriptionLifecycle {
    * disposing the highest iterator downgrades back to the next-highest level held by any remaining subscriber (iterator or pin).
    *
    * @remarks Each call returns an independent iterator with its own filter level; the iterator acquires its subscriber synchronously at call time (not lazily on first
-   * iteration) so the device-side aggregate reflects the new level immediately, matching the {@link reissueOnReconnect} contract for in-flight iterators. The release
-   * is attached eagerly rather than to iteration: an `abort` listener on the consumer `signal` (run at once when the signal is already aborted), the iterator's own
-   * `return()` and `throw()` (reached through `[Symbol.asyncIterator]()` and on consumer `break` / `return` / `throw` from a `for await` loop), and the underlying
-   * EventBus stream ending or failing. A view that is never iterated therefore still gives its level back when its signal aborts or its `return()` runs, and whichever
-   * path arrives first releases the subscriber exactly once.
+   * iteration) so the device-side aggregate reflects the new level immediately, matching the {@link reissueOnReconnect} contract for in-flight iterators. The view is
+   * the EventBus stream itself, and the release is its close hook, which the bus runs exactly once on the first terminal path: the consumer `signal` aborting (at once
+   * when it is already aborted), the iterator's `return()` or `throw()` (including a `break` out of `for await`), a backpressure failure, or the bus ending the stream.
+   * The bus attaches that hook when this method returns, so a view that is never iterated still gives its level back when its signal aborts or its `return()` runs.
+   * The single-awaiter contract of {@link EventBus.stream} applies: drive one view from one loop.
    *
    * Per-message filtering is intentional: when iterator A is at INFO and iterator B is at DEBUG, the device-side level is DEBUG, so the bus emits every DEBUG-and-above
-   * message. Iterator A's wrapper filters out anything strictly more verbose than INFO so consumers asking for INFO see only INFO. The wire-side level filter and the
-   * client-side per-iterator filter compose correctly.
+   * message. Iterator A's selector skips anything strictly more verbose than INFO so consumers asking for INFO see only INFO. The wire-side level filter and the
+   * client-side per-iterator filter compose correctly, and a skipped message never occupies a slot in the view's queue.
    *
    * @param level - The minimum log level the iterator wants to see. Higher values are more verbose; messages with `event.level <= level` are yielded.
-   * @param options - Optional backpressure policy and cancellation signal forwarded to the underlying `bus.stream("log", options)`.
+   * @param options - Optional backpressure policy and cancellation signal forwarded to the underlying `bus.stream("log", ...)`.
    * @returns An `AsyncIterable<LogEventData>` that yields events until the consumer aborts, returns, or throws, or the underlying EventBus stream ends. A reconnect
    *   does not end it: the subscriber survives in the ledger and {@link reissueOnReconnect} re-arms its level on the new connection.
    */
@@ -267,103 +267,17 @@ export class LogSubscriptionManager implements SubscriptionLifecycle {
     // Acquire a subscriber synchronously at call time so concurrent attaches are race-free. The first acquire on LOG_CHANNEL drives the reduction from EMPTY to the
     // level, firing the wire-side SUBSCRIBE; an acquire at or below the existing aggregate is silent (the reduction is unchanged, so onChange is suppressed).
     const handle = this.logSubscription.acquire(LOG_CHANNEL, level);
-    const events = this.host.bus.stream("log", options)[Symbol.asyncIterator]();
-    const signal = options?.signal;
-    let finished = false;
-    let released = false;
 
-    // The release is one `this`-capturing arrow shared by every terminal path - the signal's abort listener, `return()`, `throw()`, and the stream ending - and the
-    // `released` flag turns every call after the first into a no-op, so the ledger sees one release for its one acquire. The primitive pairs release to acquire by symbol
-    // identity, so the last release drives the reduction back to EMPTY (a silent no-op for logs) and a post-reconnect release is correct as-is - the ledger survived the
-    // reconnect and the wire cache was re-armed by reissueOnReconnect. Removing the abort listener keeps a long-lived consumer signal from retaining a finished view.
-    const release = (): void => {
+    // The bus runs the close hook exactly once, so the hook releases the handle directly and the ledger sees one release for its one acquire. The primitive pairs
+    // release to acquire by symbol identity, so the last release drives the reduction back to EMPTY (a silent no-op for logs) and a post-reconnect release is correct
+    // as-is - the ledger survived the reconnect and the wire cache was re-armed by reissueOnReconnect. The selector applies the per-view level filter: the device fires
+    // at the aggregate maximum across every subscriber, so a view asking for INFO skips the DEBUG messages another view (or the imperative pin) raised the device to.
+    return this.host.bus.stream("log", {
 
-      if(released) {
-
-        return;
-      }
-
-      released = true;
-      signal?.removeEventListener("abort", release);
-      this.logSubscription.release(handle);
-    };
-
-    // Ending the view is separate from releasing it: an aborted signal releases at once, yet the next `next()` must still surface the abort reason from the stream.
-    // Once ended, `next()` resolves done, matching an async generator that has returned or thrown.
-    const finish = (): IteratorResult<LogEventData> => {
-
-      finished = true;
-      release();
-
-      return { done: true, value: undefined };
-    };
-
-    const view: AsyncIterableIterator<LogEventData> = {
-
-      next: async (): Promise<IteratorResult<LogEventData>> => {
-
-        if(finished) {
-
-          return { done: true, value: undefined };
-        }
-
-        try {
-
-          let result = await events.next();
-
-          // The wire-side level is the aggregate maximum across every open subscriber. Per-iterator filtering happens here so consumers asking for INFO do not see
-          // DEBUG messages emitted because a separate iterator (or the imperative pin) is also subscribed at DEBUG.
-          while(!result.done) {
-
-            if(result.value.level <= level) {
-
-              return result;
-            }
-
-            // eslint-disable-next-line no-await-in-loop -- each pull awaits the next bus event, and the level filter decides whether to yield it or pull again.
-            result = await events.next();
-          }
-
-          return finish();
-
-        } catch(error) {
-
-          finish();
-
-          throw error;
-        }
-      },
-
-      return: async (): Promise<IteratorResult<LogEventData>> => {
-
-        const result = finish();
-
-        await events.return?.();
-
-        return result;
-      },
-
-      throw: async (error?: unknown): Promise<IteratorResult<LogEventData>> => {
-
-        finish();
-        await events.return?.();
-
-        throw error;
-      },
-
-      [Symbol.asyncIterator]: (): AsyncIterableIterator<LogEventData> => view
-    };
-
-    // Attach the release to the consumer signal eagerly, the way the EventBus stream attaches its own abort listener, so a view abandoned before its first `next()`
-    // still gives its level back when the signal aborts. An already-aborted signal never dispatches `abort` again, so we release at once.
-    signal?.addEventListener("abort", release, { once: true });
-
-    if(signal?.aborted) {
-
-      release();
-    }
-
-    return view;
+      ...options,
+      onClose: (): void => { this.logSubscription.release(handle); },
+      select: (event: LogEventData): LogEventData | undefined => (event.level <= level) ? event : undefined
+    });
   }
 
   /**

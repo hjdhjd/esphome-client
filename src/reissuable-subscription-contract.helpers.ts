@@ -68,7 +68,7 @@ export type ContractFrameKind = "other" | "subscribe" | "unsubscribe";
  */
 export interface ContractSubscription {
 
-  /** Tear down the subscriber, triggering the sub-API's release path (the async generator's `finally` block in production). */
+  /** Tear down the subscriber, triggering the sub-API's release path (the close hook of the view's bus stream in production). */
   release(): Promise<void> | void;
 }
 
@@ -105,10 +105,10 @@ export interface ReissuableSubscriptionContractOptions<A> {
 
   /**
    * Open a subscription on the sub-API and return a handle whose {@link ContractSubscription.release} tears it down. The harness drives the subscribe / reconnect /
-   * dispose lifecycle through this handle WITHOUT iterating the underlying stream - so the production async-generator `finally` cleanup must run from `release()`, not
-   * from stream exhaustion. Every implementer releases the same way: it opens the iterator under an `AbortController` and starts a single `next()` so the generator
-   * parks inside its `try` / `finally`; `release()` aborts the controller, the parked `next()` rejects, and the generator's `finally` runs the subscription release.
-   * `release()` then awaits the parked promise, swallowing the expected abort rejection, so that cleanup has run before the harness asserts on the wire effects.
+   * dispose lifecycle through this handle WITHOUT iterating the underlying stream - so the production view's release must run from `release()`, not from stream
+   * exhaustion. Every implementer releases the same way: it opens the iterator under an `AbortController` and parks a single `next()` on it; `release()` aborts the
+   * controller, which runs the view's close hook (the subscription release) and rejects the parked `next()`. `release()` then awaits the parked promise, swallowing the
+   * expected abort rejection, before the harness asserts on the wire effects.
    *
    * @param api - The sub-API instance the harness constructed via {@link setup}.
    * @returns A handle whose `release` disposes the subscriber.

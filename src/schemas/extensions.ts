@@ -83,7 +83,7 @@ export function buildSchemasTable(base: typeof ENTITY_SCHEMAS, extras: ExtraSche
 
   for(const key of Object.keys(extras)) {
 
-    if(key in base) {
+    if(Object.hasOwn(base, key)) {
 
       throw new ConfigurationError("extraSchemas key '" + key + "' overrides a built-in entity type. Pick a distinct name; built-in types are the floor.",
         "EXTRA_SCHEMA_OVERRIDES_BUILTIN");
@@ -190,7 +190,8 @@ export function findSchemaByListEntitiesMessageTypeIn(table: SchemasTable, messa
  */
 export function getSchemaIn(table: SchemasTable, type: string): EntitySchema | undefined {
 
-  return table[type];
+  // The table is a plain object, so an inherited key such as "constructor" would resolve to a truthy prototype member without the own-property check.
+  return Object.hasOwn(table, type) ? table[type] : undefined;
 }
 
 /**

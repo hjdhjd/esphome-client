@@ -323,7 +323,7 @@ describe("ZWaveProxyApi.frames refcounted subscription", () => {
     assert.deepEqual(a.value, first);
     assert.deepEqual(b.value, second);
 
-    // Detach the iterator. The generator's finally should send UNSUBSCRIBE.
+    // Detach the iterator. The view's close hook releases the last subscriber, which sends UNSUBSCRIBE.
     await iter.return?.();
 
     assert.equal(handle.sent.length, 2);
@@ -383,6 +383,46 @@ describe("ZWaveProxyApi.frames refcounted subscription", () => {
     assert.equal(api.subscriberCount(), 0);
     assert.equal(handle.sent.length, 2);
     assert.equal(decodeFields(handle.sent[1]!.payload)[1]?.[0], ZWaveProxyRequestType.UNSUBSCRIBE);
+  });
+});
+
+describe("ZWaveProxyApi.frames: a never-iterated view releases eagerly", () => {
+
+  test("aborting the signal of a never-iterated view releases its subscriber and sends UNSUBSCRIBE, and a later return() sends nothing further", async () => {
+
+    const handle = makeHost();
+    const api = new ZWaveProxyApi(handle.host);
+    const controller = new AbortController();
+    const iter = api.frames({ signal: controller.signal })[Symbol.asyncIterator]();
+
+    assert.equal(api.subscriberCount(), 1);
+    assert.equal(handle.bus.listenerCount("zwaveFrame"), 1);
+
+    // The abort alone releases the view: no next() ever ran, yet the subscriber leaves, the last release sends UNSUBSCRIBE, and the bus listener detaches.
+    controller.abort();
+
+    assert.equal(api.subscriberCount(), 0, "the abort must release a view that was never iterated");
+    assert.equal(handle.bus.listenerCount("zwaveFrame"), 0);
+    assert.equal(handle.sent.length, 2);
+    assert.equal(decodeFields(handle.sent[1]!.payload)[1]?.[0], ZWaveProxyRequestType.UNSUBSCRIBE);
+
+    // A later return() finds the view already closed, so it releases nothing and sends nothing further.
+    await iter.return!();
+
+    assert.equal(handle.sent.length, 2);
+  });
+
+  test("return() on a never-iterated view releases its subscriber without a signal", async () => {
+
+    const handle = makeHost();
+    const api = new ZWaveProxyApi(handle.host);
+    const iter = api.frames()[Symbol.asyncIterator]();
+
+    await iter.return!();
+
+    assert.equal(api.subscriberCount(), 0, "return() must release a view that was never iterated");
+    assert.equal(handle.bus.listenerCount("zwaveFrame"), 0);
+    assert.equal(decodeFields(handle.sent.at(-1)!.payload)[1]?.[0], ZWaveProxyRequestType.UNSUBSCRIBE);
   });
 });
 
@@ -671,9 +711,9 @@ runReissuableSubscriptionContract<ZWaveProxyApi>({
   label: "ZWaveProxyApi.frames",
   openSubscription: (api: ZWaveProxyApi) => {
 
-    // Open the iterator under an AbortController and start it so it enters its try/finally and parks in `for await` - exactly modeling a consumer parked across a
-    // reconnect. release() aborts the controller, which rejects the parked inner stream next, unwinds the `for await`, and runs the cleanup finally (the subscription
-    // release). We swallow the parked promise's abort rejection so it does not surface as an unhandled rejection.
+    // Open the iterator under an AbortController and park one next() on it - exactly modeling a consumer parked in `for await` across a reconnect. release() aborts
+    // the controller, which rejects the parked next() and runs the view's close hook (the subscription release). We swallow the parked promise's abort rejection so it
+    // does not surface as an unhandled rejection.
     const controller = new AbortController();
     const iter = api.frames({ signal: controller.signal })[Symbol.asyncIterator]();
     const parked = iter.next();
@@ -685,8 +725,8 @@ runReissuableSubscriptionContract<ZWaveProxyApi>({
 
       controller.abort();
 
-      // Await the parked next so the generator's finally (the subscription release) has run before the harness asserts on the wire effects. The rejection here
-      // is the expected abort, not a failure.
+      // Await the parked next so the abort has settled it before the harness asserts on the wire effects; the close hook itself runs synchronously inside abort().
+      // The rejection here is the expected abort, not a failure.
       await parked.catch((): void => { /* Expected abort rejection, not a failure. */ });
     } };
   },

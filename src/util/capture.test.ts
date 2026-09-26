@@ -8,8 +8,9 @@
  * RecordingTransport tee (it copies every inbound message while delegating), and PII scrubbing. The end-to-end record-through-replay drive lives in
  * test/e2e/capture.test.ts, where the simulator scenarios provide validated wire fixtures.
  */
-import { RecordingTransport, decodeCaptureFrames, encodeCaptureFrames, scrubDeviceInfo } from "./capture.ts";
+import { RecordingTransport, decodeCaptureFrames, encodeCaptureFrames, replayCaptureFrames, scrubDeviceInfo } from "./capture.ts";
 import { describe, test } from "node:test";
+import { CliError } from "./cli-error.ts";
 import type { DeviceInfo } from "../esphome-client.ts";
 import type { InboundMessage } from "../transport.ts";
 import { MockTransport } from "../testing/mock-transport.ts";
@@ -53,6 +54,9 @@ describe("capture frame codec", () => {
     const truncated = Buffer.concat([encodeCaptureFrames([{ payload: Buffer.from([ 1, 2, 3 ]), type: 5 }]).subarray(0, 3)]);
 
     assert.throws(() => decodeCaptureFrames(truncated), /truncated or corrupt/);
+
+    // A corrupt capture is the user's file to replace, so the failure is the CLI's user-facing error class rather than an internal-bug throw.
+    assert.throws(() => decodeCaptureFrames(truncated), CliError);
   });
 
   test("a capture truncated mid-varint throws the same unified error (via Error.cause)", () => {
@@ -61,6 +65,19 @@ describe("capture frame codec", () => {
     assert.throws(() => decodeCaptureFrames(Buffer.from([0xFF])), (error: unknown): boolean => {
 
       return (error instanceof Error) && error.message.includes("truncated or corrupt") && (error.cause !== undefined);
+    });
+    assert.throws(() => decodeCaptureFrames(Buffer.from([0xFF])), CliError);
+  });
+});
+
+describe("capture replay refusal", () => {
+
+  test("a capture with frames but no LIST_ENTITIES_DONE_RESPONSE rejects with a CliError before any connect", async () => {
+
+    // A capture that cannot drive discovery is the user's to re-record, so the refusal is the CLI's user-facing error class and names the missing frame.
+    await assert.rejects(replayCaptureFrames([{ payload: Buffer.from([1]), type: 2 }]), (error: unknown): boolean => {
+
+      return (error instanceof CliError) && error.message.includes("no LIST_ENTITIES_DONE_RESPONSE frame");
     });
   });
 });

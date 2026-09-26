@@ -209,13 +209,39 @@ export class CipherState {
   }
 
   /**
-   * Initializes the cipher state with a new key, resetting the nonce counter to zero.
+   * Initializes the cipher state with a new key, resetting the nonce counter to zero. The cipher state holds the key buffer by reference and zero-fills it when a later
+   * key replaces it or the state is destroyed, so each cipher state needs a key buffer of its own.
+   *
+   * @param key - The 32-byte cipher key, or `null` to clear the key and return the cipher state to passthrough.
+   * @throws {NoiseHandshakeError} If a non-null key is not exactly 32 bytes (code `INVALID_PSK_LENGTH`). A refused key leaves the cipher state unchanged.
    */
   public InitializeKey(key: Nullable<Buffer>): void {
 
-    this.k = key;
+    // Every key this module installs itself is an HKDF output or a rekey slice of exactly 32 bytes, so this check protects a consumer driving a CipherState directly,
+    // who would otherwise meet Node's raw RangeError at the first encrypt. We validate before installing so a refused key leaves the current key and nonce in place.
+    if((key !== null) && (key.length !== NOISE_PSK_LEN)) {
+
+      throw new NoiseHandshakeError("Cipher key must be exactly " + String(NOISE_PSK_LEN) + " bytes, got " + String(key.length) + ".", "INVALID_PSK_LENGTH");
+    }
+
+    this.installKey(key);
     this.n = 0n;
     this.log?.debug("CipherState: Key initialized, hasKey=" + String(key !== null) + ".");
+  }
+
+  /**
+   * Installs a key, zero-filling the key it replaces so no earlier key material lingers in a reachable buffer. {@link InitializeKey}, {@link Rekey}, and
+   * {@link destroy} all replace the key through this method, and each manages the nonce counter itself. Re-installing the buffer already held skips the wipe, because
+   * wiping it would zero the very key being installed.
+   */
+  private installKey(key: Nullable<Buffer>): void {
+
+    if(this.k && (this.k !== key)) {
+
+      this.k.fill(0);
+    }
+
+    this.k = key;
   }
 
   /**
@@ -332,7 +358,9 @@ export class CipherState {
   }
 
   /**
-   * Rekeys the cipher state by encrypting zeros with the maximum nonce value, providing forward secrecy.
+   * Rekeys the cipher state as Noise Protocol Framework §5.1 defines it: the key becomes the first 32 bytes of 32 zero bytes encrypted under the reserved maximum
+   * nonce, and the nonce counter keeps its current value, so this cipher state stays in step with any peer that follows the specification. The replaced key is
+   * zero-filled, so exposing the new key later does not expose traffic protected by the key it replaced. A no-op when no key is set.
    */
   public Rekey(): void {
 
@@ -352,8 +380,9 @@ export class CipherState {
     cipher.setAAD(EMPTY_BUFFER, { plaintextLength: zeros.length });
     const ct = Buffer.concat([ cipher.update(zeros), cipher.final() ]);
 
-    // The first 32 bytes of the ciphertext become our new key.
-    this.InitializeKey(ct.subarray(0, 32));
+    // The first 32 bytes of the ciphertext become our new key. We install it directly rather than through InitializeKey, because §5.1 replaces the key alone and a
+    // reset nonce counter would desynchronize us from a specification-conformant peer.
+    this.installKey(ct.subarray(0, 32));
     this.log?.debug("CipherState: Rekey operation completed successfully.");
   }
 
@@ -363,12 +392,7 @@ export class CipherState {
    */
   public destroy(): void {
 
-    if(this.k) {
-
-      this.k.fill(0);
-      this.k = null;
-    }
-
+    this.installKey(null);
     this.nonce.fill(0);
     this.n = 0n;
   }

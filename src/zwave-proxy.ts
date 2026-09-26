@@ -215,6 +215,9 @@ export class ZWaveProxyApi implements SubscriptionLifecycle {
    * Each yielded `Buffer` is one frame as received from the device's Z-Wave radio Serial API; this library does not validate, parse, or modify the contents. Consumers
    * route the stream into a Z-Wave-aware library (e.g., `zwave-js`) for protocol-level handling.
    *
+   * The view releases its subscriber once, on whichever ends it first: the signal aborting, the iterator's `return()` or `throw()` (including a `break` out of
+   * `for await`), or the bus ending the stream. A view abandoned before it is ever iterated still releases when its signal aborts or its `return()` runs.
+   *
    * Usage:
    *
    * {@includeCode ./examples/showcase.ts#zwave-byte-pipe}
@@ -228,30 +231,15 @@ export class ZWaveProxyApi implements SubscriptionLifecycle {
     // Acquire a subscriber synchronously at call time so concurrent attaches are race-free. The first acquire on FRAME_CHANNEL drives the reduction from EMPTY to `true`,
     // which fires the wire-side SUBSCRIBE; subsequent acquires share the same wire-side subscription (the reduction is already `true`, so onChange is suppressed).
     const handle = this.frameSubscription.acquire(FRAME_CHANNEL, true);
-    const stream = this.host.bus.stream("zwaveFrame", options);
 
-    // Cleanup as a `this`-capturing arrow so the IIFE generator below doesn't need a `this` alias. The primitive pairs release to acquire by symbol identity, so the
-    // last release drives the reduction back to EMPTY (firing UNSUBSCRIBE) and a post-reconnect dispose is correct without any "still nonzero" guard - the ledger
-    // survived the reconnect and the wire cache was re-armed by reissueOnReconnect.
-    const releaseSubscription = (): void => {
+    // The bus runs the close hook exactly once, on the stream's first terminal path, so the hook releases the handle directly. The primitive pairs release to acquire
+    // by symbol identity, so the last release drives the reduction back to EMPTY (firing UNSUBSCRIBE) and a post-reconnect release is correct without any "still
+    // nonzero" guard - the ledger survived the reconnect and the wire cache was re-armed by reissueOnReconnect.
+    return this.host.bus.stream("zwaveFrame", {
 
-      this.frameSubscription.release(handle);
-    };
-
-    return (async function *(): AsyncGenerator<Buffer> {
-
-      try {
-
-        for await (const frame of stream) {
-
-          yield frame;
-        }
-
-      } finally {
-
-        releaseSubscription();
-      }
-    })();
+      ...options,
+      onClose: (): void => { this.frameSubscription.release(handle); }
+    });
   }
 
   /**

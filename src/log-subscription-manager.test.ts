@@ -83,14 +83,13 @@ const decodeSubscribeLogsFrame = (frame: CapturedFrame): { dumpConfig: boolean; 
   return { dumpConfig: dumpConfigRaw === 1, level: level as LogLevel };
 };
 
-// Open a `subscribe()` async-iterable. The view releases its subscriber from an abort listener on the consumer signal, from its own `.return()` / `.throw()`, and when
-// the underlying EventBus stream ends or fails. The helper threads its own AbortController through the stream options so disposal-only tests can trigger the abort
+// Open a `subscribe()` async-iterable. The view is the EventBus stream, and its close hook releases the subscriber on the consumer signal aborting, on `.return()` /
+// `.throw()`, and when the stream ends or fails. The helper threads its own AbortController through the stream options so disposal-only tests can trigger the abort
 // path without emitting events.
 //
 // - `next()` advances the iterator. Use in tests that consume events.
-// - `closeAfterPrime()` parks one `.next()` and then aborts the internal signal. The view's abort listener releases the subscriber, and the BackpressureStream's own
-//   signal listener rejects the parked inner `.next()`, which the view surfaces as a rejection. Use in tests that only verify refcount / wire-send behavior on the
-//   disposal path.
+// - `closeAfterPrime()` parks one `.next()` and then aborts the internal signal. The stream's abort listener rejects the parked `.next()` and its close hook releases
+//   the subscriber. Use in tests that only verify refcount / wire-send behavior on the disposal path.
 // - `close()` calls `.return()` on the iterator. Use in tests that already advanced the iterator with `next()`.
 interface OpenedIterator {
 
@@ -971,6 +970,25 @@ describe("LogSubscriptionManager - subscribe yields events to consumers", () => 
     assert.notEqual(r2.value!.message, r1.value!.message);
 
     await iter.return!();
+  });
+
+  test("a message the view's level filter skips never occupies a slot in its queue", async () => {
+
+    const { bus, manager } = buildHarness();
+    const view = manager.subscribe(LogLevel.INFO, { backpressure: "dropNewest", highWaterMark: 1 });
+    const messages: string[] = [];
+
+    // The DEBUG message is skipped as it is emitted, so the view's single queue slot is still free when the WARN message arrives.
+    bus.emit("log", sampleEvent(LogLevel.DEBUG, "skipped"));
+    bus.emit("log", sampleEvent(LogLevel.WARN, "kept"));
+    bus.dispose();
+
+    for await (const event of view) {
+
+      messages.push(event.message);
+    }
+
+    assert.deepEqual(messages, ["kept"]);
   });
 });
 

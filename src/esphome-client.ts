@@ -465,10 +465,10 @@ export interface EspHomeClientOptions<Extras extends ExtraSchemaSet = {}> {
   clientId?: Nullable<string>;
 
   /**
-   * Injectable wall-clock seam. Defaults to `Date.now`. The client reads every elapsed-time and connection-uptime measurement through this function - the heartbeat
-   * supervisor's idle/stall/RTT timing and the connect-timing/health-epoch stamps - so a deterministic test can advance time without real timers. Real consumers should
-   * leave this field unset and let the client use the system clock; test code injects a controllable clock. Note: the `connectTimeoutMs` bound is an
-   * `AbortSignal.timeout` and is NOT governed by this clock.
+   * Injectable wall clock. Defaults to `Date.now`. The client reads every elapsed-time and connection-uptime measurement through this function - the heartbeat
+   * supervisor's idle/stall/RTT timing, the Noise handshake duration, and the connect-timing/health-epoch stamps - so a deterministic test can advance time without
+   * real timers. Real consumers should leave this field unset and let the client use the system clock; test code injects a controllable clock. Note: the
+   * `connectTimeoutMs` bound is an `AbortSignal.timeout` and is NOT governed by this clock.
    */
   clock?: ClockFn;
 
@@ -896,6 +896,11 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
   // resolves it. The single in-flight slot suffices because the device only acknowledges one disconnect at a time.
   private readonly disconnectCorrelator: Correlator<void>;
 
+  // The graceful disconnect in progress, or `null` when none is. Every concurrent {@link EspHomeClient.disconnectAsync} call shares it, so the device sees one
+  // DISCONNECT_REQUEST and the correlator's single slot has one awaiter. Set by the first call and cleared when that disconnect settles, including when a synchronous
+  // disconnect or a teardown settles its correlator wait early.
+  private disconnectInFlight: Nullable<Promise<void>> = null;
+
   // Per-instance schemas table. Built once at construction by merging the canonical {@link ENTITY_SCHEMAS} floor with the optional
   // {@link EspHomeClientOptions.extraSchemas}.
   // Every downstream consumer (run-phase dispatcher, command encoder, discovery decoder, telemetry decoder) consults this table - never the module-level constant
@@ -942,7 +947,15 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
    */
   constructor(options: EspHomeClientOptions<Extras>) {
 
-    this.bus = new EventBus<ClientEventsMap>();
+    // A consumer's listener runs inside emits the client makes from timers, the receive loop, and the connect flow, so its fault is reported through the logger and
+    // never unwinds into that caller. The logger is read when a fault arrives, after construction has assigned it.
+    this.bus = new EventBus<ClientEventsMap>({
+
+      onListenerError: (error: unknown, event: string): void => {
+
+        this.log.warn("A client event listener threw; the remaining listeners still received the event.", { error, event });
+      }
+    });
 
     options.logger ??= {
 
@@ -1292,6 +1305,7 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
               expectedServerName: this.expectedServerName,
               log: this.log,
               metrics: this.metrics,
+              now: this.clock,
               resolvePsk: this.resolvePsk,
               signal: this.combineSignals(overallSignal, this.handshakeTimeoutMs),
               transport: context.transport
@@ -1384,16 +1398,17 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
         context.discHandler[Symbol.dispose]();
       }
 
-      // Hand off to the run-phase drain. From this point on, every inbound message routes through the dispatch table built by
-      // `buildRunPhaseHandlers`, wrapped via {@link tapInboundActivity} so every dispatched frame stamps the heartbeat scheduler. The second
-      // argument is the terminal-completion seam: the receiver escalates a passive run-phase transport death (peer RST/FIN, device reboot, mid-session decrypt failure,
-      // oversized frame) back to the host via this callback. `disconnectInternal` is repeatable and gates `maybeScheduleReconnect` behind the `transport || receiver`
-      // guard, so this collapses with a racing heartbeat-stall or `DISCONNECT_REQUEST` to a single teardown.
-      context.receiver.startDrain(this.tapInboundActivity(buildRunPhaseHandlers(this.runPhaseHost)),
-        (cause) => this.disconnectInternal("transport terminated", cause));
-
+      // Attach the transport and receiver, then hand off to the run-phase drain. The attach comes first because startDrain replays the setup-phase buffer at once, and
+      // a request the device sent during setup (a GET_TIME_REQUEST, say) is answered through frameAndSend, which drops the reply unless a transport is attached. From
+      // this point on, every inbound message routes through the dispatch table built by `buildRunPhaseHandlers`, wrapped via {@link tapInboundActivity} so every
+      // dispatched frame stamps the heartbeat scheduler. The second argument is the terminal-completion callback: the receiver escalates a passive run-phase transport
+      // death (peer RST/FIN, device reboot, mid-session decrypt failure, oversized frame) back to the host through it. `disconnectInternal` is repeatable and gates
+      // `maybeScheduleReconnect` behind the `transport || receiver` guard, so this collapses with a racing heartbeat-stall or `DISCONNECT_REQUEST` to a single teardown.
       this.transport = context.transport;
       this.runReceiver = context.receiver;
+
+      context.receiver.startDrain(this.tapInboundActivity(buildRunPhaseHandlers(this.runPhaseHost)),
+        (cause) => this.disconnectInternal("transport terminated", cause));
 
       this.metrics?.timing("connect.duration_ms", this.clock() - this.connectStartMs, { encrypted: context.transport.isEncrypted ? "true" : "false" });
       this.metrics?.increment("connect.attempts", 1, { result: "success" });
@@ -1810,7 +1825,7 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
    * Graceful asynchronous disconnect. Sends DISCONNECT_REQUEST and awaits DISCONNECT_RESPONSE up to {@link EspHomeClientOptions.gracefulDisconnectTimeoutMs} (default
    * 1000ms), then tears down the transport. On timeout, falls through to immediate teardown - the consumer is never blocked indefinitely. Marks the client explicitly
    * closed and cancels any in-flight reconnect loop or manual connect (mirroring {@link EspHomeClient.disconnect}), so a graceful disconnect stays disconnected rather
-   * than auto-reconnecting.
+   * than auto-reconnecting. Concurrent calls share the disconnect already in flight: the device sees one `DISCONNECT_REQUEST`, and every call resolves when it settles.
    *
    * Usage:
    *
@@ -1820,6 +1835,16 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
    *
    */
   public async disconnectAsync(): Promise<void> {
+
+    this.disconnectInFlight ??= this.gracefulDisconnect().finally((): void => { this.disconnectInFlight = null; });
+
+    return this.disconnectInFlight;
+  }
+
+  /**
+   * The graceful disconnect behind {@link EspHomeClient.disconnectAsync}, run once per in-flight disconnect.
+   */
+  private async gracefulDisconnect(): Promise<void> {
 
     // Mark the client explicitly closed and cancel any in-flight reconnect loop BEFORE tearing down, mirroring the synchronous {@link EspHomeClient.disconnect}. Without
     // this, the `disconnectInternal` below calls `maybeScheduleReconnect`, and a non-permanent cause (the default `CONNECTION_DROPPED`) would silently reconnect about
@@ -3039,22 +3064,14 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
 
     const dash = id.indexOf("-");
     const entityType = ((dash > 0) ? id.slice(0, dash) : id) as T;
-    const stream = this.bus.stream(entityType as EntityType, options) as AsyncIterable<StateEventFor<SchemaForExtended<T, Extras>>>;
 
-    return (async function *(): AsyncGenerator<StateEventFor<SchemaForExtended<T, Extras>>> {
+    // The selector keeps this entity's events and skips its siblings' as they are emitted, so they never occupy the view's queue. Camera state events have a different
+    // shape (no `key`); other entity events expose `key`, so the selector reads it through a structural cast.
+    return this.bus.stream(entityType as EntityType, {
 
-      for await (const event of stream) {
-
-        // Camera state events have a different shape (no `key`); other entity events expose `key`. Cast to a structural shape that exposes it and skip non-matching
-        // events.
-        const keyed = event as unknown as { key: number };
-
-        if(keyed.key === targetKey) {
-
-          yield event;
-        }
-      }
-    })();
+      ...options,
+      select: (event: ClientEventsMap[EntityType]): typeof event | undefined => ((event as unknown as { key: number }).key === targetKey) ? event : undefined
+    }) as AsyncIterable<StateEventFor<SchemaForExtended<T, Extras>>>;
   }
 
   /**

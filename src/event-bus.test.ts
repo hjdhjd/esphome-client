@@ -99,6 +99,88 @@ describe("EventBus.on", () => {
   });
 });
 
+describe("EventBus listener isolation", () => {
+
+  test("a throwing listener is reported with its event name, and neither blocks a sibling listener nor escapes emit", () => {
+
+    const faults: { error: unknown; event: string }[] = [];
+
+    using bus = new EventBus<TestMap>({ onListenerError: (error, event): void => { faults.push({ error, event }); } });
+    const fault = new Error("listener fault");
+    const received: string[] = [];
+
+    using _throwing = bus.on("greet", () => { throw fault; });
+    using _sibling = bus.on("greet", (payload) => { received.push(payload); });
+
+    assert.doesNotThrow(() => bus.emit("greet", "hello"), "a listener's fault must not propagate out of emit");
+    assert.deepEqual(received, ["hello"], "the sibling registered after the throwing listener must still receive the emission");
+    assert.deepEqual(faults, [{ error: fault, event: "greet" }], "the fault must reach the callback once with the logical event name");
+  });
+
+  test("an async listener's rejection reaches the callback and never surfaces as an unhandled rejection", async () => {
+
+    const faults: { error: unknown; event: string }[] = [];
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown): void => { unhandled.push(reason); };
+
+    using bus = new EventBus<TestMap>({ onListenerError: (error, event): void => { faults.push({ error, event }); } });
+    const fault = new Error("async listener fault");
+
+    process.on("unhandledRejection", onUnhandled);
+
+    try {
+
+      using _async = bus.on("number", async () => { await Promise.resolve(); throw fault; });
+
+      bus.emit("number", 1);
+
+      // An unhandled rejection is reported after the microtask queue drains, so a macrotask turn is the earliest point the sentinel could have seen one.
+      await delay(10);
+
+      assert.deepEqual(faults, [{ error: fault, event: "number" }], "the rejection must reach the callback with the logical event name");
+      assert.deepEqual(unhandled, [], "the rejection must not escape as an unhandled rejection");
+
+    } finally {
+
+      process.off("unhandledRejection", onUnhandled);
+    }
+  });
+
+  test("a bus built without a callback rethrows a listener's fault on a later tick, after the emit has reached every listener", async () => {
+
+    using bus = new EventBus<TestMap>();
+    const fault = new Error("unreported listener fault");
+    const received: string[] = [];
+    const { promise: reported, resolve } = Promise.withResolvers<unknown>();
+    const onUncaught = (error: unknown): void => { resolve(error); };
+
+    // The test runner fails any test whose code raises `uncaughtException`, so its own listeners stand aside while this test observes the default report path.
+    const runnerListeners = process.listeners("uncaughtException");
+
+    process.removeAllListeners("uncaughtException");
+    process.once("uncaughtException", onUncaught);
+
+    try {
+
+      using _throwing = bus.on("greet", () => { throw fault; });
+      using _sibling = bus.on("greet", (payload) => { received.push(payload); });
+
+      assert.doesNotThrow(() => bus.emit("greet", "hello"), "the default sink must not throw synchronously out of emit");
+      assert.deepEqual(received, ["hello"], "the sibling must receive the emission before the fault is reported");
+      assert.equal(await Promise.race([ reported, delay(1000, "never reported") ]), fault, "the fault must reach uncaughtException on a later tick");
+
+    } finally {
+
+      process.off("uncaughtException", onUncaught);
+
+      for(const listener of runnerListeners) {
+
+        process.on("uncaughtException", listener);
+      }
+    }
+  });
+});
+
 describe("EventBus.once", () => {
 
   test("resolves with the next emission", async () => {
@@ -361,6 +443,155 @@ describe("EventBus.stream", () => {
 
     assert.deepEqual(aResults, [ 1, 2 ]);
     assert.deepEqual(bResults, [ 1, 2 ]);
+  });
+});
+
+describe("EventBus.stream view hooks", () => {
+
+  test("aborting a never-iterated stream runs onClose once and detaches its listener, and a later return() does not run it again", async () => {
+
+    using bus = new EventBus<TestMap>();
+    const controller = new AbortController();
+    let closes = 0;
+    const iter = bus.stream("number", { onClose: (): void => { closes++; }, signal: controller.signal })[Symbol.asyncIterator]();
+
+    assert.equal(bus.listenerCount("number"), 1, "the listener must be attached when stream() returns");
+
+    controller.abort();
+
+    assert.equal(closes, 1, "the abort alone must close a stream that was never iterated");
+    assert.equal(bus.listenerCount("number"), 0);
+
+    await iter.return!();
+
+    assert.equal(closes, 1, "a later return() must not run onClose a second time");
+  });
+
+  test("return() on a never-iterated stream runs onClose once and detaches its listener", async () => {
+
+    using bus = new EventBus<TestMap>();
+    let closes = 0;
+    const iter = bus.stream("number", { onClose: (): void => { closes++; } })[Symbol.asyncIterator]();
+
+    await iter.return!();
+    await iter.return!();
+
+    assert.equal(closes, 1);
+    assert.equal(bus.listenerCount("number"), 0);
+  });
+
+  test("bus dispose runs onClose once for a live stream, and a stream requested after dispose runs it at once", () => {
+
+    const bus = new EventBus<TestMap>();
+    let liveCloses = 0;
+    let lateCloses = 0;
+
+    bus.stream("number", { onClose: (): void => { liveCloses++; } });
+    bus.dispose();
+    bus.stream("number", { onClose: (): void => { lateCloses++; } });
+
+    assert.equal(liveCloses, 1, "dispose must close the live stream once");
+    assert.equal(lateCloses, 1, "a stream requested after dispose is already ended, so it closes at once");
+  });
+
+  test("a backpressure throw runs onClose once", async () => {
+
+    using bus = new EventBus<TestMap>();
+    let closes = 0;
+    const iter = bus.stream("number", { backpressure: "throw", highWaterMark: 1, onClose: (): void => { closes++; } })[Symbol.asyncIterator]();
+
+    bus.emit("number", 1);
+    bus.emit("number", 2);
+
+    assert.equal(closes, 1);
+    assert.deepEqual(await iter.next(), { done: false, value: 1 }, "items queued before the overrun still drain first");
+    await assert.rejects(iter.next(), { name: "BackpressureError" });
+  });
+
+  test("a selector maps each kept payload and skips the rest before they reach the queue, so skipped payloads never count toward highWaterMark", async () => {
+
+    using bus = new EventBus<TestMap>();
+    const stream = bus.stream("number", {
+
+      backpressure: "dropNewest",
+      highWaterMark: 2,
+      select: (n: number): string | undefined => ((n % 2) === 0) ? String(n * 10) : undefined
+    });
+
+    // Odd payloads are skipped, so the even payloads alone fill the queue to its high-water mark, and only an even payload arriving after that is discarded.
+    for(const n of [ 1, 3, 2, 5, 7, 4, 9, 6 ]) {
+
+      bus.emit("number", n);
+    }
+
+    bus.dispose();
+
+    const collected: string[] = [];
+
+    for await (const value of stream) {
+
+      collected.push(value);
+    }
+
+    assert.deepEqual(collected, [ "20", "40" ]);
+  });
+});
+
+describe("EventBus.stream terminal contract", () => {
+
+  test("after an abort the first next() rejects with the abort reason and every later next() resolves done", async () => {
+
+    using bus = new EventBus<TestMap>();
+    const controller = new AbortController();
+    const iter = bus.stream("number", { signal: controller.signal })[Symbol.asyncIterator]();
+
+    controller.abort();
+
+    await assert.rejects(iter.next(), { name: "AbortError" });
+    assert.deepEqual(await iter.next(), { done: true, value: undefined });
+    assert.deepEqual(await iter.next(), { done: true, value: undefined });
+  });
+
+  test("an abort that rejects a parked next() is not surfaced again by the next call", async () => {
+
+    using bus = new EventBus<TestMap>();
+    const controller = new AbortController();
+    const iter = bus.stream("number", { signal: controller.signal })[Symbol.asyncIterator]();
+    const parked = iter.next();
+
+    controller.abort();
+
+    await assert.rejects(parked, { name: "AbortError" });
+    assert.deepEqual(await iter.next(), { done: true, value: undefined });
+  });
+
+  test("throw() runs onClose once, rejects with the supplied error, and leaves the stream ended", async () => {
+
+    using bus = new EventBus<TestMap>();
+    let closes = 0;
+    const iter = bus.stream("number", { onClose: (): void => { closes++; } })[Symbol.asyncIterator]();
+    const failure = new Error("consumer failure");
+
+    bus.emit("number", 1);
+
+    await assert.rejects(iter.throw!(failure), (error: unknown): boolean => error === failure);
+
+    assert.equal(closes, 1);
+    assert.equal(bus.listenerCount("number"), 0);
+    assert.deepEqual(await iter.next(), { done: true, value: undefined }, "throw() must discard the queued item");
+  });
+
+  test("return() discards queued items and any pending error, so every later next() resolves done", async () => {
+
+    using bus = new EventBus<TestMap>();
+    const controller = new AbortController();
+    const iter = bus.stream("number", { signal: controller.signal })[Symbol.asyncIterator]();
+
+    bus.emit("number", 1);
+    controller.abort();
+
+    assert.deepEqual(await iter.return!(), { done: true, value: undefined });
+    assert.deepEqual(await iter.next(), { done: true, value: undefined });
   });
 });
 

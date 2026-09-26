@@ -23,6 +23,7 @@ import type { InboundMessage, TransportLike, TransportOpenOptions } from "../tra
 import { ProtocolByte, Transport } from "../transport.ts";
 import { encodeVarint, readVarint } from "../protocol/codec.ts";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { CliError } from "./cli-error.ts";
 import type { DeviceInfo } from "../esphome-client.ts";
 import { MessageType } from "../protocol/message-types.ts";
 import { MockTransport } from "../testing/mock-transport.ts";
@@ -133,11 +134,12 @@ export function encodeCaptureFrames(frames: readonly InboundMessage[]): Buffer {
 
 /**
  * Decode a capture binary back into the inbound-message sequence {@link encodeCaptureFrames} produced. Throws when the buffer is truncated mid-frame so a corrupt
- * capture fails loudly rather than silently replaying a partial stream.
+ * capture fails loudly rather than silently replaying a partial stream. The failure is a {@link CliError} because a corrupt capture is the user's file to replace, so
+ * the CLI prints it as a usage failure rather than an internal bug.
  *
  * @param buffer - The capture binary.
  * @returns The decoded inbound messages in order.
- * @throws {@link Error} when a frame's declared length runs past the end of the buffer.
+ * @throws {@link CliError} when a frame's declared length runs past the end of the buffer.
  */
 export function decodeCaptureFrames(buffer: Buffer): InboundMessage[] {
 
@@ -164,7 +166,7 @@ export function decodeCaptureFrames(buffer: Buffer): InboundMessage[] {
       offset = end;
     } catch(error) {
 
-      throw new Error("Capture is truncated or corrupt: the frame at offset " + String(offset) + " could not be parsed.", { cause: error });
+      throw new CliError("Capture is truncated or corrupt: the frame at offset " + String(offset) + " could not be parsed.", { cause: error });
     }
   }
 
@@ -384,7 +386,7 @@ export async function recordCapture(options: RecordCaptureOptions): Promise<Capt
  *
  * @param options - The capture path and optional logger.
  * @returns A summary of what the host observed during replay.
- * @throws {@link Error} when the capture has frames but lacks the `LIST_ENTITIES_DONE_RESPONSE` that bounds discovery.
+ * @throws {@link CliError} when the capture is truncated or corrupt, or has frames but lacks the `LIST_ENTITIES_DONE_RESPONSE` that bounds discovery.
  */
 export async function replayCapture(options: ReplayCaptureOptions): Promise<ReplaySummary> {
 
@@ -408,7 +410,7 @@ export async function replayCapture(options: ReplayCaptureOptions): Promise<Repl
  * @param frames - The ordered inbound messages to drive through the host.
  * @param logger - An optional logger; the silent logger is used when none is supplied.
  * @returns A summary of what the host observed during replay.
- * @throws {@link Error} when the capture has frames but lacks the `LIST_ENTITIES_DONE_RESPONSE` that bounds discovery.
+ * @throws {@link CliError} when the capture has frames but lacks the `LIST_ENTITIES_DONE_RESPONSE` that bounds discovery.
  */
 export async function replayCaptureFrames(frames: readonly InboundMessage[], logger: EspHomeLogging = SILENT_LOGGER): Promise<ReplaySummary> {
 
@@ -421,7 +423,7 @@ export async function replayCaptureFrames(frames: readonly InboundMessage[], log
 
   if(doneIndex < 0) {
 
-    throw new Error("Capture has no LIST_ENTITIES_DONE_RESPONSE frame, so it cannot drive a connect. Re-record it with `espc record`.");
+    throw new CliError("Capture has no LIST_ENTITIES_DONE_RESPONSE frame, so it cannot drive a connect. Re-record it with `espc record`.");
   }
 
   // Split at the first run-phase state frame, NOT at LIST_ENTITIES_DONE_RESPONSE: a real device sends DEVICE_INFO_RESPONSE after the done sentinel, and discovery

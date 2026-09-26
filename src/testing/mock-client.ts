@@ -17,15 +17,15 @@
 import type { ClientEventsMap, DeviceInfo, LogEventData } from "../esphome-client.ts";
 import type { CommandAndAwaitOptions, NonAwaitableEntityType, TransmitEntityType } from "../command-runner.ts";
 import type { CommandFor, ENTITY_SCHEMAS, Entity, EntityType, StateEventFor, TelemetryEvent } from "../schemas/index.ts";
+import { ConfigurationError, ConnectionError } from "../errors.ts";
 import { DEFAULT_COMMAND_AWAIT_TIMEOUT_MS, assertTransmitter } from "../command-runner.ts";
+import { EventBus, endedAsyncIterable } from "../event-bus.ts";
 import { MOCK, createRecordingMock } from "./recording-mock.ts";
 import { BluetoothProxyApi } from "../bluetooth-proxy.ts";
 import { CameraApi } from "../camera.ts";
 import type { ClientCapabilities } from "../capabilities.ts";
-import { ConfigurationError } from "../errors.ts";
 import type { ConnectionHealth } from "../health.ts";
 import type { EntityId } from "../entity-id.ts";
-import { EventBus } from "../event-bus.ts";
 import { HomeAssistantApi } from "../home-assistant.ts";
 import type { LifecycleEvent } from "../lifecycle.ts";
 import type { LogLevel } from "../api-constants.ts";
@@ -153,34 +153,44 @@ export class MockClient {
    * automatically driven (tests should explicitly call {@link MockClient.emitState} when they want to simulate the device's response). Infrared and radio-frequency
    * ids are a compile error here, as on the real client; a transmit goes through {@link transmitRawTimings}.
    *
+   * @remarks Only a command for a registered entity is recorded. The real client drops a command for an id it has not discovered, so a command for an id the test
+   * never passed to {@link populateEntities} is dropped here too and never reaches the command log.
+   *
    * @param id - The branded entity id.
    * @param options - The command options.
    */
   public command<T extends Exclude<EntityType, TransmitEntityType>>(id: EntityId<T>, options: CommandFor<typeof ENTITY_SCHEMAS[T]>): void {
+
+    if(!this.entityRegistry.has(id)) {
+
+      return;
+    }
 
     this.recordedCommands.push({ id, options, timestamp: Date.now() });
   }
 
   /**
    * Record an infrared or radio-frequency transmit without executing wire-level work. Mirrors {@link EspHomeClient.transmitRawTimings}: the call is appended to
-   * {@link MockClient.commands} the same way {@link command} records, because the real transmit sends the entity's command message on the wire. A registered entity
-   * goes through the real client's transmitter check, so a receive-only entity is refused and nothing is recorded; an id the test never registered is recorded
-   * unchecked, as {@link command} records it.
+   * {@link MockClient.commands} the same way {@link command} records, because the real transmit sends the entity's command message on the wire. The call goes through
+   * the real client's refusals in the real client's order, so an id the test never registered and a registered receive-only entity are each refused and nothing is
+   * recorded.
    *
    * @param id - The branded infrared or radio-frequency entity id.
    * @param options - The transmit parameters.
    *
-   * @throws {ConnectionError} with code `ENTITY_NOT_TRANSMITTER` when the id is registered and the entity's `capabilities` bitmask lacks the transmitter bit.
+   * @throws {ConnectionError} with code `ENTITY_NOT_FOUND` when no entity is registered for `id`.
+   * @throws {ConnectionError} with code `ENTITY_NOT_TRANSMITTER` when the entity's `capabilities` bitmask lacks the transmitter bit.
    */
   public transmitRawTimings<T extends TransmitEntityType>(id: EntityId<T>, options: CommandFor<typeof ENTITY_SCHEMAS[T]>): void {
 
     const entity = this.entityRegistry.get(id);
 
-    if(entity) {
+    if(!entity) {
 
-      assertTransmitter(entity, id);
+      throw new ConnectionError("No entity is registered for " + id + ".", "ENTITY_NOT_FOUND");
     }
 
+    assertTransmitter(entity, id);
     this.recordedCommands.push({ id, options, timestamp: Date.now() });
   }
 
@@ -492,33 +502,31 @@ export class MockClient {
   }
 
   /**
-   * Async-iterable view of state updates for one specific entity, filtered by its resolved key. Mirrors {@link EspHomeClient.telemetryForId}...like the real client it
-   * drops every event until the entity is registered, so subscribing before {@link populateEntities} yields an empty stream rather than a fabricated match.
+   * Async-iterable view of state updates for one specific entity, filtered by its resolved key. Mirrors {@link EspHomeClient.telemetryForId}...like the real client, an
+   * id that is not registered when the view is requested yields a view that ends at once, so subscribing before {@link populateEntities} yields an empty stream rather
+   * than a fabricated match. A view that is never iterated still detaches its bus listener when its signal aborts or its `return()` runs.
    */
   public telemetryForId<T extends EntityType>(id: EntityId<T>, options?: StreamOptions): AsyncIterable<StateEventFor<typeof ENTITY_SCHEMAS[T]>> {
 
+    // Mirror the real client: pre-resolve the target key once and hand back an already-ended view when the entity is unknown, rather than fabricating a match against a
+    // key we lack or attaching a bus listener that no event can ever satisfy.
+    const targetKey = this.entityRegistry.get(id)?.key;
+
+    if(targetKey === undefined) {
+
+      return endedAsyncIterable();
+    }
+
     const dash = id.indexOf("-");
     const entityType = ((dash > 0) ? id.slice(0, dash) : id) as EntityType;
-    const targetKey = this.entityRegistry.get(id)?.key;
-    const stream = this.bus.stream(entityType, options) as AsyncIterable<StateEventFor<typeof ENTITY_SCHEMAS[T]>>;
 
-    return (async function *(): AsyncGenerator<StateEventFor<typeof ENTITY_SCHEMAS[T]>> {
+    // Camera state events carry no `key`; every other entity event does. The selector reaches the field through a structural cast and skips every other entity's events
+    // as they are emitted, so they never occupy the view's queue.
+    return this.bus.stream(entityType, {
 
-      // Mirror the real client: pre-resolve the target key once and yield nothing when the entity is unknown, rather than fabricating a match against a key we lack.
-      if(targetKey === undefined) {
-
-        return;
-      }
-
-      for await (const event of stream) {
-
-        // Camera state events carry no `key`; every other entity event does. Reach the field through a structural cast and yield only this entity's events.
-        if((event as unknown as { key: number }).key === targetKey) {
-
-          yield event;
-        }
-      }
-    })();
+      ...options,
+      select: (event: ClientEventsMap[EntityType]): typeof event | undefined => ((event as unknown as { key: number }).key === targetKey) ? event : undefined
+    }) as AsyncIterable<StateEventFor<typeof ENTITY_SCHEMAS[T]>>;
   }
 
   /**

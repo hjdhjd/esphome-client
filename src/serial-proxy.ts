@@ -412,8 +412,12 @@ export class SerialProxyApi implements SubscriptionLifecycle {
    * Concurrent iterators on the same instance share the wire-side subscription (only one SUBSCRIBE is sent regardless of consumer count). The subscription survives
    * reconnect via {@link reissueOnReconnect}.
    *
-   * Per-instance filtering happens in the wrapper generator: the `serialData` bus emits chunks for every instance, and the generator yields only those whose `instance`
-   * matches the iterator's argument. Two iterators on different instances do not see each other's chunks.
+   * Per-instance filtering happens as each chunk is emitted: the `serialData` bus emits chunks for every instance, and the view's selector keeps only those whose
+   * `instance` matches the iterator's argument, so another instance's chunks never occupy this view's queue. Two iterators on different instances do not see each
+   * other's chunks.
+   *
+   * The view releases its subscriber once, on whichever ends it first: the signal aborting, the iterator's `return()` or `throw()` (including a `break` out of
+   * `for await`), or the bus ending the stream. A view abandoned before it is ever iterated still releases when its signal aborts or its `return()` runs.
    *
    * Usage:
    *
@@ -429,33 +433,16 @@ export class SerialProxyApi implements SubscriptionLifecycle {
     // Acquire a subscriber synchronously at call time so concurrent attaches are race-free. The first acquire on this instance drives the reduction from EMPTY to `true`,
     // which fires the wire-side SUBSCRIBE; subsequent acquires share the same wire-side subscription (the reduction is already `true`, so onChange is suppressed).
     const handle = this.dataSubscription.acquire(instance, true);
-    const stream = this.host.bus.stream("serialData", options);
 
-    // Cleanup as a `this`-capturing arrow so the IIFE generator below doesn't need a `this` alias. The primitive pairs release to acquire by symbol identity, so the
-    // last release for an instance drives its reduction back to EMPTY (firing UNSUBSCRIBE) and a post-reconnect dispose is correct without any guard - the ledger
-    // survived the reconnect and the wire cache was re-armed by reissueOnReconnect.
-    const releaseSubscription = (): void => {
+    // The bus runs the close hook exactly once, on the stream's first terminal path, so the hook releases the handle directly. The primitive pairs release to acquire
+    // by symbol identity, so the last release for an instance drives its reduction back to EMPTY (firing UNSUBSCRIBE) and a post-reconnect release is correct without
+    // any guard - the ledger survived the reconnect and the wire cache was re-armed by reissueOnReconnect.
+    return this.host.bus.stream("serialData", {
 
-      this.dataSubscription.release(handle);
-    };
-
-    return (async function *(): AsyncGenerator<SerialDataChunk> {
-
-      try {
-
-        for await (const chunk of stream) {
-
-          if(chunk.instance === instance) {
-
-            yield chunk;
-          }
-        }
-
-      } finally {
-
-        releaseSubscription();
-      }
-    })();
+      ...options,
+      onClose: (): void => { this.dataSubscription.release(handle); },
+      select: (chunk: SerialDataChunk): SerialDataChunk | undefined => (chunk.instance === instance) ? chunk : undefined
+    });
   }
 
   /**

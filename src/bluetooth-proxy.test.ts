@@ -211,15 +211,14 @@ describe("BluetoothProxyApi.advertisements refcounted subscription", () => {
     assert.equal(decodeFields(handle.sent[0]!.payload)[1]?.[0], 0, "flags field must be 0");
     assert.equal(api.subscriberCount(), 1);
 
-    // Drive the generator through one yield so the for-await loop is past its initial start and the finally is reachable via `iter.return`. We push one synthetic
-    // advertisement, consume it, and then detach.
+    // Drive the view through one yield so the detach below ends a consumer mid-iteration. We push one synthetic advertisement, consume it, and then detach.
     handle.bus.emit("bluetoothAdvertisement", { address: 0x10n, addressType: 0, data: Buffer.alloc(0), rssi: -50 });
 
     const first = await iter.next();
 
     assert.equal(first.done, false);
 
-    // Detach: the generator's finally should send UNSUBSCRIBE with an empty payload.
+    // Detach: the view's close hook releases the last subscriber, which sends UNSUBSCRIBE with an empty payload.
     await iter.return?.();
 
     assert.equal(handle.sent.length, 2);
@@ -239,7 +238,7 @@ describe("BluetoothProxyApi.advertisements refcounted subscription", () => {
     assert.equal(handle.sent.length, 1);
     assert.equal(api.subscriberCount(), 2);
 
-    // Drive both generators through one yield each so the wrapping finally is reachable on detach.
+    // Drive both views through one yield each so each detach below ends a consumer mid-iteration.
     handle.bus.emit("bluetoothAdvertisement", { address: 0x20n, addressType: 0, data: Buffer.alloc(0), rssi: -50 });
     await iterA.next();
     await iterB.next();
@@ -642,6 +641,30 @@ describe("BluetoothProxyApi.acceptAdvertisementsBatch", () => {
     assert.equal(captured[0]!.address, 0xaan);
     assert.equal(captured[1]!.address, 0xbbn);
   });
+
+  test("an entry whose data field declares more bytes than remain is dropped rather than emitted with a short payload", () => {
+
+    const handle = makeHost();
+    const api = new BluetoothProxyApi(handle.host);
+    const captured: BluetoothLERawAdvertisement[] = [];
+
+    handle.bus.on("bluetoothAdvertisement", (ad): void => { captured.push(ad); });
+
+    // The middle entry carries a valid address (field 1) and a data field (field 4, tag 0x22) that declares five bytes with only two following. A clamped slice would
+    // emit that advertisement with a two-byte payload, so the decoder must treat the overrun as malformed and drop the entry while the rest of the batch still emits.
+    const good1 = encodeAdvertisement({ address: 0xaan, addressType: 0, data: Buffer.alloc(0), rssi: -30 });
+    const overrun = Buffer.from([ 0x08, 0x01, 0x22, 0x05, 0xaa, 0xbb ]);
+    const good2 = encodeAdvertisement({ address: 0xbbn, addressType: 0, data: Buffer.alloc(0), rssi: -40 });
+
+    api.acceptAdvertisementsBatch(encodeProtoFields([
+
+      { fieldNumber: 1, value: good1, wireType: WireType.LENGTH_DELIMITED },
+      { fieldNumber: 1, value: overrun, wireType: WireType.LENGTH_DELIMITED },
+      { fieldNumber: 1, value: good2, wireType: WireType.LENGTH_DELIMITED }
+    ]));
+
+    assert.deepEqual(captured.map((ad) => ad.address), [ 0xaan, 0xbbn ], "the overrunning entry must be dropped, not emitted with a clamped payload");
+  });
 });
 
 describe("BluetoothProxyApi.clearConnectionState", () => {
@@ -682,7 +705,7 @@ describe("BluetoothProxyApi.clearConnectionState", () => {
     assert.equal(api.lastScannerState(), null);
   });
 
-  test("iterator finally after clearConnectionState (no reissue) does not send a stray UNSUBSCRIBE", async () => {
+  test("iterator teardown after clearConnectionState (no reissue) does not send a stray UNSUBSCRIBE", async () => {
 
     const handle = makeHost();
     const api = new BluetoothProxyApi(handle.host);
@@ -691,19 +714,20 @@ describe("BluetoothProxyApi.clearConnectionState", () => {
     // First subscriber sent SUBSCRIBE.
     assert.equal(handle.sent.length, 1);
 
-    // Drive the generator through one yield so the finally is reachable on `iter.return`. Without this, an unstarted async generator skips the finally entirely and
-    // the test would assert the right outcome (no UNSUBSCRIBE) for the wrong reason.
+    // Drive the view through one yield so the teardown below ends a consumer mid-iteration, the shape of a consumer parked across a reconnect.
     handle.bus.emit("bluetoothAdvertisement", { address: 0x30n, addressType: 0, data: Buffer.alloc(0), rssi: -50 });
     await iter.next();
 
     api.clearConnectionState();
 
-    // Clear captured frames so we can assert the iterator's finally adds nothing. The wire cache was just cleared (no reissue ran), so the last-release recompute finds
+    // Clear captured frames so we can assert the teardown's release adds nothing. The wire cache was just cleared (no reissue ran), so the last-release recompute finds
     // no cache entry to diff against and emits no UNSUBSCRIBE for a connection the new transport never subscribed.
     handle.sent.length = 0;
 
     await iter.return?.();
 
+    // The release must have run, so the silence below is the empty cache's doing rather than a teardown that never released.
+    assert.equal(api.subscriberCount(), 0, "the teardown must release the subscriber");
     assert.equal(handle.sent.length, 0, "post-clearConnectionState iterator teardown must not send UNSUBSCRIBE");
   });
 });
@@ -1047,6 +1071,23 @@ describe("BluetoothProxyApi.connect", () => {
     assert.equal(captured.length, 1);
     assert.equal(api.isConnected(0x66n), true);
   });
+
+  test("a response whose trailing length-delimited field declares more bytes than remain is dropped, even though the decoder skips that field", () => {
+
+    const handle = makeHost();
+    const api = new BluetoothProxyApi(handle.host);
+    const captured: ConnectionStateData[] = [];
+
+    handle.bus.on("bluetoothConnectionState", (state): void => { captured.push(state); });
+
+    // A well-formed connected=true response followed by an unknown field 5 (tag 0x2a) that declares four bytes with one following. The decoder never reads that field,
+    // but a declared length past the end still marks the frame as truncated, so the response is dropped at warn instead of reporting the address connected.
+    api.acceptDeviceConnectionResponse(Buffer.concat([ encodeDeviceConnection(0x77n, true), Buffer.from([ 0x2a, 0x04, 0x01 ]) ]));
+
+    assert.equal(captured.length, 0, "a truncated response must not emit a connection-state event");
+    assert.equal(api.connectionState(0x77n), null, "a truncated response must not update the connection-state cache");
+    assert.equal(handle.warnLogs.length, 1);
+  });
 });
 
 describe("BluetoothProxyApi.pair / unpair / clearCache", () => {
@@ -1366,7 +1407,7 @@ describe("BluetoothProxyApi.setNotify and notify()", () => {
     assert.equal(api.notifySubscriberSnapshot().size, 1, "single (address, handle) entry");
     assert.equal(Array.from(api.notifySubscriberSnapshot().values())[0], 2);
 
-    // Drive both generators through one yield so the wrapping finally is reachable on detach.
+    // Drive both views through one yield so each detach below ends a consumer mid-iteration.
     api.acceptGattNotifyDataResponse(encodeReadOrNotify(0x132n, 0x2a, Buffer.alloc(0)));
     await iterA.next();
     await iterB.next();
@@ -1529,6 +1570,109 @@ describe("BluetoothProxyApi.connectionsFree", () => {
     assert.equal(handle.sent[0]!.type, MessageType.SUBSCRIBE_BLUETOOTH_CONNECTIONS_FREE_REQUEST);
 
     void iter.return?.();
+  });
+});
+
+describe("BluetoothProxyApi views: a never-iterated view releases eagerly", () => {
+
+  test("advertisements(): aborting a never-iterated view releases its subscriber and sends UNSUBSCRIBE, and a later return() sends nothing further", async () => {
+
+    const handle = makeHost();
+    const api = new BluetoothProxyApi(handle.host);
+    const controller = new AbortController();
+    const iter = api.advertisements({ signal: controller.signal })[Symbol.asyncIterator]();
+
+    assert.equal(api.subscriberCount(), 1);
+    assert.equal(handle.bus.listenerCount("bluetoothAdvertisement"), 1);
+
+    // The abort alone releases the view: no next() ever ran, yet the subscriber leaves, the last release sends UNSUBSCRIBE, and the bus listener detaches.
+    controller.abort();
+
+    assert.equal(api.subscriberCount(), 0, "the abort must release a view that was never iterated");
+    assert.equal(handle.bus.listenerCount("bluetoothAdvertisement"), 0);
+    assert.deepEqual(handle.sent.map((frame) => frame.type),
+      [ MessageType.SUBSCRIBE_BLUETOOTH_LE_ADVERTISEMENTS_REQUEST, MessageType.UNSUBSCRIBE_BLUETOOTH_LE_ADVERTISEMENTS_REQUEST ]);
+
+    // A later return() finds the view already closed, so it releases nothing and sends nothing further.
+    await iter.return!();
+
+    assert.equal(handle.sent.length, 2);
+  });
+
+  test("advertisements(): return() on a never-iterated view releases its subscriber without a signal", async () => {
+
+    const handle = makeHost();
+    const api = new BluetoothProxyApi(handle.host);
+    const iter = api.advertisements()[Symbol.asyncIterator]();
+
+    await iter.return!();
+
+    assert.equal(api.subscriberCount(), 0, "return() must release a view that was never iterated");
+    assert.equal(handle.bus.listenerCount("bluetoothAdvertisement"), 0);
+    assert.equal(handle.sent.at(-1)!.type, MessageType.UNSUBSCRIBE_BLUETOOTH_LE_ADVERTISEMENTS_REQUEST);
+  });
+
+  test("notify(): aborting the signal of a never-iterated view releases its ledger entry and detaches its listener", () => {
+
+    const handle = makeHost();
+    const api = new BluetoothProxyApi(handle.host);
+    const controller = new AbortController();
+
+    api.notify(0x140n, 0x2a, { signal: controller.signal });
+
+    assert.equal(api.notifySubscriberSnapshot().size, 1);
+
+    controller.abort();
+
+    assert.equal(api.notifySubscriberSnapshot().size, 0, "the abort must release a view that was never iterated");
+    assert.equal(handle.bus.listenerCount("bluetoothNotifyData"), 0);
+  });
+
+  test("notify(): return() on a never-iterated view releases its ledger entry without a signal", async () => {
+
+    const handle = makeHost();
+    const api = new BluetoothProxyApi(handle.host);
+    const iter = api.notify(0x141n, 0x2a)[Symbol.asyncIterator]();
+
+    await iter.return!();
+
+    assert.equal(api.notifySubscriberSnapshot().size, 0, "return() must release a view that was never iterated");
+    assert.equal(handle.bus.listenerCount("bluetoothNotifyData"), 0);
+  });
+
+  test("connectionsFree(): aborting the signal of a never-iterated view releases its subscriber, so a reconnect re-issues no SUBSCRIBE", () => {
+
+    const handle = makeHost();
+    const api = new BluetoothProxyApi(handle.host);
+    const controller = new AbortController();
+
+    api.connectionsFree({ signal: controller.signal });
+    controller.abort();
+
+    // Connections-free exposes no subscriber count and sends no unsubscribe frame, so the reconnect cycle is the observable: a surviving consumer would re-issue
+    // SUBSCRIBE there, and a released one leaves the wire silent.
+    handle.sent.length = 0;
+    api.clearConnectionState();
+    api.reissueOnReconnect();
+
+    assert.equal(handle.sent.length, 0, "the abort must release a view that was never iterated");
+    assert.equal(handle.bus.listenerCount("bluetoothConnectionsFree"), 0);
+  });
+
+  test("connectionsFree(): return() on a never-iterated view releases its subscriber without a signal", async () => {
+
+    const handle = makeHost();
+    const api = new BluetoothProxyApi(handle.host);
+    const iter = api.connectionsFree()[Symbol.asyncIterator]();
+
+    await iter.return!();
+
+    handle.sent.length = 0;
+    api.clearConnectionState();
+    api.reissueOnReconnect();
+
+    assert.equal(handle.sent.length, 0, "return() must release a view that was never iterated");
+    assert.equal(handle.bus.listenerCount("bluetoothConnectionsFree"), 0);
   });
 });
 
@@ -1699,9 +1843,9 @@ describe("BluetoothProxyApi.connectionStates streaming", () => {
 const CONTRACT_NOTIFY_ADDRESS = 0x200n;
 const CONTRACT_NOTIFY_HANDLE = 0x2a;
 
-// Open a subscription iterator and park it in `for await` without iterating, exactly modeling a consumer parked across a reconnect. release() aborts the controller,
-// which rejects the parked inner stream, unwinds the `for await`, and runs the cleanup finally (the subscription release). Shared by every Bluetooth harness
-// invocation; the per-dimension `open` callback supplies the iterator factory. We swallow the parked promise's abort rejection so it does not surface as unhandled.
+// Open a subscription iterator and park one next() on it without delivering anything, exactly modeling a consumer parked in `for await` across a reconnect. release()
+// aborts the controller, which rejects the parked next() and runs the view's close hook (the subscription release). Shared by every Bluetooth harness invocation; the
+// per-dimension `open` callback supplies the iterator factory. We swallow the parked promise's abort rejection so it does not surface as unhandled.
 function parkedSubscription<T>(open: (signal: AbortSignal) => AsyncIterator<T>): { release: () => Promise<void> } {
 
   const controller = new AbortController();
@@ -1714,7 +1858,7 @@ function parkedSubscription<T>(open: (signal: AbortSignal) => AsyncIterator<T>):
 
     controller.abort();
 
-    // Await the parked next so the generator's finally (the subscription release) has run before the harness asserts on the wire effects.
+    // Await the parked next so the abort has settled it before the harness asserts on the wire effects. The close hook itself runs synchronously inside abort().
     await parked.catch((): void => { /* expected abort */ });
   } };
 }

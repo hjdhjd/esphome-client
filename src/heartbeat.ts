@@ -60,7 +60,8 @@ export interface HeartbeatHost {
 }
 
 /**
- * Optional injection seam for tests. The scheduler reads the wall clock through this function so deterministic tests can advance time without `setTimeout`.
+ * An injectable clock. The scheduler and the client read every elapsed-time measurement through this function, so deterministic tests can advance time without
+ * `setTimeout`.
  */
 export type ClockFn = () => number;
 

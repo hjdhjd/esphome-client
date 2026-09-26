@@ -98,8 +98,8 @@ export class HandshakeError extends ConnectionError {}
  *   (`lifecycle/handshake.ts`). The message carries the device's reason text. Not a key problem, so it stays transient; a wrong key is reported instead as a permanent
  *   {@link EncryptionKeyInvalidError}.
  * - `HANDSHAKE_TIMEOUT` - The handshake-phase timeout elapsed (`lifecycle/handshake.ts`). Carried by {@link NoiseHandshakeTimeoutError}.
- * - `INVALID_PSK_LENGTH` - The PSK is not exactly 32 bytes (`crypto-noise.ts`). Consumer-supplied configuration error; the connect-flow handshake re-tags this into a
- *   permanent {@link EncryptionKeyInvalidError}.
+ * - `INVALID_PSK_LENGTH` - The PSK, or a cipher key installed through `CipherState.InitializeKey`, is not exactly 32 bytes (`crypto-noise.ts`). Consumer-supplied
+ *   configuration error; the connect-flow handshake re-tags the PSK case into a permanent {@link EncryptionKeyInvalidError}.
  * - `INVALID_REMOTE_KEY` - The remote ephemeral public key was malformed or a low-order point, so X25519 key agreement failed (`crypto-noise.ts`). The `diffieHellman`
  *   primitive rejected the peer key; the connect-flow handshake re-tags this into a permanent {@link EncryptionKeyInvalidError}.
  * - `MISSING_KEYS` - A Diffie-Hellman or post-handshake step required keys that were not yet initialized (`crypto-noise.ts`, `lifecycle/handshake.ts`).

@@ -126,6 +126,23 @@ describe("MessageReceiver.waitFor", () => {
     assert.equal(message.type, 42);
     assert.deepEqual(message.payload, Buffer.from([0x11]));
   });
+
+  test("returns the earliest-arrived buffered message among the wanted types, whatever order the types are listed in", async () => {
+
+    const transport = new MockTransport();
+    const receiver = new MessageReceiver(transport);
+
+    receiver.onInterleave(99, () => { /* noop, just primes the pump */ });
+
+    // Type 7 arrives before type 42, and the wanted list names 42 first, so a scan in wanted order would hand back 42 ahead of the message that arrived before it.
+    transport.pushInbound(7, Buffer.from([0x01]));
+    transport.pushInbound(42, Buffer.from([0x02]));
+
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.equal((await receiver.waitFor([ 42, 7 ])).type, 7, "the earlier arrival must return first");
+    assert.equal((await receiver.waitFor([ 42, 7 ])).type, 42);
+  });
 });
 
 describe("MessageReceiver.onInterleave", () => {
@@ -223,6 +240,29 @@ describe("MessageReceiver.startDrain", () => {
     await new Promise((resolve) => setImmediate(resolve));
 
     assert.deepEqual(captured, [ 99, 101 ]);
+  });
+
+  test("hands buffered setup-phase messages to the drain handlers in arrival order across types", async () => {
+
+    const transport = new MockTransport();
+    const receiver = new MessageReceiver(transport);
+    const received: string[] = [];
+
+    receiver.onInterleave(99, () => { /* noop, just primes the pump */ });
+
+    transport.pushInbound(42, Buffer.from([0]));
+    transport.pushInbound(7, Buffer.from([1]));
+    transport.pushInbound(42, Buffer.from([2]));
+
+    await new Promise((resolve) => setImmediate(resolve));
+
+    receiver.startDrain({
+
+      [42]: (msg): void => { received.push("42:" + String(msg.payload.readUInt8(0))); },
+      [7]: (msg): void => { received.push("7:" + String(msg.payload.readUInt8(0))); }
+    }, () => { /* terminal escalation is irrelevant to this ordering test */ });
+
+    assert.deepEqual(received, [ "42:0", "7:1", "42:2" ], "the hand-off must replay the buffer in the order the device sent it");
   });
 
   test("waitFor rejects after startDrain fires", async () => {
@@ -550,6 +590,34 @@ describe("MessageReceiver diagnostics seam", () => {
     const overflowWarn = warns.find((w) => w.message.includes("high-water mark"));
 
     assert.ok(overflowWarn, "the buffer-overflow drop must emit a warn naming the high-water mark");
+  });
+
+  test("a per-type overflow drops that type's oldest entry and leaves an earlier entry of another type in place", async () => {
+
+    const transport = new MockTransport();
+    const { log, warns } = createCapturingLog();
+    const receiver = new MessageReceiver(transport, log);
+
+    receiver.onInterleave(99, () => { /* noop, just primes the pump */ });
+
+    // The lone type-7 frame is the oldest entry in the whole buffer, so only a drop that picks the overflowing type's oldest entry leaves it in place.
+    transport.pushInbound(7, Buffer.from([0xaa]));
+
+    for(let i = 0; i < 9; i++) {
+
+      transport.pushInbound(42, Buffer.from([i]));
+    }
+
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.equal(warns.length, 1, "the ninth type-42 frame must trip exactly one drop");
+    assert.deepEqual((await receiver.waitFor([7], { signal: AbortSignal.timeout(500) })).payload, Buffer.from([0xaa]), "the type-7 entry must survive");
+
+    // Type 42 lost only its oldest frame (payload 0); the other eight remain in arrival order.
+    for(let i = 1; i < 9; i++) {
+
+      assert.equal((await receiver.waitFor([42], { signal: AbortSignal.timeout(500) })).payload.readUInt8(0), i);
+    }
   });
 
   test("a per-type buffer filled to exactly the high-water mark neither drops nor warns (the boundary below overflow)", async () => {

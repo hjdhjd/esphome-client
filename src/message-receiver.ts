@@ -17,9 +17,10 @@
  * - Pump tears down when the transport's iterator returns or throws, or when the receiver is disposed.
  * - The pump never blocks the transport - it always pulls the next message and routes it.
  *
- * Backpressure: per-type buffer with a small high-water mark (`MAX_BUFFERED_PER_TYPE`). Setup-phase messages should arrive in tight cadence; if unhandled messages
- * of the same type accumulate beyond that high-water mark, the receiver drops the oldest with a warning. This is intentional: setup is a sequence with
- * handful-of-messages cardinality.
+ * Backpressure: setup-phase messages that nothing claims on arrival wait in one buffer, in arrival order, with a small per-type high-water mark
+ * (`MAX_BUFFERED_PER_TYPE`). Setup-phase messages should arrive in tight cadence; if unhandled messages of the same type accumulate beyond that high-water mark, the
+ * receiver drops that type's oldest with a warning. This is intentional: setup is a sequence with handful-of-messages cardinality. The single arrival-ordered buffer
+ * is what lets a late `waitFor` and the drain hand-off both see messages in the order the device sent them.
  *
  * @module message-receiver
  */
@@ -28,8 +29,8 @@ import type { InboundMessage, TransportLike } from "./transport.ts";
 import { ConnectionClosedByPeerError } from "./errors.ts";
 
 /**
- * Per-type buffer high-water mark. Setup-phase doesn't reasonably accumulate more than a few unhandled messages of the same type at a time; exceeding this is almost
- * certainly a bug or a hostile peer. We drop the oldest with a warning rather than allowing unbounded growth.
+ * Per-type high-water mark of the setup-phase buffer. Setup-phase doesn't reasonably accumulate more than a few unhandled messages of the same type at a time;
+ * exceeding this is almost certainly a bug or a hostile peer. We drop that type's oldest with a warning rather than allowing unbounded growth.
  */
 const MAX_BUFFERED_PER_TYPE = 8;
 
@@ -105,9 +106,10 @@ export class MessageReceiver implements AsyncDisposable {
   private readonly awaiters = new Set<WaitForAwaiter>();
 
   /**
-   * Per-type buffered messages for late-arriving `waitFor` calls. Trimmed to `MAX_BUFFERED_PER_TYPE`.
+   * Setup-phase messages no interleave handler or awaiter claimed on arrival, in arrival order, for a late `waitFor` or the drain hand-off. Each message type keeps at
+   * most `MAX_BUFFERED_PER_TYPE` entries.
    */
-  private readonly typeBuffers = new Map<number, InboundMessage[]>();
+  private readonly buffered: InboundMessage[] = [];
 
   /**
    * Run-phase handler map. `null` until {@link startDrain} fires.
@@ -155,8 +157,9 @@ export class MessageReceiver implements AsyncDisposable {
   }
 
   /**
-   * Wait for the next message whose `type` is in `types`. Other inbound messages route to interleave handlers (during setup) or accumulate in the per-type buffer up to
-   * `MAX_BUFFERED_PER_TYPE`.
+   * Wait for the next message whose `type` is in `types`. A buffered message of a wanted type returns first, earliest arrival first, so a late `waitFor` sees
+   * messages in the order the device sent them. Other inbound messages route to interleave handlers (during setup) or wait in the arrival-ordered buffer, capped at
+   * `MAX_BUFFERED_PER_TYPE` entries per type.
    *
    * @param types - Acceptable message types. Must be non-empty.
    * @param options - Optional cancellation signal.
@@ -181,25 +184,15 @@ export class MessageReceiver implements AsyncDisposable {
 
     const wanted = new Set(types);
 
-    // Drain any buffered message of a wanted type first.
-    for(const t of wanted) {
+    // Take the earliest-arrived buffered message of any wanted type first. Scanning in arrival order rather than in `types` order is what keeps a burst of discovery
+    // responses in the device's order: the done sentinel buffered behind an entity response never overtakes it.
+    for(const [ index, message ] of this.buffered.entries()) {
 
-      const buffer = this.typeBuffers.get(t);
+      if(wanted.has(message.type)) {
 
-      if(buffer && (buffer.length > 0)) {
+        this.buffered.splice(index, 1);
 
-        // Length checked above; shift cannot return undefined here.
-        const message = buffer.shift();
-
-        if(message !== undefined) {
-
-          if(buffer.length === 0) {
-
-            this.typeBuffers.delete(t);
-          }
-
-          return message;
-        }
+        return message;
       }
     }
 
@@ -273,10 +266,10 @@ export class MessageReceiver implements AsyncDisposable {
    *
    * @param handlers - Map from message type to handler.
    * @param onTerminal - Required terminal-completion callback. Fired exactly once (via `settleTerminal`) when the pump ends during the run phase for any reason
-   * other than a host-initiated dispose - a passive transport death (peer RST/FIN, device reboot, mid-session decrypt failure, oversized frame) or a clean iterator
-   * end (transport FIN). A run-phase drain with no escalation path back to the host is the bug this seam closes: without it, a passive transport death leaves the host
-   * falsely `CONNECTED` with no liveness detector when `keepAlive` is disabled. The host wires this to its disconnect path so a peer death drives teardown and
-   * auto-reconnect.
+   * other than a host-initiated dispose - a passive transport death (peer RST or FIN, device reboot, mid-session decrypt failure, oversized frame), which the transport
+   * surfaces as a fault. The transport's iterator ends cleanly only when the transport is disposed, which the host does after disposing this receiver, so that path is
+   * suppressed. Without this escalation a passive transport death would leave the host falsely `CONNECTED` with no liveness detector when `keepAlive` is disabled; the
+   * host wires it to its disconnect path so a peer death drives teardown and auto-reconnect.
    */
   public startDrain(handlers: MessageHandlers, onTerminal: (cause: Error) => void): void {
 
@@ -305,18 +298,13 @@ export class MessageReceiver implements AsyncDisposable {
     this.awaiters.clear();
     this.interleaveHandlers.clear();
 
-    // Drain buffered messages into the new handlers in arrival order.
+    // Drain buffered messages into the new handlers in arrival order, emptying the buffer as we take it.
     this.drainHandlers = handlers;
 
-    for(const [ type, buffer ] of this.typeBuffers) {
+    for(const message of this.buffered.splice(0)) {
 
-      for(const message of buffer) {
-
-        this.dispatchToDrain({ payload: message.payload, type });
-      }
+      this.dispatchToDrain(message);
     }
-
-    this.typeBuffers.clear();
 
     this.ensurePump();
   }
@@ -357,7 +345,7 @@ export class MessageReceiver implements AsyncDisposable {
 
     this.awaiters.clear();
     this.interleaveHandlers.clear();
-    this.typeBuffers.clear();
+    this.buffered.length = 0;
     this.drainHandlers = null;
   }
 
@@ -392,8 +380,8 @@ export class MessageReceiver implements AsyncDisposable {
         this.dispatch(message);
       }
 
-      // Iterator ended cleanly (transport closed / peer FIN). `failPending` settles any setup-phase awaiter so it does not hang forever; `settleTerminal` additionally
-      // escalates the run-phase terminal completion to the host so a passive close drives teardown.
+      // The iterator ends cleanly only when the transport is disposed; a peer FIN or RST is a fault that throws into the catch below. `failPending` settles any
+      // setup-phase awaiter so it does not hang forever; `settleTerminal` escalates the run-phase terminal completion unless the host initiated the dispose.
       const cleanEnd = new ConnectionClosedByPeerError("Transport iterator ended.", "TRANSPORT_CLOSED");
 
       this.failPending(cleanEnd);
@@ -401,7 +389,7 @@ export class MessageReceiver implements AsyncDisposable {
 
     } catch(err) {
 
-      // A fault during the run phase (peer RST, mid-session decrypt failure, oversized frame) throws out of the `for await`. We keep `pumpError` (read by a late
+      // A fault during the run phase (peer RST or FIN, mid-session decrypt failure, oversized frame) throws out of the `for await`. We keep `pumpError` (read by a late
       // setup-phase `waitFor`) and `failPending` (settles setup-phase awaiters) for the setup-phase contract, then escalate the terminal completion to the host.
       this.pumpError = err instanceof Error ? err : new Error(String(err), { cause: err });
       this.failPending(this.pumpError);
@@ -442,7 +430,7 @@ export class MessageReceiver implements AsyncDisposable {
       return;
     }
 
-    // Setup phase. Order of precedence: interleave handlers > waitFor awaiters > per-type buffer.
+    // Setup phase. Order of precedence: interleave handlers > waitFor awaiters > the arrival-ordered buffer.
     const interleave = this.interleaveHandlers.get(message.type);
 
     if(interleave) {
@@ -473,22 +461,24 @@ export class MessageReceiver implements AsyncDisposable {
       }
     }
 
-    // No handler. Buffer for a future waitFor.
-    let buffer = this.typeBuffers.get(message.type);
+    // No handler. Buffer for a future waitFor, in arrival order.
+    this.buffered.push(message);
 
-    if(!buffer) {
+    let sameType = 0;
 
-      buffer = [];
-      this.typeBuffers.set(message.type, buffer);
+    for(const entry of this.buffered) {
+
+      if(entry.type === message.type) {
+
+        sameType++;
+      }
     }
 
-    buffer.push(message);
+    if(sameType > MAX_BUFFERED_PER_TYPE) {
 
-    if(buffer.length > MAX_BUFFERED_PER_TYPE) {
-
-      // Drop the oldest. The buffer is sized so this only fires under abuse or a buggy peer; warn so the drop is observable (the next waitFor() consumer also sees it in
-      // the per-type buffer's residual contents).
-      buffer.shift();
+      // Drop this type's oldest entry and leave every other type's entries in place. The mark is sized so this only fires under abuse or a buggy peer; warn so the drop
+      // is observable.
+      this.buffered.splice(this.buffered.findIndex((entry) => entry.type === message.type), 1);
       this.log?.warn("Dropped the oldest buffered setup-phase message; the per-type buffer exceeded its high-water mark.",
         { highWaterMark: MAX_BUFFERED_PER_TYPE, messageType: message.type });
     }
@@ -514,10 +504,9 @@ export class MessageReceiver implements AsyncDisposable {
 
       } catch(err) {
 
-        // A run-phase handler threw. Crucially this may NOT be a transport fault: run-phase handlers call bus.emit, which synchronously invokes consumer on() listeners,
-        // and EventEmitter.emit rethrows a listener's exception (the on() rail does not isolate it) - so a buggy consumer callback surfaces right here. We log and
-        // CONTINUE, never tearing the connection down: one consumer's listener bug must not kill a connection shared by every other consumer. Genuine transport death is
-        // the pump's for-await fault path, which escalates via settleTerminal (Seam A), not this catch.
+        // A run-phase handler threw - a decode fault on a malformed frame, say. A consumer's listener cannot reach this catch: the bus reports a listener's fault through
+        // its own error callback before it can unwind into a handler's emit. We log and CONTINUE, never tearing the connection down: one bad frame must not kill a
+        // connection shared by every consumer. Genuine transport death is the pump's for-await fault path, which escalates via settleTerminal, not this catch.
         this.log?.warn("A run-phase message handler threw while dispatching an inbound frame; the frame was dropped and the connection was kept alive.",
           { error: err, messageType: message.type });
       }

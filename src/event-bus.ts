@@ -7,8 +7,9 @@
  * Typed event bus with three subscription rails: Disposable callbacks, one-shot Promises, and AsyncIterable streams with a configurable backpressure policy.
  *
  * @remarks Composes with `node:events.EventEmitter` internally rather than extending it. Consumers see a curated typed facade, not the platform's full inherited surface.
- * The platform handles emit, listener bookkeeping, listener-error propagation, and reentrancy edge cases; this layer adds three things on top: typed event/payload
- * mapping, `Disposable` subscription handles for `using`-style automatic teardown, and the per-stream backpressure policy that the platform's `events.on` lacks.
+ * The platform handles emit, listener bookkeeping, and reentrancy edge cases; this layer adds typed event/payload mapping, `Disposable` subscription handles for
+ * `using`-style automatic teardown, listener isolation (a callback's fault goes to the bus's error callback, never into the emit site or its sibling listeners), and
+ * the per-stream backpressure policy that the platform's `events.on` lacks.
  *
  * One subtlety the facade hides: `node:events` reserves certain event names - notably "error", which it throws on when emitted with no listener. To keep every
  * `keyof EventMap` uniform, the facade translates each logical name to a namespaced channel before it touches the emitter (see `CHANNEL_PREFIX`). Disposal rides
@@ -59,6 +60,43 @@ export interface StreamOptions {
    * Optional cancellation signal. Aborting causes the iterator to throw the abort reason on its next iteration and triggers cleanup of the underlying listener.
    */
   signal?: AbortSignal;
+}
+
+/**
+ * Stream options plus the hooks a library view uses to build on {@link EventBus.stream} without a wrapper generator: a view acquires its resource, hands its release to
+ * `onClose`, and hands its filter or projection to `select`. A generator's `finally` never runs when `return()` precedes the first `next()`, so a view built on these
+ * hooks is the only shape that releases its resource when the consumer abandons the iterable before iterating it.
+ *
+ * @typeParam In - The channel's payload type.
+ * @typeParam Out - The value the stream yields. Equals `In` when no selector is given.
+ *
+ * @internal
+ */
+export interface StreamViewOptions<In, Out> extends StreamOptions {
+
+  /**
+   * Runs exactly once when the stream reaches its terminal state - a signal abort, `return()`, `throw()`, a backpressure failure, or bus dispose - including when the
+   * iterator was never advanced.
+   */
+  onClose?: () => void;
+
+  /**
+   * Maps each emitted payload to the value the stream yields, or to `undefined` to skip it. Runs at emit time, so a skipped payload never enters the queue and never
+   * counts toward `highWaterMark`. A selector therefore cannot yield `undefined` itself; a channel whose payload is `undefined` streams without one.
+   */
+  select?: (payload: In) => Out | undefined;
+}
+
+/**
+ * Construction options for {@link EventBus}.
+ */
+export interface EventBusOptions {
+
+  /**
+   * Receives the fault of a callback listener - an exception it throws, or the rejection of a promise it returns - with the logical event name. The bus routes every
+   * such fault here, so the remaining listeners on the channel still run and `emit` never throws from consumer code.
+   */
+  readonly onListenerError: (error: unknown, event: string) => void;
 }
 
 /**
@@ -125,13 +163,23 @@ export class EventBus<EventMap extends object> {
   private readonly channels = new Map<string, string>();
 
   /**
-   * Constructs a new event bus.
+   * Receives every callback listener's fault. See {@link EventBusOptions.onListenerError}.
    */
-  public constructor() {
+  private readonly onListenerError: (error: unknown, event: string) => void;
+
+  /**
+   * Constructs a new event bus.
+   *
+   * @param options - Construction options. A bus built without them reports a listener's fault by rethrowing it on the next tick, the report path Node's own
+   *   `EventTarget` uses, so the fault reaches `uncaughtException` - and fails the test that raised it - rather than vanishing, while the emit still completes for
+   *   every other listener.
+   */
+  public constructor({ onListenerError }: EventBusOptions = { onListenerError: reportListenerError }) {
 
     this.disposeController = new AbortController();
     this.emitter = new EventEmitter();
     this.emitter.setMaxListeners(0);
+    this.onListenerError = onListenerError;
   }
 
   /**
@@ -159,8 +207,11 @@ export class EventBus<EventMap extends object> {
    * Subscribe a callback. The returned `Disposable` removes the listener when disposed; per the explicit-resource-management proposal, `using sub = bus.on(...)`
    * automatically tears the listener down on scope exit.
    *
+   * A callback that throws, or returns a promise that rejects, is reported through {@link EventBusOptions.onListenerError}; every other listener on the channel still
+   * receives the emission, and the emit site - often a timer or the receive loop rather than the consumer's own call - never sees the fault.
+   *
    * @param event - The event name. Narrowed to keys of `EventMap`.
-   * @param handler - The callback. The payload parameter type is inferred from `EventMap[event]`.
+   * @param handler - The callback. The payload parameter type is inferred from `EventMap[event]`. Its return value is read only to catch a returned promise's rejection.
    * @returns A `Disposable` that removes the listener.
    *
    * @example
@@ -169,7 +220,7 @@ export class EventBus<EventMap extends object> {
    * // Subscription torn down automatically on scope exit.
    * ```
    */
-  public on<K extends keyof EventMap & string>(event: K, handler: (payload: EventMap[K]) => void): Disposable {
+  public on<K extends keyof EventMap & string>(event: K, handler: (payload: EventMap[K]) => unknown): Disposable {
 
     if(this.disposed) {
 
@@ -177,7 +228,25 @@ export class EventBus<EventMap extends object> {
     }
 
     const channel = this.channel(event);
-    const wrapped = (payload: unknown): void => { handler(payload as EventMap[K]); };
+    const onRejected = (error: unknown): void => { this.onListenerError(error, event); };
+
+    // A `void`-typed callback may still be `async`, so a returned thenable gets a rejection handler too...otherwise its rejection would escape as an unhandled rejection
+    // that no listener isolation could reach.
+    const wrapped = (payload: unknown): void => {
+
+      try {
+
+        const result = handler(payload as EventMap[K]);
+
+        if(isThenable(result)) {
+
+          result.then(undefined, onRejected);
+        }
+      } catch(error) {
+
+        onRejected(error);
+      }
+    };
 
     this.emitter.on(channel, wrapped);
 
@@ -219,13 +288,19 @@ export class EventBus<EventMap extends object> {
    *
    * The iterator ends on:
    * - `options.signal` abort (rejects with the abort reason)
+   * - a `throw` backpressure overrun (rejects with {@link BackpressureError})
    * - {@link EventBus.dispose} (resolves cleanly)
-   * - the consumer breaking out of `for await` (the `return()` path tears down the listener)
+   * - the consumer's `return()` or `throw()`, including a `break` out of `for await` (tears down the listener)
    *
-   * Each call to {@link EventBus.stream} produces an independent subscription. Two concurrent iterators of the same event each receive every emission.
+   * The iterator follows the async-generator contract at its end: items already queued drain first, a terminal error rejects exactly one `next()`, and every later
+   * `next()` resolves done; `return()` and `throw()` discard the queue, and `throw()` rejects with the error it was given. The listener is attached when this method
+   * returns, not on the first `next()`, so an abort, `return()`, or dispose releases it even when the iterator was never advanced.
+   *
+   * One stream serves one awaiter at a time: a second `next()` issued before the prior one settles orphans the prior call, so drive one stream from one loop. Each call
+   * to {@link EventBus.stream} produces an independent subscription, and two concurrent iterators of the same event each receive every emission.
    *
    * @param event - The event name. Narrowed to keys of `EventMap`.
-   * @param options - Optional backpressure policy and cancellation signal.
+   * @param options - Optional backpressure policy and cancellation signal, plus the internal view hooks of {@link StreamViewOptions}.
    * @returns An `AsyncIterable<EventMap[K]>`.
    *
    * @example
@@ -235,26 +310,45 @@ export class EventBus<EventMap extends object> {
    * }
    * ```
    */
-  public stream<K extends keyof EventMap & string>(event: K, options: StreamOptions = {}): AsyncIterable<EventMap[K]> {
+  public stream<K extends keyof EventMap & string>(event: K, options?: StreamViewOptions<EventMap[K], EventMap[K]>): AsyncIterable<EventMap[K]>;
+
+  /**
+   * A stream whose selector projects each payload to another type. Identical to the payload-typed overload in every other respect.
+   *
+   * @typeParam Out - The value `options.select` projects each payload to.
+   * @param event - The event name. Narrowed to keys of `EventMap`.
+   * @param options - The stream options, with the projecting selector.
+   * @returns An `AsyncIterable<Out>`.
+   *
+   * @internal
+   */
+  public stream<K extends keyof EventMap & string, Out>(event: K, options: StreamViewOptions<EventMap[K], Out>): AsyncIterable<Out>;
+
+  public stream<K extends keyof EventMap & string, Out>(event: K, options: StreamViewOptions<EventMap[K], Out> = {}): AsyncIterable<Out> {
 
     if(this.disposed) {
 
       // After dispose the one-shot DISPOSE_CHANNEL has already fired, so a freshly constructed BackpressureStream would attach a dispose listener that never settles and
-      // park in next() forever. We mirror the defensive on()/once() dispose handling by returning an already-ended iterable, so a post-dispose stream ends cleanly.
-      return endedAsyncIterable<EventMap[K]>();
+      // park in next() forever. We mirror the defensive on()/once() dispose handling by returning an already-ended iterable, so a post-dispose stream ends cleanly. An
+      // ended stream has reached its terminal state, so the view's close hook runs here, once, exactly as it would on a live stream's end.
+      options.onClose?.();
+
+      return endedAsyncIterable<Out>();
     }
 
-    return new BackpressureStream<EventMap[K]>(this.emitter, this.channel(event), {
+    return new BackpressureStream<EventMap[K], Out>(this.emitter, this.channel(event), {
 
       backpressure: options.backpressure ?? DEFAULT_BACKPRESSURE,
       highWaterMark: options.highWaterMark ?? DEFAULT_HIGH_WATER_MARK,
+      onClose: options.onClose,
+      select: options.select,
       signal: options.signal
     });
   }
 
   /**
-   * Emit a payload. Type-narrowed against `EventMap` so a typo in the event name or a payload-shape mismatch is a compile error. A listener that throws propagates the
-   * error to the emit site, which may be a timer or the reconnect supervisor rather than a consumer's own call, so each listener handles its own errors.
+   * Emit a payload. Type-narrowed against `EventMap` so a typo in the event name or a payload-shape mismatch is a compile error. A callback listener's fault is
+   * reported through {@link EventBusOptions.onListenerError} rather than thrown here, so an emit from a timer or the receive loop completes for every listener.
    *
    * @param event - The event name.
    * @param payload - The payload value, narrowed to `EventMap[event]`.
@@ -332,22 +426,56 @@ export function endedAsyncIterable<T>(): AsyncIterable<T> {
 }
 
 /**
+ * The listener-error sink of a bus constructed without one. Rethrowing on the next tick hands the fault to `uncaughtException`, the report path Node's own
+ * `EventTarget` uses for a throwing listener, outside the emit that raised it.
+ *
+ * @param error - The listener's fault.
+ */
+function reportListenerError(error: unknown): void {
+
+  process.nextTick((): never => { throw error; });
+}
+
+/**
+ * Whether a listener's return value is a thenable. An `async` callback returns one; a plain callback returns `undefined`, which short-circuits the property read.
+ *
+ * @param value - The listener's return value.
+ * @returns `true` when the value exposes a callable `then`.
+ */
+function isThenable(value: unknown): value is PromiseLike<unknown> {
+
+  return typeof (value as Nullable<Partial<PromiseLike<unknown>>>)?.then === "function";
+}
+
+/**
+ * {@link StreamViewOptions} with every default resolved, as {@link BackpressureStream} receives them.
+ */
+interface ResolvedStreamOptions<In, Out> {
+
+  readonly backpressure: StreamBackpressureMode;
+  readonly highWaterMark: number;
+  readonly onClose: (() => void) | undefined;
+  readonly select: ((payload: In) => Out | undefined) | undefined;
+  readonly signal: AbortSignal | undefined;
+}
+
+/**
  * AsyncIterableIterator implementation backing {@link EventBus.stream}. Owns a per-stream queue with the configured high-water mark and backpressure policy; attaches
  * one listener to the parent emitter for the lifetime of the iteration.
  *
  * @internal
  */
-class BackpressureStream<T> implements AsyncIterableIterator<T> {
+class BackpressureStream<In, Out> implements AsyncIterableIterator<Out> {
 
   /**
    * Items waiting to be yielded, in arrival order.
    */
-  private readonly queue: T[] = [];
+  private readonly queue: Out[] = [];
 
   /**
    * Resolver for the awaiter that is currently parked in `next()`. Set when a consumer awaits and the queue is empty; cleared as soon as we resolve it.
    */
-  private resolveNext: Nullable<(result: IteratorResult<T>) => void> = null;
+  private resolveNext: Nullable<(result: IteratorResult<Out>) => void> = null;
 
   /**
    * Reject for the awaiter that is currently parked in `next()`. Used when the stream errors (signal abort or backpressure throw) while a consumer is parked.
@@ -360,40 +488,60 @@ class BackpressureStream<T> implements AsyncIterableIterator<T> {
   private dropped = 0;
 
   /**
-   * True once the stream has reached a terminal state (signal abort, dispose, consumer return). New `next()` calls resolve `done`.
+   * True once the stream has reached a terminal state (signal abort, backpressure failure, dispose, consumer `return()` or `throw()`). Once the queue and any pending
+   * error are spent, `next()` resolves `done`.
    */
   private closed = false;
 
   /**
-   * Pending error. When set, the next `next()` call throws this rather than yielding from the queue. Used by signal abort and backpressure throw modes.
+   * Terminal error not yet surfaced to the consumer. The first `next()` after the queue drains rejects with it and clears it, so every later `next()` resolves done.
+   * A failure that finds a consumer parked in `next()` rejects that call directly and is never stored.
    */
   private error: Nullable<Error> = null;
 
   /**
-   * Listener cleanup. Runs once on first terminal state; safe to call more than once through the `closed` guard.
+   * Listener teardown plus the view's close hook. Runs exactly once, from whichever of `fail()` or `finish()` reaches the terminal state first; the `closed` guard in
+   * both makes every later terminal trigger a no-op.
    */
   private readonly cleanup: () => void;
 
   /**
-   * Resolved (no defaults applied) stream options.
+   * Resolved stream options.
    */
-  private readonly options: { backpressure: StreamBackpressureMode; highWaterMark: number; signal: AbortSignal | undefined };
+  private readonly options: ResolvedStreamOptions<In, Out>;
 
   /**
    * @param emitter - Parent emitter.
    * @param eventName - The already-namespaced channel to subscribe to. The bus translates the logical event name via {@link EventBus.channel} before constructing the
    *   stream, so this value is the physical emitter channel, not the logical event name.
-   * @param options - Resolved (no defaults applied) stream options. The caller resolves defaults before constructing.
+   * @param options - Resolved stream options. The caller resolves defaults before constructing.
    */
-  public constructor(emitter: EventEmitter, eventName: string,
-    options: { backpressure: StreamBackpressureMode; highWaterMark: number; signal: AbortSignal | undefined }) {
+  public constructor(emitter: EventEmitter, eventName: string, options: ResolvedStreamOptions<In, Out>) {
 
     this.options = options;
 
-    const onPayload = (payload: unknown): void => { this.push(payload as T); };
+    const { onClose, select, signal } = options;
+
+    // A selector runs at emit time, so a payload it skips never enters the queue and never counts toward the high-water mark.
+    const onPayload = (payload: unknown): void => {
+
+      if(select === undefined) {
+
+        this.push(payload as Out);
+
+        return;
+      }
+
+      const value = select(payload as In);
+
+      if(value !== undefined) {
+
+        this.push(value);
+      }
+    };
     const onAbort = (): void => {
 
-      const reason = options.signal?.reason instanceof Error ? options.signal.reason : new DOMException("Aborted", "AbortError");
+      const reason = signal?.reason instanceof Error ? signal.reason : new DOMException("Aborted", "AbortError");
 
       this.fail(reason);
     };
@@ -401,16 +549,17 @@ class BackpressureStream<T> implements AsyncIterableIterator<T> {
 
     emitter.on(eventName, onPayload);
     emitter.on(DISPOSE_CHANNEL, onDispose);
-    options.signal?.addEventListener("abort", onAbort, { once: true });
+    signal?.addEventListener("abort", onAbort, { once: true });
 
     this.cleanup = (): void => {
 
       emitter.off(eventName, onPayload);
       emitter.off(DISPOSE_CHANNEL, onDispose);
-      options.signal?.removeEventListener("abort", onAbort);
+      signal?.removeEventListener("abort", onAbort);
+      onClose?.();
     };
 
-    if(options.signal?.aborted) {
+    if(signal?.aborted) {
 
       onAbort();
     }
@@ -419,7 +568,7 @@ class BackpressureStream<T> implements AsyncIterableIterator<T> {
   /**
    * Push a payload into the queue, applying the backpressure policy when the queue is full.
    */
-  private push(value: T): void {
+  private push(value: Out): void {
 
     if(this.closed) {
 
@@ -469,7 +618,7 @@ class BackpressureStream<T> implements AsyncIterableIterator<T> {
   }
 
   /**
-   * Mark the stream as failed. Any parked consumer is rejected with `reason`; future `next()` calls also throw `reason`.
+   * Mark the stream as failed. A parked consumer is rejected with `reason` at once; otherwise the first `next()` after the queue drains rejects with it.
    */
   private fail(reason: Error): void {
 
@@ -479,7 +628,6 @@ class BackpressureStream<T> implements AsyncIterableIterator<T> {
     }
 
     this.closed = true;
-    this.error = reason;
 
     if(this.rejectNext) {
 
@@ -488,6 +636,9 @@ class BackpressureStream<T> implements AsyncIterableIterator<T> {
       this.resolveNext = null;
       this.rejectNext = null;
       reject(reason);
+    } else {
+
+      this.error = reason;
     }
 
     this.cleanup();
@@ -518,9 +669,20 @@ class BackpressureStream<T> implements AsyncIterableIterator<T> {
   }
 
   /**
+   * Consumer-initiated end shared by `return()` and `throw()`. Discards the queue and any pending error, so every later `next()` resolves done the way an async
+   * generator's does once it has returned, and tears the stream down if it is still live.
+   */
+  private end(): void {
+
+    this.queue.length = 0;
+    this.error = null;
+    this.finish();
+  }
+
+  /**
    * Returns the next item, or throws/closes per the stream's terminal state.
    */
-  public async next(): Promise<IteratorResult<T>> {
+  public async next(): Promise<IteratorResult<Out>> {
 
     // Drain the queue first so we never lose items already in flight.
     if(this.queue.length > 0) {
@@ -528,14 +690,19 @@ class BackpressureStream<T> implements AsyncIterableIterator<T> {
       // The queue can legitimately hold an `undefined` payload - the `heartbeat` channel's payload is always undefined and `disconnect` is `string | undefined`. A
       // positive length guarantees a real buffered item, so we narrow the shift result structurally: the value IS the payload, never an absence signal. Gating on
       // `value !== undefined` here would instead drop those legitimate undefined payloads and park as if the queue were empty, stalling the consumer.
-      const value = this.queue.shift() as T;
+      const value = this.queue.shift() as Out;
 
       return { done: false, value };
     }
 
+    // A terminal error surfaces from exactly one call, then the stream reads as done.
     if(this.error) {
 
-      throw this.error;
+      const error = this.error;
+
+      this.error = null;
+
+      throw error;
     }
 
     if(this.closed) {
@@ -543,7 +710,7 @@ class BackpressureStream<T> implements AsyncIterableIterator<T> {
       return { done: true, value: undefined };
     }
 
-    const { promise, resolve, reject } = Promise.withResolvers<IteratorResult<T>>();
+    const { promise, resolve, reject } = Promise.withResolvers<IteratorResult<Out>>();
 
     this.resolveNext = resolve;
     this.rejectNext = reject;
@@ -552,13 +719,25 @@ class BackpressureStream<T> implements AsyncIterableIterator<T> {
   }
 
   /**
-   * Consumer-initiated termination via `for await` break/throw. Tears down the listener and resolves the iterator.
+   * Consumer-initiated termination, including a `break` out of `for await`. Tears down the listener and resolves the iterator.
    */
-  public async return(): Promise<IteratorResult<T>> {
+  public async return(): Promise<IteratorResult<Out>> {
 
-    this.finish();
+    this.end();
 
     return { done: true, value: undefined };
+  }
+
+  /**
+   * Consumer-initiated termination with an error. Tears down the listener and rejects with `error`, as an async generator does when thrown into before it resumes.
+   *
+   * @param error - The error to reject with.
+   */
+  public async throw(error?: unknown): Promise<IteratorResult<Out>> {
+
+    this.end();
+
+    throw error;
   }
 
   /**

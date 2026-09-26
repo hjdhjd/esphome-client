@@ -330,6 +330,37 @@ export function readVarint(buffer: Buffer, offset: number): [ number, number ] {
 }
 
 /**
+ * Read a length-delimited field body at `offset` in `buffer`: the varint length prefix and the bytes it declares.
+ *
+ * @param buffer - Source buffer.
+ * @param offset - Offset of the length prefix.
+ * @returns A tuple `[body, bytesRead]`. `body` is a view into `buffer`, not a copy; `bytesRead` counts the prefix and the body, so advance the caller's cursor by this
+ * amount.
+ *
+ * @throws {@link TruncatedMessageError} when the declared length runs past the end of `buffer`, and whatever {@link readVarint} throws for a malformed or truncated
+ * length prefix.
+ *
+ * @remarks `subarray` clamps an end past the buffer to the buffer's length, so a caller that sliced the declared length itself would read a short body and advance its
+ * cursor past the end. This reader refuses the overrun with the same typed truncation error {@link decodeProtobuf} raises, so the hand-written decoders that walk a
+ * payload field by field fail closed exactly as the codec does.
+ *
+ * @internal
+ */
+export function readLengthDelimited(buffer: Buffer, offset: number): [ Buffer, number ] {
+
+  const [ len, lenLen ] = readVarint(buffer, offset);
+  const start = offset + lenLen;
+
+  if((start + len) > buffer.length) {
+
+    throw new TruncatedMessageError("LENGTH_DELIMITED field declares " + String(len) + " bytes but only " + String(buffer.length - start) + " remain.",
+      "TRUNCATED_MESSAGE");
+  }
+
+  return [ buffer.subarray(start, start + len), lenLen + len ];
+}
+
+/**
  * Encode a list of fields into a protobuf message.
  *
  * @param fields - Field definitions to encode in order.

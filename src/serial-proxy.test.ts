@@ -520,7 +520,7 @@ describe("SerialProxyApi.data refcounted subscription", () => {
     assert.deepEqual(received[1]!.data, Buffer.from([0x03]));
     assert.equal(received[1]!.instance, 0);
 
-    // Detach the iterator. The generator's finally should send UNSUBSCRIBE.
+    // Detach the iterator. The view's close hook releases the last subscriber, which sends UNSUBSCRIBE.
     await iter.return?.();
 
     assert.equal(handle.sent.length, 2);
@@ -612,6 +612,46 @@ describe("SerialProxyApi.data refcounted subscription", () => {
   });
 });
 
+describe("SerialProxyApi.data: a never-iterated view releases eagerly", () => {
+
+  test("aborting the signal of a never-iterated view releases its subscriber and sends UNSUBSCRIBE, and a later return() sends nothing further", async () => {
+
+    const handle = makeHost();
+    const api = new SerialProxyApi(handle.host);
+    const controller = new AbortController();
+    const iter = api.data(0, { signal: controller.signal })[Symbol.asyncIterator]();
+
+    assert.equal(api.subscriberCount(0), 1);
+    assert.equal(handle.bus.listenerCount("serialData"), 1);
+
+    // The abort alone releases the view: no next() ever ran, yet the subscriber leaves, the last release sends UNSUBSCRIBE, and the bus listener detaches.
+    controller.abort();
+
+    assert.equal(api.subscriberCount(0), 0, "the abort must release a view that was never iterated");
+    assert.equal(handle.bus.listenerCount("serialData"), 0);
+    assert.equal(handle.sent.length, 2);
+    assert.equal(decodeFields(handle.sent[1]!.payload)[2]?.[0], SerialProxyRequestType.UNSUBSCRIBE);
+
+    // A later return() finds the view already closed, so it releases nothing and sends nothing further.
+    await iter.return!();
+
+    assert.equal(handle.sent.length, 2);
+  });
+
+  test("return() on a never-iterated view releases its subscriber without a signal", async () => {
+
+    const handle = makeHost();
+    const api = new SerialProxyApi(handle.host);
+    const iter = api.data(0)[Symbol.asyncIterator]();
+
+    await iter.return!();
+
+    assert.equal(api.subscriberCount(0), 0, "return() must release a view that was never iterated");
+    assert.equal(handle.bus.listenerCount("serialData"), 0);
+    assert.equal(decodeFields(handle.sent.at(-1)!.payload)[2]?.[0], SerialProxyRequestType.UNSUBSCRIBE);
+  });
+});
+
 describe("SerialProxyApi.acceptDataMessage", () => {
 
   test("decodes the wire frame and emits serialData on the bus", () => {
@@ -683,7 +723,7 @@ describe("SerialProxyApi.clearConnectionState and reissueOnReconnect", () => {
     // reissueOnReconnect re-arms the device for these survivors (verified by the harness).
     assert.equal(api.subscriberCount(0), 2, "clearConnectionState must PRESERVE the subscriber ledger, so the count stays at the live value");
 
-    // The iterators' finally blocks still run eventually; explicitly tear them down here so the test exits cleanly.
+    // Tear both views down explicitly so their bus listeners detach and the test exits cleanly.
     void iterA.return?.();
     void iterB.return?.();
   });
@@ -712,7 +752,7 @@ describe("SerialProxyApi.clearConnectionState and reissueOnReconnect", () => {
     void iter1.return?.();
   });
 
-  test("iterator finally after clearConnectionState (no reissue) does not send a stray UNSUBSCRIBE", async () => {
+  test("iterator teardown after clearConnectionState (no reissue) does not send a stray UNSUBSCRIBE", async () => {
 
     const handle = makeHost();
     const api = new SerialProxyApi(handle.host);
@@ -723,13 +763,15 @@ describe("SerialProxyApi.clearConnectionState and reissueOnReconnect", () => {
 
     api.clearConnectionState();
 
-    // Clear the captured frames so we can assert that the iterator's finally adds nothing.
+    // Clear the captured frames so we can assert that the teardown's release adds nothing.
     handle.sent.length = 0;
 
     // Because clearConnectionState emptied the wire cache and no reissue re-armed it, the last-release reduces to EMPTY against an absent cache entry, so the empty
     // transition does NOT fire - no stray UNSUBSCRIBE for a connection the new transport never subscribed.
     await iter.return?.();
 
+    // The release must have run, so the silence below is the empty cache's doing rather than a teardown that never released.
+    assert.equal(api.subscriberCount(0), 0, "the teardown must release the subscriber");
     assert.equal(handle.sent.length, 0, "post-clearConnectionState iterator teardown must not send a stray UNSUBSCRIBE");
   });
 
@@ -877,9 +919,9 @@ runReissuableSubscriptionContract<SerialProxyApi>({
   label: "SerialProxyApi.data",
   openSubscription: (api: SerialProxyApi) => {
 
-    // Open the iterator under an AbortController and start it so it enters its try/finally and parks in `for await` - exactly modeling a consumer parked across a
-    // reconnect. release() aborts the controller, which rejects the parked inner stream next, unwinds the `for await`, and runs the cleanup finally (the subscription
-    // release). We swallow the parked promise's abort rejection so it does not surface as an unhandled rejection.
+    // Open the iterator under an AbortController and park one next() on it - exactly modeling a consumer parked in `for await` across a reconnect. release() aborts
+    // the controller, which rejects the parked next() and runs the view's close hook (the subscription release). We swallow the parked promise's abort rejection so it
+    // does not surface as an unhandled rejection.
     const controller = new AbortController();
     const iter = api.data(CONTRACT_INSTANCE, { signal: controller.signal })[Symbol.asyncIterator]();
     const parked = iter.next();
@@ -890,7 +932,7 @@ runReissuableSubscriptionContract<SerialProxyApi>({
 
       controller.abort();
 
-      // Await the parked next so the generator's finally (the subscription release) has run before the harness asserts on the wire effects.
+      // Await the parked next so the abort has settled it before the harness asserts on the wire effects. The close hook itself runs synchronously inside abort().
       await parked.catch((): void => { /* expected abort */ });
     } };
   },

@@ -36,10 +36,10 @@ export function buildKeyField(key: number, fieldNumber = 1): ProtoField {
 }
 
 // The inclusive protobuf integer domains the command encoder writes. Varint, enum, and fixed32 fields carry uint32 values; scalar and packed sint32 fields carry int32
-// values.
-const INT32_MAX = 0x7FFFFFFF;
-const INT32_MIN = -0x80000000;
-const UINT32_MAX = 0xFFFFFFFF;
+// values. The CLI range-checks its integer command flags against these same bounds, so a value the CLI accepts is one the encoder accepts.
+export const INT32_MAX = 0x7FFFFFFF;
+export const INT32_MIN = -0x80000000;
+export const UINT32_MAX = 0xFFFFFFFF;
 
 /**
  * Test whether a value is a safe integer within an inclusive range.
@@ -316,7 +316,7 @@ export function encodeEntityCommand(input: EncodeEntityCommandInput): EncodeResu
         // not reject at compile time - would otherwise fall through unmapped and be coerced to wire value 0 by encodeVarint. Because 0 is "off" for climate.mode and
         // water_heater.mode, the device would be silently commanded into the wrong (often OFF) state. The SSOT encoder fails closed here rather than corrupting the
         // command on the wire; a numeric value (the caller passed the protocol number directly) is left untouched.
-        if(!(value in mapping)) {
+        if(!Object.hasOwn(mapping, value)) {
 
           return { detail: "field '" + fieldName + "' received unknown enum value '" + value + "'", ok: false, reason: "enum_value_unknown" };
         }

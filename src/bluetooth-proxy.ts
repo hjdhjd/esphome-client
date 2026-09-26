@@ -31,7 +31,9 @@ import { EMPTY, ReissuableSubscription } from "./reissuable-subscription.ts";
 import type { EspHomeLogging, Nullable } from "./types.ts";
 import type { EventBus, StreamOptions } from "./event-bus.ts";
 import type { FieldValue, ProtoField } from "./protocol/index.ts";
-import { MessageType, WireType, decodeProtobuf, encodeProtoFields, extractNumberField, readVarint, readVarintBigInt, zigzagDecode } from "./protocol/index.ts";
+import {
+  MessageType, WireType, decodeProtobuf, encodeProtoFields, extractNumberField, readLengthDelimited, readVarint, readVarintBigInt, zigzagDecode
+} from "./protocol/index.ts";
 import { BluetoothDeviceRequestType } from "./api-constants.ts";
 import { Buffer } from "node:buffer";
 import type { ClientEventsMap } from "./esphome-client.ts";
@@ -603,6 +605,9 @@ export class BluetoothProxyApi implements SubscriptionLifecycle {
    * (`BluetoothLERawAdvertisementsResponse.advertisements`); the handler fans them out before they reach the iterator so consumers filter / count / aggregate
    * per-advertisement, not per-batch.
    *
+   * The view releases its subscriber once, on whichever ends it first: the signal aborting, the iterator's `return()` or `throw()` (including a `break` out of
+   * `for await`), or the bus ending the stream. A view abandoned before it is ever iterated still releases when its signal aborts or its `return()` runs.
+   *
    * @remarks The wire-side `flags` field is documented as `uint32` in `api.proto` without further specification; we pass `0` which matches the upstream firmware's
    * default-subscription behavior. If a future ESPHome release documents flag bits, plumbing them through becomes an additive option.
    *
@@ -619,30 +624,15 @@ export class BluetoothProxyApi implements SubscriptionLifecycle {
     // Acquire a subscriber synchronously at call time so concurrent attaches are race-free. The first acquire on ADVERTISEMENT_CHANNEL drives the reduction from EMPTY to
     // `true`, which fires the wire-side SUBSCRIBE; subsequent acquires share the same subscription (the reduction is already `true`, so onChange is suppressed).
     const handle = this.advertisementSubscription.acquire(ADVERTISEMENT_CHANNEL, true);
-    const stream = this.host.bus.stream("bluetoothAdvertisement", options);
 
-    // Cleanup as a `this`-capturing arrow so the IIFE generator below doesn't need a `this` alias. The primitive pairs release to acquire by symbol identity, so the
-    // last release drives the reduction back to EMPTY (firing UNSUBSCRIBE) and a post-reconnect dispose is correct without any "still nonzero" guard - the ledger
-    // survived the reconnect and the wire cache was re-armed by reissueOnReconnect.
-    const releaseSubscription = (): void => {
+    // The bus runs the close hook exactly once, on the stream's first terminal path, so the hook releases the handle directly. The primitive pairs release to acquire
+    // by symbol identity, so the last release drives the reduction back to EMPTY (firing UNSUBSCRIBE) and a post-reconnect release is correct without any "still
+    // nonzero" guard - the ledger survived the reconnect and the wire cache was re-armed by reissueOnReconnect.
+    return this.host.bus.stream("bluetoothAdvertisement", {
 
-      this.advertisementSubscription.release(handle);
-    };
-
-    return (async function *(): AsyncGenerator<BluetoothLERawAdvertisement> {
-
-      try {
-
-        for await (const ad of stream) {
-
-          yield ad;
-        }
-
-      } finally {
-
-        releaseSubscription();
-      }
-    })();
+      ...options,
+      onClose: (): void => { this.advertisementSubscription.release(handle); }
+    });
   }
 
   /**
@@ -1026,7 +1016,11 @@ export class BluetoothProxyApi implements SubscriptionLifecycle {
 
   /**
    * Iterate notification data for a (address, handle) pair. The iterator filters the global `bluetoothNotifyData` bus event so each consumer only sees notifications
-   * for the handle they care about. Multiple concurrent iterators on the same (address, handle) all receive every push.
+   * for the handle they care about, and the filter runs as each chunk is emitted, so another handle's chunks never occupy this view's queue. Multiple concurrent
+   * iterators on the same (address, handle) all receive every push.
+   *
+   * The view releases its ledger entry once, on whichever ends it first: the signal aborting, the iterator's `return()` or `throw()` (including a `break` out of
+   * `for await`), or the bus ending the stream. A view abandoned before it is ever iterated still releases when its signal aborts or its `return()` runs.
    *
    * Note that {@link setNotify} and {@link notify} are intentionally separate. `setNotify(enable=true)` issues the wire-side enable and awaits its response; `notify()`
    * is purely a client-side iterator over the resulting bus events. This mirrors how a BLE programmer thinks: "enable notify on this handle, then iterate the stream."
@@ -1051,33 +1045,16 @@ export class BluetoothProxyApi implements SubscriptionLifecycle {
     // notify subscription omits onChange) because the wire-side enable/disable is the caller's responsibility via {@link setNotify}. The ledger entry tells
     // {@link reissueOnReconnect} which (address, handle) pairs to re-arm after a reconnect. The local name avoids colliding with the `handle` parameter.
     const subscriberHandle = this.notifySubscription.acquire(key, true);
-    const stream = this.host.bus.stream("bluetoothNotifyData", options);
 
-    // Cleanup as a `this`-capturing arrow so the IIFE generator below doesn't need a `this` alias. The primitive pairs release to acquire by symbol identity and is
-    // wire-silent for the notify ledger, so a post-reconnect dispose is correct without any guard - the ledger survived the reconnect and reissueOnReconnect re-armed
-    // the surviving keys.
-    const releaseSubscription = (): void => {
+    // The bus runs the close hook exactly once, on the stream's first terminal path, so the hook releases the ledger entry directly. The primitive pairs release to
+    // acquire by symbol identity and is wire-silent for the notify ledger, so a post-reconnect release is correct without any guard - the ledger survived the
+    // reconnect and reissueOnReconnect re-armed the surviving keys. The selector keeps this (address, handle) pair's chunks and skips every other pair's.
+    return this.host.bus.stream("bluetoothNotifyData", {
 
-      this.notifySubscription.release(subscriberHandle);
-    };
-
-    return (async function *(): AsyncGenerator<NotifyDataChunk> {
-
-      try {
-
-        for await (const chunk of stream) {
-
-          if((chunk.address === address) && (chunk.handle === handle)) {
-
-            yield chunk;
-          }
-        }
-
-      } finally {
-
-        releaseSubscription();
-      }
-    })();
+      ...options,
+      onClose: (): void => { this.notifySubscription.release(subscriberHandle); },
+      select: (chunk: NotifyDataChunk): NotifyDataChunk | undefined => ((chunk.address === address) && (chunk.handle === handle)) ? chunk : undefined
+    });
   }
 
   /**
@@ -1119,6 +1096,9 @@ export class BluetoothProxyApi implements SubscriptionLifecycle {
    * Backpressured async-iterable view of connection-slot capacity changes. First iterator issues `SubscribeBluetoothConnectionsFreeRequest`; the iterator yields every
    * push the device sends thereafter. The wire-side subscription is shared across iterators and survives reconnect via {@link reissueOnReconnect}.
    *
+   * The view releases its subscriber once, on whichever ends it first: the signal aborting, the iterator's `return()` or `throw()` (including a `break` out of
+   * `for await`), or the bus ending the stream. A view abandoned before it is ever iterated still releases when its signal aborts or its `return()` runs.
+   *
    * Usage:
    *
    * {@includeCode ./examples/showcase.ts#bluetooth-connections-free}
@@ -1133,30 +1113,15 @@ export class BluetoothProxyApi implements SubscriptionLifecycle {
     // CONNECTIONS_FREE_CHANNEL drives the reduction from EMPTY to `true`, which fires the wire-side SUBSCRIBE; subsequent acquires share it (the reduction is already
     // `true`, so onChange is suppressed).
     const handle = this.connectionsFreeSubscription.acquire(CONNECTIONS_FREE_CHANNEL, true);
-    const stream = this.host.bus.stream("bluetoothConnectionsFree", options);
 
-    // Cleanup as a `this`-capturing arrow so the IIFE generator below doesn't need a `this` alias. The device does not document an unsubscribe message for
-    // connections-free, so the subscription's onChange treats the EMPTY transition as a no-op: the last release simply stops tracking and sends nothing on the wire. A
-    // future reconnect with no surviving consumers will not re-issue SUBSCRIBE, which matches the consumer's stated intent.
-    const releaseSubscription = (): void => {
+    // The bus runs the close hook exactly once, on the stream's first terminal path, so the hook releases the handle directly. The device does not document an
+    // unsubscribe message for connections-free, so the subscription's onChange treats the EMPTY transition as a no-op: the last release simply stops tracking and sends
+    // nothing on the wire. A future reconnect with no surviving consumers will not re-issue SUBSCRIBE, which matches the consumer's stated intent.
+    return this.host.bus.stream("bluetoothConnectionsFree", {
 
-      this.connectionsFreeSubscription.release(handle);
-    };
-
-    return (async function *(): AsyncGenerator<ConnectionsFreeData> {
-
-      try {
-
-        for await (const update of stream) {
-
-          yield update;
-        }
-
-      } finally {
-
-        releaseSubscription();
-      }
-    })();
+      ...options,
+      onClose: (): void => { this.connectionsFreeSubscription.release(handle); }
+    });
   }
 
   /**
@@ -1859,16 +1824,14 @@ export class BluetoothProxyApi implements SubscriptionLifecycle {
 
         } else if(wireType === WireType.LENGTH_DELIMITED) {
 
-          const [ len, lenLen ] = readVarint(payload, offset);
-
-          offset += lenLen;
+          const [ body, bytesRead ] = readLengthDelimited(payload, offset);
 
           if(fieldNum === 3) {
 
-            data = payload.subarray(offset, offset + len);
+            data = body;
           }
 
-          offset += len;
+          offset += bytesRead;
 
         } else {
 
@@ -1934,9 +1897,9 @@ export class BluetoothProxyApi implements SubscriptionLifecycle {
 
         } else if(wireType === WireType.LENGTH_DELIMITED) {
 
-          const [ len, lenLen ] = readVarint(payload, offset);
+          const [ , bytesRead ] = readLengthDelimited(payload, offset);
 
-          offset += lenLen + len;
+          offset += bytesRead;
 
         } else {
 
@@ -2007,9 +1970,9 @@ export class BluetoothProxyApi implements SubscriptionLifecycle {
 
         } else if(wireType === WireType.LENGTH_DELIMITED) {
 
-          const [ len, lenLen ] = readVarint(payload, offset);
+          const [ , bytesRead ] = readLengthDelimited(payload, offset);
 
-          offset += lenLen + len;
+          offset += bytesRead;
 
         } else {
 
@@ -2081,9 +2044,9 @@ export class BluetoothProxyApi implements SubscriptionLifecycle {
 
         } else if(wireType === WireType.LENGTH_DELIMITED) {
 
-          const [ len, lenLen ] = readVarint(payload, offset);
+          const [ , bytesRead ] = readLengthDelimited(payload, offset);
 
-          offset += lenLen + len;
+          offset += bytesRead;
 
         } else {
 
@@ -2148,9 +2111,9 @@ export class BluetoothProxyApi implements SubscriptionLifecycle {
 
         } else if(wireType === WireType.LENGTH_DELIMITED) {
 
-          const [ len, lenLen ] = readVarint(payload, offset);
+          const [ , bytesRead ] = readLengthDelimited(payload, offset);
 
-          offset += lenLen + len;
+          offset += bytesRead;
 
         } else {
 
@@ -2244,9 +2207,9 @@ export class BluetoothProxyApi implements SubscriptionLifecycle {
 
         } else if(wireType === WireType.LENGTH_DELIMITED) {
 
-          const [ len, lenLen ] = readVarint(payload, offset);
+          const [ , bytesRead ] = readLengthDelimited(payload, offset);
 
-          offset += lenLen + len;
+          offset += bytesRead;
 
         } else {
 
@@ -2297,13 +2260,11 @@ export class BluetoothProxyApi implements SubscriptionLifecycle {
 
         } else if(wireType === WireType.LENGTH_DELIMITED) {
 
-          const [ len, lenLen ] = readVarint(payload, offset);
-
-          offset += lenLen;
+          const [ body, bytesRead ] = readLengthDelimited(payload, offset);
 
           if(fieldNum === 2) {
 
-            const service = decodeBluetoothGATTService(payload.subarray(offset, offset + len));
+            const service = decodeBluetoothGATTService(body);
 
             if(service !== null) {
 
@@ -2311,7 +2272,7 @@ export class BluetoothProxyApi implements SubscriptionLifecycle {
             }
           }
 
-          offset += len;
+          offset += bytesRead;
 
         } else if(wireType === WireType.VARINT) {
 
@@ -2365,9 +2326,9 @@ export class BluetoothProxyApi implements SubscriptionLifecycle {
         // Any other field shape - skip.
         if(wireType === WireType.LENGTH_DELIMITED) {
 
-          const [ len, lenLen ] = readVarint(payload, offset);
+          const [ , bytesRead ] = readLengthDelimited(payload, offset);
 
-          offset += lenLen + len;
+          offset += bytesRead;
 
         } else if(wireType === WireType.VARINT) {
 
@@ -2424,9 +2385,9 @@ export class BluetoothProxyApi implements SubscriptionLifecycle {
 
         } else if(wireType === WireType.LENGTH_DELIMITED) {
 
-          const [ len, lenLen ] = readVarint(payload, offset);
+          const [ , bytesRead ] = readLengthDelimited(payload, offset);
 
-          offset += lenLen + len;
+          offset += bytesRead;
 
         } else {
 
@@ -2494,7 +2455,7 @@ export class BluetoothProxyApi implements SubscriptionLifecycle {
  * | 1       | VARINT           | address        | {@link readVarintBigInt} - uint64 |
  * | 2       | VARINT           | rssi           | {@link readVarint} + {@link zigzagDecode} - sint32 |
  * | 3       | VARINT           | address_type   | {@link readVarint} - uint32 (max 4) |
- * | 4       | LENGTH_DELIMITED | data           | subarray - bytes (max 62) |
+ * | 4       | LENGTH_DELIMITED | data           | {@link readLengthDelimited} - bytes (max 62) |
  *
  * Unknown wire types and unknown field numbers are skipped so a future-firmware advertisement with extra fields does not crash an older client. A malformed entry
  * (truncated varint, length-delimited field beyond the buffer end) returns `null`; the caller drops it without emitting.
@@ -2554,16 +2515,14 @@ function decodeBluetoothLERawAdvertisement(buffer: Buffer): Nullable<BluetoothLE
 
         case WireType.LENGTH_DELIMITED: {
 
-          const [ len, lenLen ] = readVarint(buffer, offset);
-
-          offset += lenLen;
+          const [ body, bytesRead ] = readLengthDelimited(buffer, offset);
 
           if(fieldNum === 4) {
 
-            data = buffer.subarray(offset, offset + len);
+            data = body;
           }
 
-          offset += len;
+          offset += bytesRead;
 
           break;
         }
@@ -2578,8 +2537,8 @@ function decodeBluetoothLERawAdvertisement(buffer: Buffer): Nullable<BluetoothLE
 
   } catch {
 
-    // Malformed varint or out-of-bounds read - drop the entry. The codec throws for unterminated varints; we collapse that to a `null` return so the caller can
-    // continue processing the rest of the batch.
+    // Malformed varint, length-delimited field past the buffer end, or out-of-bounds read - drop the entry. The codec throws for each; we collapse that to a `null`
+    // return so the caller can continue processing the rest of the batch.
     return null;
   }
 
@@ -2644,13 +2603,11 @@ function decodeBluetoothGATTService(buffer: Buffer): Nullable<BluetoothGATTServi
 
       } else if(wireType === WireType.LENGTH_DELIMITED) {
 
-        const [ len, lenLen ] = readVarint(buffer, offset);
-
-        offset += lenLen;
+        const [ body, bytesRead ] = readLengthDelimited(buffer, offset);
 
         if(fieldNum === 3) {
 
-          const characteristic = decodeBluetoothGATTCharacteristic(buffer.subarray(offset, offset + len));
+          const characteristic = decodeBluetoothGATTCharacteristic(body);
 
           if(characteristic !== null) {
 
@@ -2658,7 +2615,7 @@ function decodeBluetoothGATTService(buffer: Buffer): Nullable<BluetoothGATTServi
           }
         }
 
-        offset += len;
+        offset += bytesRead;
 
       } else {
 
@@ -2744,13 +2701,11 @@ function decodeBluetoothGATTCharacteristic(buffer: Buffer): Nullable<BluetoothGA
 
       } else if(wireType === WireType.LENGTH_DELIMITED) {
 
-        const [ len, lenLen ] = readVarint(buffer, offset);
-
-        offset += lenLen;
+        const [ body, bytesRead ] = readLengthDelimited(buffer, offset);
 
         if(fieldNum === 4) {
 
-          const descriptor = decodeBluetoothGATTDescriptor(buffer.subarray(offset, offset + len));
+          const descriptor = decodeBluetoothGATTDescriptor(body);
 
           if(descriptor !== null) {
 
@@ -2758,7 +2713,7 @@ function decodeBluetoothGATTCharacteristic(buffer: Buffer): Nullable<BluetoothGA
           }
         }
 
-        offset += len;
+        offset += bytesRead;
 
       } else {
 
@@ -2837,9 +2792,9 @@ function decodeBluetoothGATTDescriptor(buffer: Buffer): Nullable<BluetoothGATTDe
 
       } else if(wireType === WireType.LENGTH_DELIMITED) {
 
-        const [ len, lenLen ] = readVarint(buffer, offset);
+        const [ , bytesRead ] = readLengthDelimited(buffer, offset);
 
-        offset += lenLen + len;
+        offset += bytesRead;
 
       } else {
 

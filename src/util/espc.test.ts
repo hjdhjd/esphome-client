@@ -11,22 +11,23 @@
  * binary actually starts, parses argv, and reports failures end-to-end through `dist/util/espc.js`.
  */
 import {
-  CLILogger, CLIMATE_MODE_NAMES, CLI_COMMANDS, CLI_OPTIONS, CONTROL_BUILDERS, CliError, LEVEL_THEME, Printer, awaitQuietPeriod, buildControlCommand, dispatch,
+  CLILogger, CLIMATE_MODE_NAMES, CLI_COMMANDS, CLI_OPTIONS, CONTROL_BUILDERS, LEVEL_THEME, Printer, awaitQuietPeriod, buildControlCommand, dispatch,
   executeControl, findEntity, formatCapabilities, formatDeviceInfo, formatEntityList, formatReplayMetadata, formatSnapshotJson, formatSubDeviceList,
-  handleInteractiveCommand, isClimateMode, isCommandName, isControllableType, isUserFacingError, joinParts, parseFloatOption, parseIntOption, parseInvocation,
+  handleInteractiveCommand, isClimateMode, isCommandName, isControllableType, joinParts, parseFloatOption, parseIntOption, parseInvocation,
   parseJsonOption, parsePercent, parseRgb, printInteractiveHelp, runCapabilities, runDevices, runInfo, runInteractiveControl, runList, runSnapshot, showUsage,
   tryParseIntStrict
 } from "./espc.ts";
+import { CliError, isUserFacingError } from "./cli-error.ts";
 import type { CommandOptions, ControlClient, EntityWithId, Invocation, PrinterLevel } from "./espc.ts";
+import type { Entity, EntityType } from "../schemas/index.ts";
 import { describe, test } from "node:test";
-import { mockDeviceInfo, mockStateMessage } from "../testing/factories.ts";
+import { mockDeviceInfo, mockEntity, mockStateMessage } from "../testing/factories.ts";
 import type { AddressInfo } from "node:net";
 import type { CaptureMetadata } from "./capture.ts";
 import type { ClientCapabilities } from "../capabilities.ts";
 import { ConnectionRefusedError } from "../errors.ts";
 import type { DeviceInfo } from "../esphome-client.ts";
 import { ENTITY_SCHEMAS } from "../schemas/index.ts";
-import type { Entity } from "../schemas/index.ts";
 import type { EntityId } from "../entity-id.ts";
 import { MockClient } from "../testing/mock-client.ts";
 import type { Nullable } from "../types.ts";
@@ -161,6 +162,17 @@ function entityRecord(type: string, objectId: string, key = 1): EntityWithId {
     name: objectId.replace(/_/g, " "),
     type
   };
+}
+
+// A MockClient with one entity registered under the same `{type}-{objectId}` id `entityRecord` builds. The mock records a command only for an entity it has registered,
+// as the real client sends only to a discovered entity, so every test that dispatches a control through the mock takes its client from here.
+function registeredClient(type: EntityType, objectId: string): MockClient {
+
+  const client = new MockClient();
+
+  client.populateEntities([mockEntity(type, objectId)]);
+
+  return client;
 }
 
 // Empty CommandOptions for tests that don't exercise command-scoped flags. Every field is `undefined` because parseArgs uniformly produces a key for every defined
@@ -522,6 +534,14 @@ describe("CliError - construction and identity", () => {
 
     assert.equal(generic instanceof CliError, false);
   });
+
+  test("CliError carries the cause it is constructed with", () => {
+
+    // A CLI module that wraps a lower-level failure into a usage error keeps the original on the standard cause chain.
+    const cause = new RangeError("offset out of range");
+
+    assert.equal(new CliError("wrapped", { cause }).cause, cause);
+  });
 });
 
 describe("isUserFacingError - the failure classification the binary and the REPL share", () => {
@@ -612,6 +632,23 @@ describe("parseIntOption - strict base-10 throw-on-invalid parse for CLI flags",
   test("throws CliError on a float literal", () => {
 
     assert.throws(() => parseIntOption("12.5", "--temp"), CliError);
+  });
+
+  test("accepts a value on either inclusive bound of a supplied range", () => {
+
+    assert.equal(parseIntOption("1", "--example", { max: 12, min: 1 }), 1);
+    assert.equal(parseIntOption("12", "--example", { max: 12, min: 1 }), 12);
+  });
+
+  test("throws CliError naming the flag, both bounds, and the value when a supplied range excludes it", () => {
+
+    for(const value of [ "0", "13" ]) {
+
+      assert.throws(() => parseIntOption(value, "date month", { max: 12, min: 1 }), (err: unknown): boolean => {
+
+        return (err instanceof CliError) && (err.message === "date month must be between 1 and 12. Received: '" + value + "'.");
+      });
+    }
   });
 });
 
@@ -818,6 +855,21 @@ describe("parseInvocation - global option flag matrix", () => {
       assert.equal(a.options.port, 4242);
       assert.equal(b.options.port, 6053);
     }
+  });
+
+  test("--port outside the TCP port range is a usage error naming the flag", () => {
+
+    for(const port of [ "0", "65536" ]) {
+
+      assert.throws(() => parseInvocation([ "info", "--host", "h", "--port", port ]), (err: unknown): boolean => {
+
+        return (err instanceof CliError) && err.message.startsWith("--port must be between 1 and 65535.");
+      });
+    }
+
+    const edge = parseInvocation([ "info", "--host", "h", "--port", "65535" ]);
+
+    assert.equal((edge.kind === "command") && edge.options.port, 65535);
   });
 
   test("--psk populates options.psk and is undefined by default", () => {
@@ -1676,7 +1728,7 @@ describe("executeControl - non-interactive control dispatch (every entity-type b
 
   test("switch: 'on' records a state:true command", () => {
 
-    const client = new MockClient();
+    const client = registeredClient("switch", "garage");
     const rig = makePrinter();
     const entity = entityRecord("switch", "garage", 1);
 
@@ -1690,7 +1742,7 @@ describe("executeControl - non-interactive control dispatch (every entity-type b
 
   test("switch: 'off' records a state:false command", () => {
 
-    const client = new MockClient();
+    const client = registeredClient("switch", "x");
     const rig = makePrinter();
 
     executeControl({ client: client, commandArgs: [ "x", "off" ], commandOptions: EMPTY_OPTIONS, entity: entityRecord("switch", "x"), printer: rig.printer });
@@ -1700,7 +1752,7 @@ describe("executeControl - non-interactive control dispatch (every entity-type b
 
   test("switch: missing state throws CliError", () => {
 
-    const client = new MockClient();
+    const client = registeredClient("switch", "x");
     const rig = makePrinter();
 
     assert.throws(() => executeControl({
@@ -1716,7 +1768,7 @@ describe("executeControl - non-interactive control dispatch (every entity-type b
 
   test("switch: invalid state throws CliError with explicit message", () => {
 
-    const client = new MockClient();
+    const client = registeredClient("switch", "x");
     const rig = makePrinter();
 
     assert.throws(() => executeControl({
@@ -1731,7 +1783,7 @@ describe("executeControl - non-interactive control dispatch (every entity-type b
 
   test("button: presses with no payload", () => {
 
-    const client = new MockClient();
+    const client = registeredClient("button", "doorbell");
     const rig = makePrinter();
 
     executeControl({ client: client, commandArgs: ["doorbell"], commandOptions: EMPTY_OPTIONS, entity: entityRecord("button", "doorbell"), printer: rig.printer });
@@ -1743,7 +1795,7 @@ describe("executeControl - non-interactive control dispatch (every entity-type b
 
   test("light: positional 'on' enables state without flags", () => {
 
-    const client = new MockClient();
+    const client = registeredClient("light", "lamp");
     const rig = makePrinter();
 
     executeControl({ client: client, commandArgs: [ "lamp", "on" ], commandOptions: EMPTY_OPTIONS, entity: entityRecord("light", "lamp"), printer: rig.printer });
@@ -1753,7 +1805,7 @@ describe("executeControl - non-interactive control dispatch (every entity-type b
 
   test("light: --state flag overrides the positional", () => {
 
-    const client = new MockClient();
+    const client = registeredClient("light", "lamp");
     const rig = makePrinter();
 
     executeControl({
@@ -1770,7 +1822,7 @@ describe("executeControl - non-interactive control dispatch (every entity-type b
 
   test("light: --brightness is a 0-100 percentage converted to the 0.0-1.0 wire fraction", () => {
 
-    const client = new MockClient();
+    const client = registeredClient("light", "lamp");
     const rig = makePrinter();
 
     executeControl({
@@ -1787,7 +1839,7 @@ describe("executeControl - non-interactive control dispatch (every entity-type b
 
   test("light: --brightness out of the 0-100 range throws rather than silently saturating", () => {
 
-    const client = new MockClient();
+    const client = registeredClient("light", "lamp");
     const rig = makePrinter();
 
     assert.throws(() => executeControl({
@@ -1803,7 +1855,7 @@ describe("executeControl - non-interactive control dispatch (every entity-type b
 
   test("light: --rgb 0-255 channels convert to {r,g,b} as 0.0-1.0 fractions", () => {
 
-    const client = new MockClient();
+    const client = registeredClient("light", "lamp");
     const rig = makePrinter();
 
     executeControl({
@@ -1821,7 +1873,7 @@ describe("executeControl - non-interactive control dispatch (every entity-type b
 
   test("light: --rgb accepts #RRGGBB hex", () => {
 
-    const client = new MockClient();
+    const client = registeredClient("light", "lamp");
     const rig = makePrinter();
 
     executeControl({
@@ -1838,7 +1890,7 @@ describe("executeControl - non-interactive control dispatch (every entity-type b
 
   test("light: --rgb with fewer than 3 values throws a typed CliError naming the flag", () => {
 
-    const client = new MockClient();
+    const client = registeredClient("light", "lamp");
     const rig = makePrinter();
 
     // The strict RGB parser rejects malformed input rather than silently dropping it. The error message names the flag and the offending value so the user can correct
@@ -1857,7 +1909,7 @@ describe("executeControl - non-interactive control dispatch (every entity-type b
 
   test("light: --rgb with a non-numeric component throws a typed CliError naming the flag and the bad value", () => {
 
-    const client = new MockClient();
+    const client = registeredClient("light", "lamp");
     const rig = makePrinter();
 
     assert.throws(() => executeControl({
@@ -1874,7 +1926,7 @@ describe("executeControl - non-interactive control dispatch (every entity-type b
 
   test("light: --temp populates colorTemperature", () => {
 
-    const client = new MockClient();
+    const client = registeredClient("light", "lamp");
     const rig = makePrinter();
 
     executeControl({
@@ -1891,7 +1943,7 @@ describe("executeControl - non-interactive control dispatch (every entity-type b
 
   test("light: --effect populates effect", () => {
 
-    const client = new MockClient();
+    const client = registeredClient("light", "lamp");
     const rig = makePrinter();
 
     executeControl({
@@ -1908,7 +1960,7 @@ describe("executeControl - non-interactive control dispatch (every entity-type b
 
   test("cover: 'open' sets position to 1.0", () => {
 
-    const client = new MockClient();
+    const client = registeredClient("cover", "garage");
     const rig = makePrinter();
 
     executeControl({ client: client, commandArgs: [ "garage", "open" ], commandOptions: EMPTY_OPTIONS, entity: entityRecord("cover", "garage"), printer: rig.printer });
@@ -1918,7 +1970,7 @@ describe("executeControl - non-interactive control dispatch (every entity-type b
 
   test("cover: 'close' sets position to 0.0", () => {
 
-    const client = new MockClient();
+    const client = registeredClient("cover", "garage");
     const rig = makePrinter();
 
     executeControl({ client: client, commandArgs: [ "garage", "close" ], commandOptions: EMPTY_OPTIONS, entity: entityRecord("cover", "garage"), printer: rig.printer });
@@ -1928,7 +1980,7 @@ describe("executeControl - non-interactive control dispatch (every entity-type b
 
   test("cover: 'stop' sets stop:true", () => {
 
-    const client = new MockClient();
+    const client = registeredClient("cover", "garage");
     const rig = makePrinter();
 
     executeControl({ client: client, commandArgs: [ "garage", "stop" ], commandOptions: EMPTY_OPTIONS, entity: entityRecord("cover", "garage"), printer: rig.printer });
@@ -1938,7 +1990,7 @@ describe("executeControl - non-interactive control dispatch (every entity-type b
 
   test("cover: invalid action throws CliError", () => {
 
-    const client = new MockClient();
+    const client = registeredClient("cover", "x");
     const rig = makePrinter();
 
     assert.throws(() => executeControl({
@@ -1953,7 +2005,7 @@ describe("executeControl - non-interactive control dispatch (every entity-type b
 
   test("fan: 'on'/'off' toggle state", () => {
 
-    const client = new MockClient();
+    const client = registeredClient("fan", "ceiling");
     const rig = makePrinter();
 
     executeControl({ client: client, commandArgs: [ "ceiling", "on" ], commandOptions: EMPTY_OPTIONS, entity: entityRecord("fan", "ceiling"), printer: rig.printer });
@@ -1965,7 +2017,7 @@ describe("executeControl - non-interactive control dispatch (every entity-type b
 
   test("fan: invalid state throws CliError", () => {
 
-    const client = new MockClient();
+    const client = registeredClient("fan", "x");
     const rig = makePrinter();
 
     assert.throws(() => executeControl({
@@ -1980,7 +2032,7 @@ describe("executeControl - non-interactive control dispatch (every entity-type b
 
   test("lock: 'lock'/'unlock'/'open' map to command field", () => {
 
-    const client = new MockClient();
+    const client = registeredClient("lock", "front");
     const rig = makePrinter();
 
     for(const cmd of [ "lock", "unlock", "open" ]) {
@@ -1996,7 +2048,7 @@ describe("executeControl - non-interactive control dispatch (every entity-type b
 
   test("lock: invalid command throws CliError", () => {
 
-    const client = new MockClient();
+    const client = registeredClient("lock", "x");
     const rig = makePrinter();
 
     assert.throws(() => executeControl({
@@ -2011,7 +2063,7 @@ describe("executeControl - non-interactive control dispatch (every entity-type b
 
   test("number: integer value passed through as state", () => {
 
-    const client = new MockClient();
+    const client = registeredClient("number", "setpoint");
     const rig = makePrinter();
 
     executeControl({
@@ -2028,7 +2080,7 @@ describe("executeControl - non-interactive control dispatch (every entity-type b
 
   test("number: float value parsed as float", () => {
 
-    const client = new MockClient();
+    const client = registeredClient("number", "setpoint");
     const rig = makePrinter();
 
     executeControl({
@@ -2045,7 +2097,7 @@ describe("executeControl - non-interactive control dispatch (every entity-type b
 
   test("number: missing value throws CliError", () => {
 
-    const client = new MockClient();
+    const client = registeredClient("number", "x");
     const rig = makePrinter();
 
     assert.throws(() => executeControl({
@@ -2060,7 +2112,7 @@ describe("executeControl - non-interactive control dispatch (every entity-type b
 
   test("number: NaN throws CliError", () => {
 
-    const client = new MockClient();
+    const client = registeredClient("number", "x");
     const rig = makePrinter();
 
     assert.throws(() => executeControl({
@@ -2075,7 +2127,7 @@ describe("executeControl - non-interactive control dispatch (every entity-type b
 
   test("select: option string passed as state", () => {
 
-    const client = new MockClient();
+    const client = registeredClient("select", "mode");
     const rig = makePrinter();
 
     executeControl({ client: client, commandArgs: [ "mode", "auto" ], commandOptions: EMPTY_OPTIONS, entity: entityRecord("select", "mode"), printer: rig.printer });
@@ -2085,7 +2137,7 @@ describe("executeControl - non-interactive control dispatch (every entity-type b
 
   test("select: multi-word option preserved (joined with space)", () => {
 
-    const client = new MockClient();
+    const client = registeredClient("select", "mode");
     const rig = makePrinter();
 
     executeControl({
@@ -2102,7 +2154,7 @@ describe("executeControl - non-interactive control dispatch (every entity-type b
 
   test("select: missing option throws CliError", () => {
 
-    const client = new MockClient();
+    const client = registeredClient("select", "x");
     const rig = makePrinter();
 
     assert.throws(() => executeControl({
@@ -2117,7 +2169,7 @@ describe("executeControl - non-interactive control dispatch (every entity-type b
 
   test("climate: each documented mode dispatches correctly", () => {
 
-    const client = new MockClient();
+    const client = registeredClient("climate", "thermostat");
     const rig = makePrinter();
 
     for(const mode of CLIMATE_MODE_NAMES) {
@@ -2142,7 +2194,7 @@ describe("executeControl - non-interactive control dispatch (every entity-type b
 
   test("climate: unknown mode throws CliError listing the valid modes", () => {
 
-    const client = new MockClient();
+    const client = registeredClient("climate", "x");
     const rig = makePrinter();
 
     assert.throws(() => executeControl({
@@ -2160,7 +2212,7 @@ describe("executeControl - non-interactive control dispatch (every entity-type b
 
   test("climate: missing mode throws CliError", () => {
 
-    const client = new MockClient();
+    const client = registeredClient("climate", "x");
     const rig = makePrinter();
 
     assert.throws(() => executeControl({
@@ -2175,7 +2227,7 @@ describe("executeControl - non-interactive control dispatch (every entity-type b
 
   test("text: value passed as state, joined across positionals with spaces", () => {
 
-    const client = new MockClient();
+    const client = registeredClient("text", "label");
     const rig = makePrinter();
 
     executeControl({
@@ -2192,7 +2244,7 @@ describe("executeControl - non-interactive control dispatch (every entity-type b
 
   test("text: missing value throws CliError", () => {
 
-    const client = new MockClient();
+    const client = registeredClient("text", "x");
     const rig = makePrinter();
 
     assert.throws(() => executeControl({
@@ -2209,6 +2261,8 @@ describe("executeControl - non-interactive control dispatch (every entity-type b
 
     const client = new MockClient();
     const rig = makePrinter();
+
+    client.populateEntities([ mockEntity("sensor", "x"), mockEntity("binary_sensor", "x"), mockEntity("text_sensor", "x") ]);
 
     for(const type of [ "sensor", "binary_sensor", "text_sensor" ]) {
 
@@ -2230,7 +2284,7 @@ describe("executeControl - non-interactive control dispatch (every entity-type b
 
   test("read-only entity type rejects with a read-only CliError", () => {
 
-    const client = new MockClient();
+    const client = registeredClient("sensor", "x");
     const rig = makePrinter();
 
     // A schema-recognized entity type with no command block (sensor) is rejected as read-only, derived from the schema rather than a hardcoded type list.
@@ -2755,6 +2809,19 @@ describe("buildControlCommand - schema-exhaustive control coverage", () => {
     assert.throws(() => buildControlCommand(entityRecord("time", "wake"), ["1830"], EMPTY_OPTIONS), /HH:MM/);
   });
 
+  test("date and time components outside the calendar and the clock are usage errors naming the component", () => {
+
+    assert.throws(() => buildControlCommand(entityRecord("date", "alarm"), ["2026-13-01"], EMPTY_OPTIONS), (err: unknown): boolean => {
+
+      return (err instanceof CliError) && (err.message === "date month must be between 1 and 12. Received: '13'.");
+    });
+    assert.throws(() => buildControlCommand(entityRecord("date", "alarm"), ["2026-05-32"], EMPTY_OPTIONS), /date day must be between 1 and 31\./);
+    assert.throws(() => buildControlCommand(entityRecord("date", "alarm"), ["10000-05-23"], EMPTY_OPTIONS), /date year must be between 0 and 9999\./);
+    assert.throws(() => buildControlCommand(entityRecord("time", "wake"), ["24:00"], EMPTY_OPTIONS), /time hour must be between 0 and 23\./);
+    assert.throws(() => buildControlCommand(entityRecord("time", "wake"), ["18:60"], EMPTY_OPTIONS), /time minute must be between 0 and 59\./);
+    assert.throws(() => buildControlCommand(entityRecord("time", "wake"), ["18:30:60"], EMPTY_OPTIONS), /time second must be between 0 and 59\./);
+  });
+
   test("update: check and install verbs (install aliases the protocol's update command)", () => {
 
     assert.deepEqual(buildControlCommand(entityRecord("update", "fw"), ["check"], EMPTY_OPTIONS).options, { command: "check" });
@@ -2800,6 +2867,18 @@ describe("buildControlCommand - schema-exhaustive control coverage", () => {
     assert.deepEqual(buildControlCommand(entityRecord("radio_frequency", "remote"), [ "300,-300", "433920000", "5" ], EMPTY_OPTIONS).options,
       { carrierFrequency: 433920000, repeatCount: 5, timings: [ 300, -300 ] });
     assert.throws(() => buildControlCommand(entityRecord("infrared", "blaster"), ["100,bad"], EMPTY_OPTIONS), /Invalid integer for timing/);
+  });
+
+  test("transmit and siren integers outside the wire domain the encoder enforces are usage errors", () => {
+
+    const blaster = entityRecord("infrared", "blaster");
+    const remote = entityRecord("radio_frequency", "remote");
+
+    assert.throws(() => buildControlCommand(blaster, ["2147483648,-560"], EMPTY_OPTIONS), /timing #1 must be between -2147483648 and 2147483647\./);
+    assert.throws(() => buildControlCommand(remote, [ "300,-300", "-1" ], EMPTY_OPTIONS), /carrier frequency must be between 0 and 4294967295\./);
+    assert.throws(() => buildControlCommand(remote, [ "300,-300", "38000", "4294967296" ], EMPTY_OPTIONS), /repeat count must be between 0 and 4294967295\./);
+    assert.throws(() => buildControlCommand(entityRecord("siren", "alarm"), ["on"], { ...EMPTY_OPTIONS, duration: "-1" }),
+      /--duration must be between 0 and 4294967295\./);
   });
 
   test("read-only and unknown entity types are rejected from the shared core", () => {
@@ -2875,7 +2954,7 @@ describe("Hot path - parseInvocation, formatDeviceInfo, executeControl iterate c
 
   test("executeControl dispatches 1000 switch commands cleanly", () => {
 
-    const client = new MockClient();
+    const client = registeredClient("switch", "garage");
     const rig = makePrinter();
     const entity = entityRecord("switch", "garage");
 
@@ -2922,7 +3001,7 @@ describe("Negative rules - structural guarantees", () => {
 
   test("executeControl read-only branch does NOT record a command", () => {
 
-    const client = new MockClient();
+    const client = registeredClient("sensor", "temp");
     const rig = makePrinter();
 
     assert.throws(() => executeControl({
@@ -2938,7 +3017,7 @@ describe("Negative rules - structural guarantees", () => {
 
   test("executeControl error branches do NOT call printer.success", () => {
 
-    const client = new MockClient();
+    const client = registeredClient("switch", "x");
     const rig = makePrinter();
 
     assert.throws(() => executeControl({
@@ -3022,7 +3101,7 @@ describe("Edge cases - boundary inputs to parser and dispatch", () => {
 
     // The branded EntityId<"switch"> is structurally a string at runtime; the cast is a TS-only narrowing. We verify the runtime path: passing a plain string id works
     // and the recorded command's `id` is the same brand-shaped string.
-    const client = new MockClient();
+    const client = registeredClient("switch", "x");
     const rig = makePrinter();
     const entity = entityRecord("switch", "x", 1);
 
@@ -3048,7 +3127,7 @@ describe("Structural type surface", () => {
     // We construct an EntityId<"switch"> via a runtime cast (the same path the CLI uses) and pass it through. The cast is a documented boundary: parseEntityId is the
     // safe alternative when the input is untrusted.
     const id = "switch-test" as EntityId<"switch">;
-    const client = new MockClient();
+    const client = registeredClient("switch", "test");
 
     client.command(id, { state: true });
 

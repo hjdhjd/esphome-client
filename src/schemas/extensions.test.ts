@@ -169,6 +169,15 @@ describe("buildSchemasTable", () => {
     });
   });
 
+  test("registers an extras key that names an Object.prototype member rather than refusing it as a built-in override", () => {
+
+    // The collision check reads the registry's own keys, so `constructor` (inherited from Object.prototype) is a free name for an extras entity type.
+    const table = buildSchemasTable(ENTITY_SCHEMAS, { constructor: aliasOf("cover") });
+
+    assert.ok(Object.hasOwn(table, "constructor"), "the extras key must be registered as an own entry");
+    assert.equal(getSchemaIn(table, "constructor")?.state.messageType, ENTITY_SCHEMAS.cover.state.messageType);
+  });
+
   test("does not mutate the canonical ENTITY_SCHEMAS constant", () => {
 
     const before = Object.keys(ENTITY_SCHEMAS).length;
@@ -234,6 +243,13 @@ describe("findSchemaByStateMessageTypeIn / findSchemaByListEntitiesMessageTypeIn
     const table = buildSchemasTable(ENTITY_SCHEMAS, extras);
 
     assert.equal(getSchemaIn(table, "door_cover"), extras.door_cover);
+  });
+
+  test("getSchemaIn returns undefined for an inherited object key such as constructor", () => {
+
+    const table = buildSchemasTable(ENTITY_SCHEMAS, undefined);
+
+    assert.equal(getSchemaIn(table, "constructor"), undefined);
   });
 
   test("getSchemaIn returns undefined for an unknown entity type", () => {

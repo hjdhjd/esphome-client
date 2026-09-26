@@ -135,8 +135,12 @@ export class CameraApi {
   }
 
   /**
-   * Stream images continuously. Sends `CAMERA_IMAGE_REQUEST(stream=true)` and yields each reassembled image as it arrives. Iteration ends on signal abort or when the
-   * consumer breaks out of the `for await`.
+   * Stream images continuously. Sends `CAMERA_IMAGE_REQUEST(stream=true)` when called and yields each reassembled image as it arrives. Iteration ends on signal abort
+   * or when the consumer breaks out of the `for await`.
+   *
+   * The view sends the request with the stream flag cleared once, on whichever ends it first: the signal aborting, the iterator's `return()` or `throw()` (including a
+   * `break` out of `for await`), or the bus ending the stream. A view abandoned before it is ever iterated still sends that stop when its signal aborts or its
+   * `return()` runs.
    *
    * Usage:
    *
@@ -148,36 +152,20 @@ export class CameraApi {
    */
   public stream(options?: StreamOptions): AsyncIterable<Buffer> {
 
-    const id = this.id;
-    const source = this.host.bus.stream("camera", options);
+    // We start the device-side stream when the view is requested, so the start always pairs with the close hook's stop below...an already-aborted signal or a disposed
+    // bus closes the view inside the stream() call, and starting first keeps that stop from preceding its start. The send cannot deliver an image synchronously, so the
+    // bus listener attaches before the first image can arrive.
+    this.sendCameraImageRequest({ single: false, stream: true });
 
-    // Start and stop arrows capture `this` lexically so the IIFE generator below doesn't need a `this` alias; the branded id is captured into `id` for the same reason.
-    const startStream = (): void => this.sendCameraImageRequest({ single: false, stream: true });
+    // The bus runs the close hook exactly once, on the stream's first terminal path. Clearing the stream flag is best-effort: ESPHome's CameraImageRequest with both
+    // flags false is a no-op, and the device-side stream self-terminates when no consumer requests new frames. The selector branches on the branded entity id (see
+    // {@link snapshot}) - the exact, always-available identity of the camera that produced the event - and projects each of this camera's events to its image.
+    return this.host.bus.stream("camera", {
 
-    // Best-effort: clear the stream flag when the consumer stops iterating. ESPHome's CameraImageRequest with both flags false is a no-op; the device-side stream
-    // self-terminates when no consumer requests new frames.
-    const stopStream = (): void => this.sendCameraImageRequest({ single: false, stream: false });
-
-    return (async function *(): AsyncGenerator<Buffer> {
-
-      startStream();
-
-      try {
-
-        for await (const event of source) {
-
-          // Branch on the branded entity id (see {@link snapshot}) - the exact, always-available identity of the camera that produced the event.
-          if(event.entity === id) {
-
-            yield event.image;
-          }
-        }
-
-      } finally {
-
-        stopStream();
-      }
-    })();
+      ...options,
+      onClose: (): void => { this.sendCameraImageRequest({ single: false, stream: false }); },
+      select: (event: CameraEvent): Buffer | undefined => (event.entity === this.id) ? event.image : undefined
+    });
   }
 
   /**

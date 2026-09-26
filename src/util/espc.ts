@@ -14,17 +14,18 @@
  * @module util/espc
  */
 
+import { CliError, isUserFacingError } from "./cli-error.ts";
 import type { ClientEventsMap, DeviceInfo, EspHomeClientOptions } from "../esphome-client.ts";
 import type { CommandFor, Entity, EntityType, TelemetryEvent } from "../schemas/index.ts";
 import { EspHomeClient, LogLevel } from "../esphome-client.ts";
 import type { EspHomeLogging, Nullable } from "../types.ts";
+import { INT32_MAX, INT32_MIN, UINT32_MAX } from "../command-pipeline.ts";
 import { parseArgs, styleText } from "node:util";
 import { recordCapture, replayCapture } from "./capture.ts";
 import type { CaptureMetadata } from "./capture.ts";
 import type { ClientCapabilities } from "../capabilities.ts";
 import { ENTITY_SCHEMAS } from "../schemas/index.ts";
 import type { EntityId } from "../entity-id.ts";
-import { EspHomeError } from "../errors.ts";
 import { MediaPlayerCommand } from "../api-constants.ts";
 import { NOISE_PSK_LEN } from "../crypto-noise.ts";
 import type { ParseArgsConfig } from "node:util";
@@ -77,35 +78,6 @@ type Mutable<T> = { -readonly [K in keyof T]: T[K] };
 type LightCommandOptions = Mutable<CommandFor<typeof ENTITY_SCHEMAS["light"]>>;
 
 /**
- * Marker error type for user-facing CLI failures. The top-level catch prints the message verbatim and exits 1, the framing it also gives a typed client
- * `EspHomeError`; any other throw is reported with a "Fatal:" prefix.
- *
- * @remarks Throwing one of these is the canonical way to abort a command - the pattern lets handlers `throw` instead of `process.exit`, which keeps `using` cleanup
- * working and lets ESLint and TypeScript see case-block bodies as terminated (no `break` after `process.exit` and no unreachable code).
- *
- * @internal
- */
-export class CliError extends Error {
-
-  constructor(message: string) {
-
-    super(message);
-    this.name = "CliError";
-  }
-}
-
-/**
- * Whether a thrown value is a user-facing failure: a CLI usage error ({@link CliError}) or a typed client `EspHomeError` is the user's to read and prints as its message
- * alone, while anything else is a bug and stays "Fatal".
- *
- * @internal
- */
-export function isUserFacingError(error: unknown): error is CliError | EspHomeError {
-
-  return (error instanceof CliError) || (error instanceof EspHomeError);
-}
-
-/**
  * Strict base-10 integer regex used by {@link tryParseIntStrict} and {@link parseIntOption}. Accepts an optional leading sign followed by one or more decimal digits and
  * nothing else - "123abc", "0x1a", " 42 ", and "" all fail. The regex is the validation gate because `parseInt(value, 10)` alone silently accepts trailing garbage
  * ("123abc" -> 123), which is exactly the surprise we are closing in the CLI input layer.
@@ -134,13 +106,18 @@ export function tryParseIntStrict(value: string): Nullable<number> {
  * Parse a CLI option's string value as a strict base-10 integer. Throws a typed {@link CliError} naming the option and the offending value when validation fails. This
  * is the throw-on-bad-input variant for call sites where a non-numeric value is a usage error (every `--brightness`, `--duration`, `--rgb`, `--temp`, `--port`, etc.).
  *
+ * @remarks A `range` makes a well-formed integer outside the option's domain a usage error too, in the message shape {@link normalizeToWireUnit} uses, so the value
+ * never reaches the connection or the wire. A call site passes the domain its value lands in whenever that domain is static: a calendar or clock component, the TCP
+ * port range, or the wire domain the command encoder enforces for the field.
+ *
  * @param value - The raw string from the parsed argv.
  * @param flag - The flag name to surface in the error message (e.g. "--brightness").
+ * @param range - The optional inclusive bounds the parsed value must lie within.
  * @returns The parsed integer.
- * @throws {@link CliError} when `value` is not a strict base-10 integer literal.
+ * @throws {@link CliError} when `value` is not a strict base-10 integer literal, or when a `range` is given and the value lies outside it.
  * @internal
  */
-export function parseIntOption(value: string, flag: string): number {
+export function parseIntOption(value: string, flag: string, range?: { readonly max: number; readonly min: number }): number {
 
   const parsed = tryParseIntStrict(value);
 
@@ -149,8 +126,18 @@ export function parseIntOption(value: string, flag: string): number {
     throw new CliError("Invalid integer for " + flag + ": '" + value + "'. Expected a base-10 integer (no hex, no trailing characters).");
   }
 
+  if(range && ((parsed < range.min) || (parsed > range.max))) {
+
+    throw new CliError(flag + " must be between " + String(range.min) + " and " + String(range.max) + ". Received: '" + value + "'.");
+  }
+
   return parsed;
 }
+
+// The wire domains of the integer command fields the control builders parse, taken from the command encoder's own bounds so the CLI refuses exactly the values the
+// encoder would.
+const INT32_DOMAIN = { max: INT32_MAX, min: INT32_MIN };
+const UINT32_DOMAIN = { max: UINT32_MAX, min: 0 };
 
 /**
  * Strict decimal-number regex used by {@link parseFloatOption}. Accepts an optional leading sign, then either a digit run with an optional fractional part or a
@@ -1721,7 +1708,12 @@ function parseDateArg(value: string): { day: number; month: number; year: number
     throw new CliError("Date entity requires a value in YYYY-MM-DD form. Example: 2026-05-23.");
   }
 
-  return { day: parseIntOption(parts[2] ?? "", "date day"), month: parseIntOption(parts[1] ?? "", "date month"), year: parseIntOption(parts[0] ?? "", "date year") };
+  return {
+
+    day:   parseIntOption(parts[2] ?? "", "date day", { max: 31, min: 1 }),
+    month: parseIntOption(parts[1] ?? "", "date month", { max: 12, min: 1 }),
+    year:  parseIntOption(parts[0] ?? "", "date year", { max: 9999, min: 0 })
+  };
 }
 
 /**
@@ -1740,9 +1732,9 @@ function parseTimeArg(value: string): { hour: number; minute: number; second: nu
 
   return {
 
-    hour:   parseIntOption(parts[0] ?? "", "time hour"),
-    minute: parseIntOption(parts[1] ?? "", "time minute"),
-    second: (parts.length === 3) ? parseIntOption(parts[2] ?? "", "time second") : 0
+    hour:   parseIntOption(parts[0] ?? "", "time hour", { max: 23, min: 0 }),
+    minute: parseIntOption(parts[1] ?? "", "time minute", { max: 59, min: 0 }),
+    second: (parts.length === 3) ? parseIntOption(parts[2] ?? "", "time second", { max: 59, min: 0 }) : 0
   };
 }
 
@@ -1779,7 +1771,7 @@ function parseEpochArg(value: string): number {
  */
 function parseTimingsArg(value: string): number[] {
 
-  return value.split(",").map((token, index) => parseIntOption(token.trim(), "timing #" + String(index + 1)));
+  return value.split(",").map((token, index) => parseIntOption(token.trim(), "timing #" + String(index + 1), INT32_DOMAIN));
 }
 
 /**
@@ -1796,14 +1788,14 @@ function parseTransmitArgs(args: readonly string[], label: string): { carrierFre
 
   if(carrier !== undefined) {
 
-    result.carrierFrequency = parseIntOption(carrier, label + " carrier frequency");
+    result.carrierFrequency = parseIntOption(carrier, label + " carrier frequency", UINT32_DOMAIN);
   }
 
   const repeat = args.at(2);
 
   if(repeat !== undefined) {
 
-    result.repeatCount = parseIntOption(repeat, label + " repeat count");
+    result.repeatCount = parseIntOption(repeat, label + " repeat count", UINT32_DOMAIN);
   }
 
   return result;
@@ -1940,6 +1932,8 @@ export const CONTROL_BUILDERS: { readonly [T in ControllableEntityType]: Control
 
     if(options.temp) {
 
+      // Color temperature is parsed without a range: `colorTemperature` is a float field whose valid span is each light's own mireds range, so no static bound
+      // applies.
       lightCommand.colorTemperature = parseIntOption(options.temp, "--temp");
     }
 
@@ -2028,7 +2022,7 @@ export const CONTROL_BUILDERS: { readonly [T in ControllableEntityType]: Control
 
     if(options.duration) {
 
-      sirenOptions.duration = parseIntOption(options.duration, "--duration");
+      sirenOptions.duration = parseIntOption(options.duration, "--duration", UINT32_DOMAIN);
     }
 
     return { options: sirenOptions, summary: "Turning siren " + entity.name + " " + (state ? "ON" : "OFF") };
@@ -2680,7 +2674,7 @@ export function parseInvocation(argv: readonly string[] = process.argv.slice(2))
 
       host: values.host ?? null,
       keepAlive: values["keep-alive"],
-      port: values.port ? parseIntOption(values.port, "--port") : 6053,
+      port: values.port ? parseIntOption(values.port, "--port", { max: 65535, min: 1 }) : 6053,
       psk: values.psk,
       reconnect: values.reconnect,
       verbose: values.verbose ?? false

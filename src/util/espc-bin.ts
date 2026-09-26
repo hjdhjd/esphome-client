@@ -11,7 +11,8 @@
  * the CLI_COMMANDS registry, handlers).
  */
 
-import { Printer, dispatch, isUserFacingError, parseInvocation } from "./espc.ts";
+import { Printer, dispatch, parseInvocation } from "./espc.ts";
+import { isUserFacingError } from "./cli-error.ts";
 
 // Single termination point for the CLI. A failure isUserFacingError classifies as the user's to read (a usage mistake, an unreachable device, a rejected encryption key)
 // prints as its message alone (no stack); anything else is reported with a "Fatal:" prefix because it indicates an internal bug worth investigating. The process exits 1

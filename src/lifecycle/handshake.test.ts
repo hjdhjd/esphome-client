@@ -3,15 +3,16 @@
  * lifecycle/handshake.test.ts: Unit tests for the connect-phase handshake helpers.
  */
 import type { ApiMajorRange, ClientApiVersion } from "./handshake.ts";
+import type { ClientMetrics, EspHomeLogging, NoiseServerHello, PskResolver } from "../types.ts";
 import {
   EncryptionKeyInvalidError, EncryptionKeyMissingError, EncryptionRequiredError, NegotiationFailedError,
   NoiseHandshakeError, NoiseHandshakeTimeoutError, PermanentError, PlaintextHandshakeError, ProtocolError
 } from "../errors.ts";
-import type { EspHomeLogging, NoiseServerHello, PskResolver } from "../types.ts";
 import { MessageType, WireType } from "../protocol/index.ts";
 import { applyHelloResponse, authenticateIfNeeded, parseServerHello, performDiscovery, performNoiseHandshake, performPlaintextHandshake } from "./handshake.ts";
 import { describe, test } from "node:test";
 import { Buffer } from "node:buffer";
+import type { ClockFn } from "../heartbeat.ts";
 import { MessageReceiver } from "../message-receiver.ts";
 import { MockTransport } from "../testing/mock-transport.ts";
 import assert from "node:assert/strict";
@@ -86,14 +87,26 @@ const buildHelloPayload = (args: { major: number; minor: number; serverInfo?: st
   return encodeProtoFields(fields);
 };
 
-// Drive performNoiseHandshake with a short-named option bag so test lines stay under the 170-char wrap. The key resolver defaults to one returning VALID_PSK.
-const startNoise = async (args: { transport: MockTransport; expectedServerName?: string; resolvePsk?: PskResolver; signal?: AbortSignal }): Promise<void> => {
+// The optional inputs a noise-handshake test may override; startNoise supplies the rest.
+interface NoiseTestArgs {
+
+  expectedServerName?: string;
+  metrics?: ClientMetrics;
+  now?: ClockFn;
+  resolvePsk?: PskResolver;
+  signal?: AbortSignal;
+}
+
+// Drive performNoiseHandshake with a short-named option bag so test lines stay under the 170-char wrap. The key resolver defaults to one returning VALID_PSK, and the
+// clock defaults to the wall clock because only the duration-metric test reads it.
+const startNoise = async (args: NoiseTestArgs & { transport: MockTransport }): Promise<void> => {
 
   await performNoiseHandshake({
 
     expectedServerName: args.expectedServerName ?? null,
     log: silentLog(),
-    metrics: undefined,
+    metrics: args.metrics,
+    now: args.now ?? Date.now,
     resolvePsk: args.resolvePsk ?? ((): string => VALID_PSK),
     signal: args.signal ?? AbortSignal.timeout(2000),
     transport: args.transport
@@ -122,7 +135,10 @@ describe("performNoiseHandshake - input validation", () => {
 
     await assert.rejects(
 
-      performNoiseHandshake({ expectedServerName: null, log: silentLog(), metrics: undefined, resolvePsk: null, signal: AbortSignal.timeout(50), transport }),
+      performNoiseHandshake({
+
+        expectedServerName: null, log: silentLog(), metrics: undefined, now: Date.now, resolvePsk: null, signal: AbortSignal.timeout(50), transport
+      }),
       (err: unknown) => (err instanceof EncryptionKeyMissingError) && (err.code === "ENCRYPTION_KEY_MISSING")
     );
   });
@@ -387,46 +403,72 @@ describe("performNoiseHandshake - server-handshake reply validation", () => {
   }
 });
 
+const goodHello = Buffer.concat([ Buffer.from([1]), Buffer.from("device\x00", "utf8") ]);
+
+// Drive performNoiseHandshake to the point where the client has emitted its NNpsk0 msg1, then build a REAL responder msg2 against that exact msg1 so the client's
+// readMessage processes a genuine reply. The returned `msg2` is the raw responder handshake message (NOT yet prefixed with the success header byte); a caller either
+// pushes it untouched to complete the handshake or mutates it to provoke a specific readMessage failure code, then prefixes the `0x00` success header and pushes it as
+// the server-handshake reply. The PSK matches VALID_PSK so the shared-secret derivation lines up. We poll the transport's captured outbound frames until the client's
+// msg1 (the second handshake frame; the first is the empty initial) is present, rather than guessing a fixed number of microtask hops.
+const driveToServerHandshakeReply = async (transport: MockTransport, args: NoiseTestArgs = {}): Promise<{ msg2: Buffer; promise: Promise<void> }> => {
+
+  const promise = startNoise({ ...args, transport });
+
+  transport.pushNoiseHandshakeFrame(goodHello);
+
+  // Wait for the client's writeMessage + sendNoiseHandshakeFrame to land its msg1 into the captured outbound frames.
+  for(let i = 0; (i < 50) && (transport.outboundHandshakeFrames.length < 2); i++) {
+
+    await Promise.resolve();
+  }
+
+  const clientMsg1Frame = transport.outboundHandshakeFrames[1];
+
+  assert.ok(clientMsg1Frame, "the client must have emitted its NNpsk0 msg1 before the server replies");
+
+  // The client prefixes its handshake message with a single zero header byte (handshake.ts step 3); strip it to recover the raw NNpsk0 msg1 the responder reads.
+  const responder = createESPHomeHandshake({ psk: Buffer.from(VALID_PSK, "base64"), role: "responder" });
+
+  responder.readMessage(clientMsg1Frame.subarray(1));
+
+  const msg2 = Buffer.from(responder.writeMessage(Buffer.from("server-hello", "utf8")));
+
+  return { msg2, promise };
+};
+
+// Push a server-handshake reply: the `0x00` success header followed by the (possibly tampered) msg2 body. Mirrors the responder's on-wire success reply.
+const pushReply = (transport: MockTransport, msg2: Buffer): void => {
+
+  transport.pushNoiseHandshakeFrame(Buffer.concat([ Buffer.from([0]), msg2 ]));
+};
+
+describe("performNoiseHandshake - duration metric", () => {
+
+  test("reports noise.handshake.duration_ms from the injected clock, so time the clock advances between the hello and the finish is what it records", async () => {
+
+    const transport = new MockTransport();
+    const timings: { durationMs: number; name: string }[] = [];
+    const metrics: ClientMetrics = {
+
+      gauge: (): void => { /* discard */ },
+      increment: (): void => { /* discard */ },
+      timing: (name: string, durationMs: number): void => { timings.push({ durationMs, name }); }
+    };
+    let clockMs = 1000;
+    const { msg2, promise } = await driveToServerHandshakeReply(transport, { metrics, now: (): number => clockMs });
+
+    // The wall clock barely moves while the test runs, so only a duration read through the injected clock can report this span.
+    clockMs += 4321;
+    pushReply(transport, msg2);
+
+    await promise;
+
+    assert.deepEqual(timings, [{ durationMs: 4321, name: "noise.handshake.duration_ms" }]);
+    assert.ok(transport.cipher, "the handshake must have completed and installed its cipher pair");
+  });
+});
+
 describe("performNoiseHandshake - readMessage failure re-tagging", () => {
-
-  const goodHello = Buffer.concat([ Buffer.from([1]), Buffer.from("device\x00", "utf8") ]);
-
-  // Drive performNoiseHandshake to the point where the client has emitted its NNpsk0 msg1, then build a REAL responder msg2 against that exact msg1 so the client's
-  // readMessage processes a genuine reply. The returned `msg2` is the raw responder handshake message (NOT yet prefixed with the success header byte); each caller
-  // mutates it to provoke a specific readMessage failure code, prefixes the `0x00` success header, and pushes it as the server-handshake reply. The PSK matches VALID_PSK
-  // so the shared-secret derivation lines up. We poll the transport's captured outbound frames until the client's msg1 (the second handshake frame; the first is the
-  // empty initial) is present, rather than guessing a fixed number of microtask hops.
-  const driveToServerHandshakeReply = async (transport: MockTransport): Promise<{ msg2: Buffer; promise: Promise<void> }> => {
-
-    const promise = startNoise({ transport });
-
-    transport.pushNoiseHandshakeFrame(goodHello);
-
-    // Wait for the client's writeMessage + sendNoiseHandshakeFrame to land its msg1 into the captured outbound frames.
-    for(let i = 0; (i < 50) && (transport.outboundHandshakeFrames.length < 2); i++) {
-
-      await Promise.resolve();
-    }
-
-    const clientMsg1Frame = transport.outboundHandshakeFrames[1];
-
-    assert.ok(clientMsg1Frame, "the client must have emitted its NNpsk0 msg1 before the server replies");
-
-    // The client prefixes its handshake message with a single zero header byte (handshake.ts step 3); strip it to recover the raw NNpsk0 msg1 the responder reads.
-    const responder = createESPHomeHandshake({ psk: Buffer.from(VALID_PSK, "base64"), role: "responder" });
-
-    responder.readMessage(clientMsg1Frame.subarray(1));
-
-    const msg2 = Buffer.from(responder.writeMessage(Buffer.from("server-hello", "utf8")));
-
-    return { msg2, promise };
-  };
-
-  // Push a server-handshake reply: the `0x00` success header followed by the (possibly tampered) msg2 body. Mirrors the responder's on-wire success reply.
-  const pushReply = (transport: MockTransport, msg2: Buffer): void => {
-
-    transport.pushNoiseHandshakeFrame(Buffer.concat([ Buffer.from([0]), msg2 ]));
-  };
 
   test("re-tags a local AEAD AUTH_FAILED into EncryptionKeyInvalidError preserving the cause code", async () => {
 
@@ -704,8 +746,8 @@ describe("performDiscovery - discovery loop", () => {
       transport
     });
 
-    // Yield between pushes so the receiver's pump dispatches each message to a fresh awaiter rather than batching them into per-type buffers (the buffered drain
-    // iterates in wanted-Set order, which would surface DONE before SERVICES and exit the loop early).
+    // Yield between pushes so the receiver's pump hands each message to a parked awaiter. The burst test below covers the buffered path, where the receiver hands
+    // messages over in arrival order.
     const yieldTick = async (): Promise<void> => { await new Promise<void>((resolve): void => { setImmediate(resolve); }); };
 
     transport.pushInbound(MessageType.DEVICE_INFO_RESPONSE, Buffer.alloc(0));
@@ -730,6 +772,48 @@ describe("performDiscovery - discovery loop", () => {
     assert.equal(transport.outboundFrames[0]!.type, MessageType.LIST_ENTITIES_REQUEST);
     assert.equal(transport.outboundFrames[1]!.type, MessageType.DEVICE_INFO_REQUEST);
     assert.equal(transport.outboundFrames[2]!.type, MessageType.SUBSCRIBE_STATES_REQUEST);
+
+    receiver[Symbol.dispose]();
+  });
+
+  test("applies every entity response of a burst that arrives ahead of the done sentinel before the entities event fires", async () => {
+
+    const transport = new MockTransport();
+    const receiver = new MessageReceiver(transport);
+    const events: string[] = [];
+
+    const promise = performDiscovery({
+
+      applyDeviceInfo: (): void => { /* discard */ },
+      applyListEntity: (type: number): void => { events.push("entity " + String(type)); },
+      applyListServiceEntity: (): void => { /* discard */ },
+      countEntities: (): number => 2,
+      countServices: (): number => 0,
+      emitDeviceInfo: (): void => { events.push("deviceInfo"); },
+      emitEntities: (): void => { events.push("entities"); },
+      emitServices: (): void => { /* discard */ },
+      listEntitiesMessageTypes: new Set([ MessageType.LIST_ENTITIES_LIGHT_RESPONSE, MessageType.LIST_ENTITIES_SWITCH_RESPONSE ]),
+      metrics: undefined,
+      receiver,
+      signal: AbortSignal.timeout(2000),
+      transport
+    });
+
+    // Settle the device info first, so discovery is parked on its next wait when the burst lands.
+    transport.pushInbound(MessageType.DEVICE_INFO_RESPONSE, Buffer.alloc(0));
+    await new Promise<void>((resolve): void => { setImmediate(resolve); });
+
+    // The whole burst arrives before discovery resumes: the light response settles the parked wait and the switch response and the done sentinel wait in the buffer.
+    // The switch response arrived first, so it must reach discovery before the sentinel ends the loop.
+    transport.pushInbound(MessageType.LIST_ENTITIES_LIGHT_RESPONSE, Buffer.alloc(0));
+    transport.pushInbound(MessageType.LIST_ENTITIES_SWITCH_RESPONSE, Buffer.alloc(0));
+    transport.pushInbound(MessageType.LIST_ENTITIES_DONE_RESPONSE, Buffer.alloc(0));
+
+    await promise;
+
+    assert.deepEqual(events, [
+      "deviceInfo", "entity " + String(MessageType.LIST_ENTITIES_LIGHT_RESPONSE), "entity " + String(MessageType.LIST_ENTITIES_SWITCH_RESPONSE), "entities"
+    ]);
 
     receiver[Symbol.dispose]();
   });
