@@ -21,7 +21,7 @@
  * same way. ESPHome has NO unsubscribe message in the protocol, so dropping the last subscriber reduces to {@link EMPTY}, which the on-change
  * hook deliberately treats as a no-op - the device keeps firing at the last level until the connection drops.
  *
- * `dumpConfig` is an INDEPENDENT one-shot side-channel: a config-dump request that rides a `SUBSCRIBE_LOGS_REQUEST` frame. It is not subscription state, does not
+ * `dumpConfig` is an INDEPENDENT one-shot side-channel: a config-dump request carried by a `SUBSCRIBE_LOGS_REQUEST` frame. It is not subscription state, does not
  * influence the reduction, and does not survive reconnect - it is a deliberate, distinct send fired at the authoritative level so a dump never downgrades the device
  * below what the iterators (or the pin) need.
  *
@@ -30,8 +30,9 @@
  * chokepoint; each still has a dedicated negative test in `log-subscription-manager.test.ts`.
  *
  * Backpressure lives in the {@link EventBus} - this module does not duplicate the queue / `dropOldest` / `dropNewest` / `throw` policy.
- * {@link LogSubscriptionManager.subscribe} returns a thin async-generator wrapper around `bus.stream("log", options)` plus a per-iterator level filter; the EventBus
- * handles the high-water mark, the consumer signal, and the dispose-on-end cleanup. The manager's responsibility is purely subscription + wire coordination.
+ * {@link LogSubscriptionManager.subscribe} returns a thin iterator over `bus.stream("log", options)` plus a per-iterator level filter; the EventBus
+ * handles the high-water mark, the consumer signal's effect on the stream, and the dispose-on-end cleanup. The manager's responsibility is purely subscription + wire
+ * coordination, which is why its own listener on that signal does one thing: release the view's subscriber.
  *
  * @module log-subscription-manager
  */
@@ -79,9 +80,9 @@ export class LogSubscriptionManager implements SubscriptionLifecycle {
 
   /**
    * The single managed handle of the imperative pin subscriber, or `null` when no imperative level has been requested on this manager. The pin is at most one entry in
-   * the {@link logSubscription} ledger - {@link requestDeviceLevel} releases the prior pin and acquires a fresh one (release-then-acquire) so the imperative level is
-   * always a single floor that participates in the `max`. Unlike the connection-scoped wire cache, the pin handle is part of the surviving subscriber ledger: it persists
-   * across a reconnect so {@link reissueOnReconnect} re-arms the imperative level alongside the iterators.
+   * the {@link logSubscription} ledger - {@link requestDeviceLevel} acquires a fresh pin and then releases the prior one (acquire-then-release) so the imperative level
+   * is always a single floor that participates in the `max`. Unlike the connection-scoped wire cache, the pin handle is part of the surviving subscriber ledger: it
+   * persists across a reconnect so {@link reissueOnReconnect} re-arms the imperative level alongside the iterators.
    */
   private logPin: Nullable<symbol> = null;
 
@@ -145,9 +146,10 @@ export class LogSubscriptionManager implements SubscriptionLifecycle {
   }
 
   /**
-   * Read the count of currently open iterator subscribers, EXCLUDING the internal imperative pin. Each `client.logs(level)` consumer that has begun (but not finished)
-   * iteration is one entry; the imperative pin held by {@link requestDeviceLevel} is an internal subscriber that participates in the device-level `max` but is not a
-   * consumer iterator, so it is subtracted out here.
+   * Read the count of currently open iterator subscribers, EXCLUDING the internal imperative pin. Each `client.logs(level)` view is one entry from the moment
+   * {@link subscribe} returns it until it releases (its signal aborts, its `return()` or `throw()` runs, or its stream ends), whether or not it has been iterated; the
+   * imperative pin held by {@link requestDeviceLevel} is an internal subscriber that participates in the device-level `max` but is not a consumer iterator, so it is
+   * subtracted out here.
    *
    * @returns The number of open iterator subscribers.
    */
@@ -203,9 +205,11 @@ export class LogSubscriptionManager implements SubscriptionLifecycle {
    *
    * @remarks The imperative level is a single managed "pin" subscriber the manager holds in the same ledger as the `client.logs(level)` iterators - NOT a second writer
    * to a shared cache. It participates in the device-level `max`: it raises the device level when `level` exceeds the current aggregate, and is wire-silent when
-   * `level` is at or below the current aggregate (the pin is a floor, never a transient downgrade). The pin is at most one entry; this method releases the prior pin and
-   * acquires a fresh one (release-then-acquire on the cold imperative path) so the imperative desire is always exactly one floor. Because the pin is a real subscriber,
-   * it survives reconnect and re-arms via {@link reissueOnReconnect}, alongside the iterators.
+   * `level` is at or below the current aggregate (the pin is a floor, never a transient downgrade). The pin is at most one entry; this method acquires a fresh pin and
+   * then releases the prior one (acquire-then-release) so the imperative desire is always exactly one floor. The order matters because the ledger fires `onChange` only
+   * when the aggregate changes: holding both pins across the two recomputes keeps the aggregate from dipping below the higher of the prior pin and the surviving
+   * iterators, so every replacement sends at most one frame - an upgrade on the acquire, or a downgrade on the release when the prior pin held the maximum alone. Because
+   * the pin is a real subscriber, it survives reconnect and re-arms via {@link reissueOnReconnect}, alongside the iterators.
    *
    * `dumpConfig` is an INDEPENDENT one-shot side-channel, not part of the subscription. When set, it fires a distinct config-dump request at the AUTHORITATIVE level (the
    * current aggregate, falling back to `level`) so a dump never downgrades the device below what iterators or the pin need. The dump frame does NOT survive reconnect -
@@ -216,14 +220,17 @@ export class LogSubscriptionManager implements SubscriptionLifecycle {
    */
   public requestDeviceLevel(level: LogLevel, dumpConfig = false): void {
 
-    // Update the single managed pin through the ONE reduction. Release the prior pin first so the imperative desire is always exactly one floor; the fresh acquire drives
-    // the aggregate, which raises the device level when `level` exceeds the current max and is silent (onChange suppressed) when `level` is at or below it.
-    if(this.logPin !== null) {
-
-      this.logSubscription.release(this.logPin);
-    }
+    // Replace the single managed pin through the ONE reduction, acquiring the new pin before releasing the prior one. The acquire raises the device level when `level`
+    // exceeds the current max and is silent otherwise; the release then lowers it only when the prior pin held the max alone. Releasing first would let the aggregate dip
+    // to the surviving iterators between the two recomputes and send a transient downgrade followed by a re-upgrade.
+    const priorPin = this.logPin;
 
     this.logPin = this.logSubscription.acquire(LOG_CHANNEL, level);
+
+    if(priorPin !== null) {
+
+      this.logSubscription.release(priorPin);
+    }
 
     // The config dump is a deliberate, distinct side-channel send - the dump operation is not the level-set. We fire it at the authoritative level (the current
     // aggregate, which now includes the pin we just acquired, falling back to `level` defensively) so a dump never downgrades the device below what the live subscribers
@@ -239,10 +246,12 @@ export class LogSubscriptionManager implements SubscriptionLifecycle {
    * options)` method. The first iterator at any given level upgrades the device-side subscription; subsequent iterators at the same or lower level attach silently;
    * disposing the highest iterator downgrades back to the next-highest level held by any remaining subscriber (iterator or pin).
    *
-   * @remarks Each call returns an independent generator with its own filter level; the generator acquires its subscriber synchronously at call time (not lazily on first
-   * iteration) so the device-side aggregate reflects the new level immediately, matching the {@link reissueOnReconnect} contract for in-flight iterators. The cleanup
-   * runs in the generator's `finally` block, which fires on consumer `break` / `return` / `throw` from the `for await` loop, on the consumer `signal` aborting, and on
-   * the EventBus tearing down its underlying stream.
+   * @remarks Each call returns an independent iterator with its own filter level; the iterator acquires its subscriber synchronously at call time (not lazily on first
+   * iteration) so the device-side aggregate reflects the new level immediately, matching the {@link reissueOnReconnect} contract for in-flight iterators. The release
+   * is attached eagerly rather than to iteration: an `abort` listener on the consumer `signal` (run at once when the signal is already aborted), the iterator's own
+   * `return()` and `throw()` (reached through `[Symbol.asyncIterator]()` and on consumer `break` / `return` / `throw` from a `for await` loop), and the underlying
+   * EventBus stream ending or failing. A view that is never iterated therefore still gives its level back when its signal aborts or its `return()` runs, and whichever
+   * path arrives first releases the subscriber exactly once.
    *
    * Per-message filtering is intentional: when iterator A is at INFO and iterator B is at DEBUG, the device-side level is DEBUG, so the bus emits every DEBUG-and-above
    * message. Iterator A's wrapper filters out anything strictly more verbose than INFO so consumers asking for INFO see only INFO. The wire-side level filter and the
@@ -250,42 +259,111 @@ export class LogSubscriptionManager implements SubscriptionLifecycle {
    *
    * @param level - The minimum log level the iterator wants to see. Higher values are more verbose; messages with `event.level <= level` are yielded.
    * @param options - Optional backpressure policy and cancellation signal forwarded to the underlying `bus.stream("log", options)`.
-   * @returns An `AsyncIterable<LogEventData>` that yields events until the consumer aborts, the connection drops, or the stream completes.
+   * @returns An `AsyncIterable<LogEventData>` that yields events until the consumer aborts, returns, or throws, or the underlying EventBus stream ends. A reconnect
+   *   does not end it: the subscriber survives in the ledger and {@link reissueOnReconnect} re-arms its level on the new connection.
    */
   public subscribe(level: LogLevel, options?: StreamOptions): AsyncIterable<LogEventData> {
 
     // Acquire a subscriber synchronously at call time so concurrent attaches are race-free. The first acquire on LOG_CHANNEL drives the reduction from EMPTY to the
     // level, firing the wire-side SUBSCRIBE; an acquire at or below the existing aggregate is silent (the reduction is unchanged, so onChange is suppressed).
     const handle = this.logSubscription.acquire(LOG_CHANNEL, level);
-    const stream = this.host.bus.stream("log", options);
+    const events = this.host.bus.stream("log", options)[Symbol.asyncIterator]();
+    const signal = options?.signal;
+    let finished = false;
+    let released = false;
 
-    // Cleanup as a `this`-capturing arrow so the IIFE generator below doesn't need a `this` alias. The primitive pairs release to acquire by symbol identity, so the last
-    // release drives the reduction back to EMPTY (a silent no-op for logs) and a post-reconnect dispose is correct without any guard - the ledger survived the reconnect
-    // and the wire cache was re-armed by reissueOnReconnect.
-    const releaseSubscription = (): void => {
+    // The release is one `this`-capturing arrow shared by every terminal path - the signal's abort listener, `return()`, `throw()`, and the stream ending - and the
+    // `released` flag turns every call after the first into a no-op, so the ledger sees one release for its one acquire. The primitive pairs release to acquire by symbol
+    // identity, so the last release drives the reduction back to EMPTY (a silent no-op for logs) and a post-reconnect release is correct as-is - the ledger survived the
+    // reconnect and the wire cache was re-armed by reissueOnReconnect. Removing the abort listener keeps a long-lived consumer signal from retaining a finished view.
+    const release = (): void => {
 
+      if(released) {
+
+        return;
+      }
+
+      released = true;
+      signal?.removeEventListener("abort", release);
       this.logSubscription.release(handle);
     };
 
-    return (async function *(): AsyncGenerator<LogEventData> {
+    // Ending the view is separate from releasing it: an aborted signal releases at once, yet the next `next()` must still surface the abort reason from the stream.
+    // Once ended, `next()` resolves done, matching an async generator that has returned or thrown.
+    const finish = (): IteratorResult<LogEventData> => {
 
-      try {
+      finished = true;
+      release();
 
-        for await (const event of stream) {
+      return { done: true, value: undefined };
+    };
 
-          // The wire-side level filter is set to the aggregate maximum across all open subscribers. Per-iterator filtering happens here so consumers asking for INFO do
-          // not see DEBUG messages emitted because a separate iterator (or the imperative pin) is also subscribed at DEBUG.
-          if(event.level <= level) {
+    const view: AsyncIterableIterator<LogEventData> = {
 
-            yield event;
-          }
+      next: async (): Promise<IteratorResult<LogEventData>> => {
+
+        if(finished) {
+
+          return { done: true, value: undefined };
         }
 
-      } finally {
+        try {
 
-        releaseSubscription();
-      }
-    })();
+          let result = await events.next();
+
+          // The wire-side level is the aggregate maximum across every open subscriber. Per-iterator filtering happens here so consumers asking for INFO do not see
+          // DEBUG messages emitted because a separate iterator (or the imperative pin) is also subscribed at DEBUG.
+          while(!result.done) {
+
+            if(result.value.level <= level) {
+
+              return result;
+            }
+
+            // eslint-disable-next-line no-await-in-loop -- each pull awaits the next bus event, and the level filter decides whether to yield it or pull again.
+            result = await events.next();
+          }
+
+          return finish();
+
+        } catch(error) {
+
+          finish();
+
+          throw error;
+        }
+      },
+
+      return: async (): Promise<IteratorResult<LogEventData>> => {
+
+        const result = finish();
+
+        await events.return?.();
+
+        return result;
+      },
+
+      throw: async (error?: unknown): Promise<IteratorResult<LogEventData>> => {
+
+        finish();
+        await events.return?.();
+
+        throw error;
+      },
+
+      [Symbol.asyncIterator]: (): AsyncIterableIterator<LogEventData> => view
+    };
+
+    // Attach the release to the consumer signal eagerly, the way the EventBus stream attaches its own abort listener, so a view abandoned before its first `next()`
+    // still gives its level back when the signal aborts. An already-aborted signal never dispatches `abort` again, so we release at once.
+    signal?.addEventListener("abort", release, { once: true });
+
+    if(signal?.aborted) {
+
+      release();
+    }
+
+    return view;
   }
 
   /**

@@ -293,6 +293,12 @@ export function runCommand<T extends EntityType>(host: CommandHost, id: EntityId
 
         return;
 
+      case "value_out_of_range":
+
+        host.log.warn("Command for " + entityType + " dropped: " + (result.detail ?? "a command field received an out-of-range value") + ".");
+
+        return;
+
       default:
 
         return;

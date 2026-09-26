@@ -4,7 +4,7 @@
  */
 import type { EntitySchema, FieldSpec } from "./schemas/index.ts";
 import { MessageType, WireType } from "./protocol/index.ts";
-import { buildKeyField, encodeEntityCommand, encodeFieldValue, reportUnrecognizedOptions } from "./command-pipeline.ts";
+import { buildKeyField, encodeEntityCommand, encodeFieldValue, isValueInRange, reportUnrecognizedOptions } from "./command-pipeline.ts";
 import { decodeProtobuf, zigzagDecode } from "./protocol/codec.ts";
 import { describe, test } from "node:test";
 import { Buffer } from "node:buffer";
@@ -116,6 +116,63 @@ describe("encodeFieldValue", () => {
   });
 });
 
+describe("isValueInRange", () => {
+
+  test("fixed32 accepts a safe integer in the uint32 range and rejects negative, oversized, and non-integer values", () => {
+
+    assert.equal(isValueInRange("fixed32", 0), true);
+    assert.equal(isValueInRange("fixed32", 0xFFFFFFFF), true);
+    assert.equal(isValueInRange("fixed32", -1), false);
+    assert.equal(isValueInRange("fixed32", 0x100000000), false);
+    assert.equal(isValueInRange("fixed32", 1.5), false);
+  });
+
+  test("varint and enum accept a safe integer in the uint32 range and reject negative, oversized, and non-integer values", () => {
+
+    for(const valueType of [ "enum", "varint" ] as const) {
+
+      assert.equal(isValueInRange(valueType, 0), true, valueType);
+      assert.equal(isValueInRange(valueType, 0xFFFFFFFF), true, valueType);
+      assert.equal(isValueInRange(valueType, -1), false, valueType);
+      assert.equal(isValueInRange(valueType, 0x100000000), false, valueType);
+      assert.equal(isValueInRange(valueType, 2.5), false, valueType);
+    }
+  });
+
+  test("sint32 accepts a safe integer in the int32 range and rejects values below it, above it, or between integers", () => {
+
+    assert.equal(isValueInRange("sint32", -0x80000000), true);
+    assert.equal(isValueInRange("sint32", 0x7FFFFFFF), true);
+    assert.equal(isValueInRange("sint32", -0x80000001), false);
+    assert.equal(isValueInRange("sint32", 0x80000000), false);
+    assert.equal(isValueInRange("sint32", -0.5), false);
+  });
+
+  test("sint32-packed accepts an array of int32 values and rejects an array holding one bad element or a value that is not an array", () => {
+
+    assert.equal(isValueInRange("sint32-packed", [ 9000, -4500, 560, -560 ]), true);
+    assert.equal(isValueInRange("sint32-packed", []), true);
+    assert.equal(isValueInRange("sint32-packed", [ 9000, -4500.5, 560 ]), false);
+    assert.equal(isValueInRange("sint32-packed", [ 9000, 0x80000000 ]), false);
+    assert.equal(isValueInRange("sint32-packed", 9000), false);
+  });
+
+  test("an integer value type rejects a value that is not a finite number", () => {
+
+    for(const value of [ "5", 5n, Number.NaN, Number.POSITIVE_INFINITY, null, true ]) {
+
+      assert.equal(isValueInRange("varint", value), false, String(value));
+    }
+  });
+
+  test("bool, float, and string values carry no integer domain and always pass", () => {
+
+    assert.equal(isValueInRange("bool", true), true);
+    assert.equal(isValueInRange("float", -1.5), true);
+    assert.equal(isValueInRange("string", "any text"), true);
+  });
+});
+
 describe("encodeEntityCommand", () => {
 
   const lightId = entityId("light", "lamp");
@@ -163,6 +220,99 @@ describe("encodeEntityCommand", () => {
       assert.equal(result.reason, "enum_value_unknown");
       assert.match(result.detail ?? "", /mode/);
       assert.match(result.detail ?? "", /freze/);
+    }
+  });
+
+  test("refuses an out-of-range fixed32 value with value_out_of_range instead of throwing (datetime epochSeconds)", () => {
+
+    // The fixed32 writer throws a RangeError outside the uint32 range, which would escape the fire-and-forget command path. The encoder returns the refusal instead.
+    const datetimeId = entityId("datetime", "alarm");
+
+    for(const epochSeconds of [ -1, 0x100000000 ]) {
+
+      const result = encodeEntityCommand({ deviceId: undefined, id: datetimeId, key: 4, options: { epochSeconds }, resolveSchema: defaultResolveSchema });
+
+      assert.equal(result.ok, false);
+
+      if(!result.ok) {
+
+        assert.equal(result.reason, "value_out_of_range");
+        assert.equal(result.detail, "field 'epochSeconds' received out-of-range value '" + String(epochSeconds) + "'");
+      }
+    }
+  });
+
+  test("refuses a negative or non-integer varint value with value_out_of_range instead of wrapping it (date day)", () => {
+
+    // The 32-bit varint encoder would wrap -1 to 0xFFFFFFFF and truncate 1.5 to 1, commanding a date the caller never asked for.
+    const dateId = entityId("date", "birthday");
+
+    for(const day of [ -1, 1.5 ]) {
+
+      const result = encodeEntityCommand({ deviceId: undefined, id: dateId, key: 5, options: { day, month: 6, year: 2026 }, resolveSchema: defaultResolveSchema });
+
+      assert.equal(result.ok, false);
+
+      if(!result.ok) {
+
+        assert.equal(result.reason, "value_out_of_range");
+        assert.equal(result.detail, "field 'day' received out-of-range value '" + String(day) + "'");
+      }
+    }
+  });
+
+  test("refuses an out-of-range has-pattern value with value_out_of_range (fan speedLevel)", () => {
+
+    const result = encodeEntityCommand({ deviceId: undefined, id: entityId("fan", "ceiling"), key: 6, options: { speedLevel: -2, state: true },
+      resolveSchema: defaultResolveSchema });
+
+    assert.equal(result.ok, false);
+
+    if(!result.ok) {
+
+      assert.equal(result.reason, "value_out_of_range");
+      assert.equal(result.detail, "field 'speedLevel' received out-of-range value '-2'");
+    }
+  });
+
+  test("refuses an out-of-range bitmask value with value_out_of_range (water_heater mode passed as a raw number)", () => {
+
+    // A numeric mode skips the enum-alias mapping, so the range check is the only guard between it and the wire.
+    const result = encodeEntityCommand({ deviceId: undefined, id: entityId("water_heater", "tank"), key: 7, options: { mode: 2.5 },
+      resolveSchema: defaultResolveSchema });
+
+    assert.equal(result.ok, false);
+
+    if(!result.ok) {
+
+      assert.equal(result.reason, "value_out_of_range");
+      assert.equal(result.detail, "field 'mode' received out-of-range value '2.5'");
+    }
+  });
+
+  test("refuses a packed sint32 array by naming its first offending element and that element's index (infrared timings)", () => {
+
+    // A timings list can run to hundreds of entries, so the detail names the one element to correct rather than echoing the whole array. A value that is not an array
+    // at all has no element to name and is quoted whole.
+    const infraredId = entityId("infrared", "blaster");
+    const cases: [ unknown, string ][] = [
+      [ [ 9000, -4500.5, 560, 1.5 ], "field 'timings' received out-of-range value '-4500.5' at index 1" ],
+      [ [ 9000, -4500, 0x80000000 ], "field 'timings' received out-of-range value '2147483648' at index 2" ],
+      [ 9000, "field 'timings' received out-of-range value '9000'" ]
+    ];
+
+    for(const [ timings, detail ] of cases) {
+
+      const result = encodeEntityCommand({ deviceId: undefined, id: infraredId, key: 8, options: { carrierFrequency: 38000, repeatCount: 1, timings },
+        resolveSchema: defaultResolveSchema });
+
+      assert.equal(result.ok, false);
+
+      if(!result.ok) {
+
+        assert.equal(result.reason, "value_out_of_range");
+        assert.equal(result.detail, detail);
+      }
     }
   });
 

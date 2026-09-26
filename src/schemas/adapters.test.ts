@@ -59,6 +59,41 @@ describe("COMMAND_ADAPTERS.light", () => {
 
     assert.equal(JSON.stringify(input), inputBefore, "adapter must produce a fresh object - input must remain pristine");
   });
+
+  test("rounds a fractional transitionLength and flashLength to the nearest integer millisecond, with or without rgb", () => {
+
+    const input = { flashLength: 499.5, state: true, transitionLength: 0.1 * 3 * 1000 };
+
+    // The fixture must really carry floating-point error, or the rounding assertion below would pass with no rounding at all.
+    assert.equal(Number.isInteger(input.transitionLength), false);
+
+    const out = light!(input);
+
+    assert.equal(out["transitionLength"], 300, "a floating-point duration of 300.00000000000006 ms rounds to 300");
+    assert.equal(out["flashLength"], 500, "0.5 rounds up per Math.round");
+    assert.equal(input.transitionLength, 0.1 * 3 * 1000, "rounding must not mutate the consumer's options object");
+
+    const withRgb = light!({ rgb: { b: 0, g: 0, r: 255 }, transitionLength: 1499.6 });
+
+    assert.equal(withRgb["transitionLength"], 1500);
+    assert.equal(withRgb["red"], 255);
+  });
+
+  test("preserves an already-integer transitionLength and flashLength unchanged", () => {
+
+    const out = light!({ flashLength: 250, transitionLength: 1000 });
+
+    assert.equal(out["transitionLength"], 1000);
+    assert.equal(out["flashLength"], 250);
+  });
+
+  test("leaves transitionLength and flashLength absent when the consumer did not supply them", () => {
+
+    const out = light!({ brightness: 0.8, state: true });
+
+    assert.equal(("transitionLength" in out), false);
+    assert.equal(("flashLength" in out), false);
+  });
 });
 
 describe("COMMAND_ADAPTERS.siren", () => {

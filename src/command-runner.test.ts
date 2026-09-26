@@ -323,6 +323,17 @@ describe("runCommand - fire-and-forget error paths warn-and-drop without throwin
     assert.equal(bundle.frames.length, 0);
     assert.ok(bundle.logger.warned.some((w) => w.includes("does not support commands")));
   });
+
+  test("warn-and-drop with value_out_of_range when a command field falls outside its integer domain (datetime epochSeconds)", () => {
+
+    const bundle = mockHost({ keyForId: (): number => 1 });
+
+    assert.doesNotThrow((): void => runCommand(bundle.host, entityId("datetime", "alarm"), { epochSeconds: -1 }));
+    assert.equal(bundle.frames.length, 0);
+    assert.deepEqual(bundle.logger.warned, ["Command for datetime dropped: field 'epochSeconds' received out-of-range value '-1'."]);
+    assert.ok(bundle.logger.warned.some((w) => w.includes("out-of-range")));
+    assert.equal(bundle.metrics.filter((m) => m.name === "entity.commands.sent").length, 0);
+  });
 });
 
 // 4 Branches + 8 Edge - adapter dispatch logic.
@@ -336,6 +347,22 @@ describe("runCommand - COMMAND_ADAPTERS dispatch", () => {
     runCommand(bundle.host, entityId("light", "x"), { brightness: 0.4, state: true });
 
     assert.equal(bundle.frames.length, 1);
+  });
+
+  test("light's adapter rounds a floating-point transitionLength before the encoder's integer check, so the command sends", async () => {
+
+    const { decodeProtobuf } = await import("./protocol/codec.ts");
+    const bundle = mockHost({ keyForId: (): number => 1 });
+
+    runCommand(bundle.host, entityId("light", "x"), { state: true, transitionLength: 0.1 * 3 * 1000 });
+
+    assert.equal(bundle.frames.length, 1);
+    assert.equal(bundle.logger.warned.length, 0);
+
+    const fields = decodeProtobuf(bundle.frames[0]!.payload, { maxFieldsPerMessage: 32 });
+
+    // transition_length is field 15 on LightCommandRequest; the adapter rounded 300.00000000000006 to 300.
+    assert.equal(fields[15]?.[0], 300);
   });
 
   test("siren without duration skips the adapter rounding", () => {

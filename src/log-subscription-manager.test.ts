@@ -83,16 +83,15 @@ const decodeSubscribeLogsFrame = (frame: CapturedFrame): { dumpConfig: boolean; 
   return { dumpConfig: dumpConfigRaw === 1, level: level as LogLevel };
 };
 
-// Open a `subscribe()` async-iterable. Async generators only execute their `finally` block when their body is parked at a yield point - calling `.return()` while the
-// body is parked at an `await` of an inner iterator does not propagate to the inner iterator's `.return()` (an open V8 limitation), so the standard cleanup paths in
-// the production code are: consumer breaks the for-await, consumer signal aborts, or the EventBus disposes. The helper threads its own AbortController through the
-// stream options so disposal-only tests can trigger the abort path without emitting events.
+// Open a `subscribe()` async-iterable. The view releases its subscriber from an abort listener on the consumer signal, from its own `.return()` / `.throw()`, and when
+// the underlying EventBus stream ends or fails. The helper threads its own AbortController through the stream options so disposal-only tests can trigger the abort
+// path without emitting events.
 //
-// - `next()` advances the iterator (the first call also primes the generator). Use in tests that consume events.
-// - `closeAfterPrime()` primes the generator and then aborts the internal signal, which propagates through the BackpressureStream's signal listener and resolves the
-//   parked inner `.next()` with a rejection. The wrapper's for-await catches the rejection, runs the `finally` block, and the iterator settles. Use in tests that only
-//   verify refcount / wire-send behavior on the disposal path.
-// - `close()` calls `.return()` on an already-started iterator. Use in tests that already advanced the iterator with `next()` to a yield point.
+// - `next()` advances the iterator. Use in tests that consume events.
+// - `closeAfterPrime()` parks one `.next()` and then aborts the internal signal. The view's abort listener releases the subscriber, and the BackpressureStream's own
+//   signal listener rejects the parked inner `.next()`, which the view surfaces as a rejection. Use in tests that only verify refcount / wire-send behavior on the
+//   disposal path.
+// - `close()` calls `.return()` on the iterator. Use in tests that already advanced the iterator with `next()`.
 interface OpenedIterator {
 
   close: () => Promise<void>;
@@ -127,7 +126,7 @@ const openIterator = (manager: LogSubscriptionManager, level: LogLevel, options?
 
       const primer = iter.next();
 
-      // Yield once so the generator body enters the for-await and the BackpressureStream listener is attached to the abort signal.
+      // Yield once so the parked `.next()` is in flight when the abort lands.
       await Promise.resolve();
       ac.abort();
 
@@ -257,7 +256,7 @@ describe("LogSubscriptionManager - requestDeviceLevel (imperative pin)", () => {
     }
   });
 
-  test("repeated calls at the same level send exactly ONE wire frame (retainOnEmpty keeps the re-pin wire-silent)", () => {
+  test("repeated calls at the same level send exactly ONE wire frame (acquire-then-release keeps the re-pin wire-silent)", () => {
 
     const { manager, outbound } = buildHarness();
 
@@ -265,8 +264,8 @@ describe("LogSubscriptionManager - requestDeviceLevel (imperative pin)", () => {
     manager.requestDeviceLevel(LogLevel.INFO);
     manager.requestDeviceLevel(LogLevel.INFO);
 
-    // The first call sends INFO. Each subsequent call releases the prior pin and re-acquires at the same level, but retainOnEmpty: true keeps the cache at INFO through
-    // the intermediate empty transition, so the re-acquire reduces to the already-cached INFO and is suppressed. Re-pinning the level the device already has is silent.
+    // The first call sends INFO. Each subsequent call acquires a fresh INFO pin before releasing the prior one, so the aggregate stays at INFO through both recomputes
+    // and neither emits. Re-pinning the level the device already has is silent.
     assert.equal(outbound.length, 1);
     assert.equal(manager.activeLevel, LogLevel.INFO);
   });
@@ -325,7 +324,7 @@ describe("LogSubscriptionManager - the imperative pin is a floor over subscriber
     assert.equal(manager.activeLevel, LogLevel.VERBOSE);
   });
 
-  test("re-pinning to a lower level above the surviving iterator downgrades to the new aggregate", () => {
+  test("re-pinning below the surviving iterator downgrades the device to the iterator's level in one frame", () => {
 
     const { manager, outbound } = buildHarness();
 
@@ -341,6 +340,30 @@ describe("LogSubscriptionManager - the imperative pin is a floor over subscriber
     assert.equal(outbound.length, 2);
     assert.equal(decodeSubscribeLogsFrame(outbound[1]!).level, LogLevel.INFO);
     assert.equal(manager.activeLevel, LogLevel.INFO);
+  });
+
+  test("re-pinning at the same or a higher level over a lower iterator sends at most one frame (never a transient downgrade)", () => {
+
+    const { manager, outbound } = buildHarness();
+
+    manager.requestDeviceLevel(LogLevel.VERBOSE);
+    manager.subscribe(LogLevel.INFO);
+
+    // Pin VERBOSE holds the aggregate; the INFO iterator attached silently below it.
+    assert.equal(outbound.length, 1);
+
+    // Re-pin at the same level. The new pin is acquired before the prior one is released, so the aggregate never dips to the INFO iterator and nothing is sent.
+    manager.requestDeviceLevel(LogLevel.VERBOSE);
+
+    assert.equal(outbound.length, 1, "a same-level re-pin must not send an INFO downgrade followed by a VERBOSE re-upgrade");
+    assert.equal(manager.activeLevel, LogLevel.VERBOSE);
+
+    // Re-pin higher. The acquire upgrades the device in exactly one frame, and releasing the prior VERBOSE pin afterward is silent.
+    manager.requestDeviceLevel(LogLevel.VERY_VERBOSE);
+
+    assert.equal(outbound.length, 2, "a higher re-pin must send exactly one frame");
+    assert.equal(decodeSubscribeLogsFrame(outbound[1]!).level, LogLevel.VERY_VERBOSE);
+    assert.equal(manager.activeLevel, LogLevel.VERY_VERBOSE);
   });
 });
 
@@ -685,6 +708,114 @@ describe("LogSubscriptionManager - subscribe: dispose / downgrade semantics", ()
   });
 });
 
+describe("LogSubscriptionManager - subscribe: a never-iterated view releases eagerly", () => {
+
+  test("aborting the signal of a never-iterated view releases its subscriber and downgrades the device, and a later return() does not release again", async () => {
+
+    const { manager, outbound } = buildHarness();
+    const controller = new AbortController();
+
+    // An INFO pin sets the floor; a DEBUG view raises the device above it and is never iterated.
+    manager.requestDeviceLevel(LogLevel.INFO);
+
+    const iter = manager.subscribe(LogLevel.DEBUG, { signal: controller.signal })[Symbol.asyncIterator]();
+
+    assert.equal(outbound.length, 2);
+    assert.equal(manager.subscriberCount, 1);
+    assert.equal(manager.activeLevel, LogLevel.DEBUG);
+
+    // The abort alone releases the view: no next() ever ran, yet the subscriber leaves and the device drops back to the pin's INFO floor in one frame.
+    controller.abort();
+
+    assert.equal(manager.subscriberCount, 0, "the abort must release a view that was never iterated");
+    assert.equal(outbound.length, 3);
+    assert.equal(decodeSubscribeLogsFrame(outbound[2]!).level, LogLevel.INFO);
+    assert.equal(manager.activeLevel, LogLevel.INFO);
+
+    // A later return() finds the subscriber already released: the count stays at zero and no further frame is sent.
+    await iter.return!();
+
+    assert.equal(manager.subscriberCount, 0);
+    assert.equal(outbound.length, 3);
+    assert.equal(manager.activeLevel, LogLevel.INFO);
+  });
+
+  test("an already-aborted signal releases the subscriber synchronously inside subscribe()", () => {
+
+    const { manager } = buildHarness();
+    const controller = new AbortController();
+
+    manager.requestDeviceLevel(LogLevel.INFO);
+    controller.abort();
+    manager.subscribe(LogLevel.DEBUG, { signal: controller.signal });
+
+    assert.equal(manager.subscriberCount, 0, "an already-aborted signal must release before subscribe() returns");
+    assert.equal(manager.activeLevel, LogLevel.INFO);
+  });
+
+  test("return() on a never-iterated view releases its subscriber without a signal", async () => {
+
+    const { manager, outbound } = buildHarness();
+
+    manager.requestDeviceLevel(LogLevel.INFO);
+
+    const iter = manager.subscribe(LogLevel.DEBUG)[Symbol.asyncIterator]();
+
+    assert.equal(manager.subscriberCount, 1);
+    assert.equal(manager.activeLevel, LogLevel.DEBUG);
+
+    await iter.return!();
+
+    assert.equal(manager.subscriberCount, 0, "return() must release a view that was never iterated");
+    assert.equal(decodeSubscribeLogsFrame(outbound.at(-1)!).level, LogLevel.INFO);
+    assert.equal(manager.activeLevel, LogLevel.INFO);
+  });
+});
+
+describe("LogSubscriptionManager - subscribe: throw() and stream completion end the view", () => {
+
+  test("throw() releases the subscriber, rejects with the supplied error, and leaves the view ended", async () => {
+
+    const { manager } = buildHarness();
+    const iter = manager.subscribe(LogLevel.INFO)[Symbol.asyncIterator]();
+    const failure = new Error("consumer failure");
+
+    assert.equal(manager.subscriberCount, 1);
+
+    await assert.rejects(iter.throw!(failure), (error: unknown): boolean => error === failure);
+
+    assert.equal(manager.subscriberCount, 0);
+    assert.deepEqual(await iter.next(), { done: true, value: undefined });
+  });
+
+  test("the underlying stream ending releases the subscriber and resolves the parked next() done", async () => {
+
+    const { bus, manager } = buildHarness();
+    const iter = manager.subscribe(LogLevel.INFO)[Symbol.asyncIterator]();
+    const pending = iter.next();
+
+    // Disposing the bus ends every stream it backs, which settles the parked next() and runs the view's release.
+    bus.dispose();
+
+    assert.deepEqual(await pending, { done: true, value: undefined });
+    assert.equal(manager.subscriberCount, 0);
+    assert.deepEqual(await iter.next(), { done: true, value: undefined });
+  });
+
+  test("after an abort the first next() rejects with the abort reason and every later next() resolves done", async () => {
+
+    const { manager } = buildHarness();
+    const controller = new AbortController();
+    const iter = manager.subscribe(LogLevel.INFO, { signal: controller.signal })[Symbol.asyncIterator]();
+
+    controller.abort();
+
+    await assert.rejects(iter.next(), { name: "AbortError" });
+    assert.deepEqual(await iter.next(), { done: true, value: undefined });
+    assert.deepEqual(await iter.next(), { done: true, value: undefined });
+  });
+});
+
 describe("LogSubscriptionManager - subscribe yields events to consumers", () => {
 
   test("subscribe yields LogEventData when the bus emits a 'log' event below the iterator's level", async () => {
@@ -693,7 +824,7 @@ describe("LogSubscriptionManager - subscribe yields events to consumers", () => 
     const iter = openIterator(manager, LogLevel.INFO);
     const eventToEmit = sampleEvent(LogLevel.WARN, "warning text");
 
-    // The first .next() primes the generator so the BackpressureStream's listener is attached BEFORE the emit fires.
+    // The first .next() parks on the stream BEFORE the emit fires.
     const pending = iter.next();
 
     bus.emit("log", eventToEmit);
@@ -710,7 +841,7 @@ describe("LogSubscriptionManager - subscribe yields events to consumers", () => 
 
     const { bus, manager } = buildHarness();
     const iter = openIterator(manager, LogLevel.INFO);
-    // Prime so the listener is attached before any emit.
+    // Park the first .next() before any emit; the stream's listener is attached from the moment subscribe() returns.
     const pending = iter.next();
 
     // INFO subscriber must not see DEBUG even when the bus emits one.
@@ -732,7 +863,7 @@ describe("LogSubscriptionManager - subscribe yields events to consumers", () => 
     const infoIter = openIterator(manager, LogLevel.INFO);
     const debugIter = openIterator(manager, LogLevel.DEBUG);
 
-    // Prime both iterators so their listeners are attached before any emit.
+    // Park the first .next() on both iterators before any emit; each stream's listener is attached from the moment subscribe() returns.
     const infoPending = infoIter.next();
     const debugPending = debugIter.next();
 
@@ -781,7 +912,7 @@ describe("LogSubscriptionManager - subscribe yields events to consumers", () => 
     await consumer;
 
     assert.equal(events.length, 2);
-    assert.equal(manager.subscriberCount, 0, "break must run the iterator's finally cleanup");
+    assert.equal(manager.subscriberCount, 0, "break must release the iterator's subscriber");
   });
 
   test("subscribe terminates when the consumer's signal aborts (pre-aborted)", async () => {
@@ -802,7 +933,7 @@ describe("LogSubscriptionManager - subscribe yields events to consumers", () => 
     const { bus, manager } = buildHarness();
     const ac = new AbortController();
     const iter = manager.subscribe(LogLevel.INFO, { signal: ac.signal })[Symbol.asyncIterator]();
-    // Prime so the listener is attached before any emit.
+    // Park the first .next() before any emit; the stream's listener is attached from the moment subscribe() returns.
     const pending = iter.next();
 
     bus.emit("log", sampleEvent(LogLevel.WARN, "before-abort"));
@@ -822,7 +953,7 @@ describe("LogSubscriptionManager - subscribe yields events to consumers", () => 
     const { bus, manager } = buildHarness();
     // Open with a small high-water mark and dropOldest policy; emit more events than the buffer holds before consuming.
     const iter = manager.subscribe(LogLevel.INFO, { backpressure: "dropOldest", highWaterMark: 2 })[Symbol.asyncIterator]();
-    // Prime to attach the listener; the first .next() will resolve with the first preserved event.
+    // Park the first .next() before the emits; it resolves with the first event the stream preserves.
     const pending = iter.next();
 
     bus.emit("log", sampleEvent(LogLevel.WARN, "1"));
@@ -987,7 +1118,7 @@ describe("LogSubscriptionManager - dispatch", () => {
     const { manager } = buildHarness();
     const a = openIterator(manager, LogLevel.INFO);
     const b = openIterator(manager, LogLevel.DEBUG);
-    // Prime both iterators so their listeners are attached before dispatch fires.
+    // Park the first .next() on both iterators before dispatch fires; each stream's listener is attached from the moment subscribe() returns.
     const ap = a.next();
     const bp = b.next();
 
@@ -1075,7 +1206,8 @@ describe("LogSubscriptionManager - hot path", () => {
       }
     })());
 
-    // Yield to the event loop so every consumer's primer .next() attaches its listener before any emit fires.
+    // Yield to the event loop so every consumer's for-await loop has parked its first .next() before the emits begin; each stream's listener is attached from the
+    // moment subscribe() returns.
     await new Promise<void>((resolve) => setImmediate(resolve));
 
     for(let i = 0; i < 1000; i++) {
@@ -1118,7 +1250,7 @@ describe("LogSubscriptionManager - boundary values", () => {
 
     const { bus, manager } = buildHarness();
     const iter = openIterator(manager, LogLevel.NONE);
-    // Prime so the listener is attached before any emit.
+    // Park the first .next() before any emit; the stream's listener is attached from the moment subscribe() returns.
     const pending = iter.next();
 
     bus.emit("log", sampleEvent(LogLevel.ERROR, "error"));
@@ -1256,7 +1388,7 @@ describe("LogSubscriptionManager - documented edge cases", () => {
 
     const { bus, manager } = buildHarness();
     const iter = openIterator(manager, LogLevel.INFO);
-    // Prime so the listener is attached before any emit.
+    // Park the first .next() before any emit; the stream's listener is attached from the moment subscribe() returns.
     const pending = iter.next();
 
     bus.emit("log", sampleEvent(LogLevel.ERROR, "error"));

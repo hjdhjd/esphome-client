@@ -3,7 +3,7 @@
  * command-pipeline.ts: Schema-driven command encoder for outbound entity commands.
  */
 
-import type { EntitySchema, FieldSpec, HasPatternField } from "./schemas/index.ts";
+import type { EntitySchema, FieldSpec, HasPatternField, ValueType } from "./schemas/index.ts";
 import { encodePackedSint32, encodeProtoFields, zigzagEncode } from "./protocol/codec.ts";
 import { Buffer } from "node:buffer";
 import type { EntityId } from "./entity-id.ts";
@@ -35,9 +35,80 @@ export function buildKeyField(key: number, fieldNumber = 1): ProtoField {
   return { fieldNumber, value: key, wireType: WireType.FIXED32 };
 }
 
+// The inclusive protobuf integer domains the command encoder writes. Varint, enum, and fixed32 fields carry uint32 values; scalar and packed sint32 fields carry int32
+// values.
+const INT32_MAX = 0x7FFFFFFF;
+const INT32_MIN = -0x80000000;
+const UINT32_MAX = 0xFFFFFFFF;
+
+/**
+ * Test whether a value is a safe integer within an inclusive range.
+ *
+ * @param value - The raw value supplied by the caller.
+ * @param min - The inclusive lower bound.
+ * @param max - The inclusive upper bound.
+ * @returns `true` when `value` is a safe integer in `[min, max]`.
+ */
+function isIntegerInRange(value: unknown, min: number, max: number): boolean {
+
+  return (typeof value === "number") && Number.isSafeInteger(value) && (value >= min) && (value <= max);
+}
+
+/**
+ * Test whether a value is a safe integer in the int32 range, the domain of a scalar sint32 field and of every element in a packed sint32 array.
+ *
+ * @param value - The raw value supplied by the caller.
+ * @returns `true` when `value` is a safe integer in the int32 range.
+ */
+function isInt32(value: unknown): boolean {
+
+  return isIntegerInRange(value, INT32_MIN, INT32_MAX);
+}
+
+/**
+ * Test whether a command value fits the integer domain its schema value type encodes. {@link encodeEntityCommand} consults this for every field before encoding it, so
+ * a value the wire cannot carry is refused as `value_out_of_range` rather than wrapped by the 32-bit varint and zigzag encoders or thrown by the fixed32 writer.
+ *
+ * @remarks Varint, enum, and fixed32 values must be safe integers in the uint32 range; scalar sint32 values must be safe integers in the int32 range; a packed sint32
+ * array must hold only such values. Booleans, floats, and strings carry no integer domain and always pass.
+ *
+ * @param valueType - The schema value type of the field being encoded.
+ * @param value - The raw value supplied by the caller.
+ * @returns `true` when the value is encodable for its value type.
+ * @internal
+ */
+export function isValueInRange(valueType: ValueType, value: unknown): boolean {
+
+  switch(valueType) {
+
+    case "enum":
+    case "fixed32":
+    case "varint":
+
+      return isIntegerInRange(value, 0, UINT32_MAX);
+
+    case "sint32":
+
+      return isInt32(value);
+
+    case "sint32-packed":
+
+      return Array.isArray(value) && value.every((element: unknown): boolean => isInt32(element));
+
+    case "bool":
+    case "float":
+    case "string":
+
+      return true;
+  }
+}
+
 /**
  * Encode a single scalar/buffer value for a command field according to its schema spec. Returns either a number (for varint shapes) or a Buffer (for length-delimited
  * and fixed32 shapes), matching the {@link ProtoField.value} tag.
+ *
+ * @remarks Integer value types expect a value {@link isValueInRange} accepts. {@link encodeEntityCommand} validates every field through that predicate before calling
+ * here, so this encoder never sees an integer the wire cannot carry and does not throw for validated input.
  *
  * @param value - The raw value supplied by the caller.
  * @param spec - The schema spec ({@link FieldSpec} or {@link HasPatternField}) used to pick the encoder.
@@ -109,11 +180,12 @@ export interface EncodedCommand {
 /**
  * Reasons {@link encodeEntityCommand} can refuse to encode. The host translates these into log lines + drop semantics.
  */
-export type EncodeFailureReason = "command_unsupported" | "enum_value_unknown" | "key_not_found" | "schema_unknown";
+export type EncodeFailureReason = "command_unsupported" | "enum_value_unknown" | "key_not_found" | "schema_unknown" | "value_out_of_range";
 
 /**
  * Result tag: a successful encode carries the framed payload; a failure carries a structured reason that the host decodes into a debug-level log line. The
- * optional `detail` carries human-readable context for reasons that need it (the offending field + value for `enum_value_unknown`).
+ * optional `detail` carries human-readable context for reasons that need it (the offending field + value for `enum_value_unknown` and `value_out_of_range`, plus the
+ * element index when the rejected value is a packed array).
  */
 export type EncodeResult =
   | { readonly ok: true; readonly value: EncodedCommand; readonly processedKeys: ReadonlySet<string>; readonly entityType: string } |
@@ -139,11 +211,56 @@ export interface EncodeEntityCommandInput {
 }
 
 /**
+ * Inputs for {@link valueOutOfRange}.
+ */
+interface ValueOutOfRangeInput {
+
+  /**
+   * The option name of the offending field.
+   */
+  readonly fieldName: string;
+
+  /**
+   * The value {@link isValueInRange} rejected.
+   */
+  readonly value: unknown;
+
+  /**
+   * The schema value type of the offending field, which decides whether the detail names a single packed element.
+   */
+  readonly valueType: ValueType;
+}
+
+/**
+ * Build the `value_out_of_range` refusal for a field whose value {@link isValueInRange} rejected, in the detail voice of the `enum_value_unknown` refusal.
+ *
+ * @remarks A packed sint32 array is described by its first offending element and that element's index rather than by the whole array, so a long timings list keeps
+ * the warn line short and points at the value to correct. Every other value is quoted whole.
+ *
+ * @param input - The {@link ValueOutOfRangeInput} bag.
+ * @returns The failure record {@link encodeEntityCommand} returns.
+ */
+function valueOutOfRange(input: ValueOutOfRangeInput): EncodeResult {
+
+  const { fieldName, value, valueType } = input;
+  const prefix = "field '" + fieldName + "' received out-of-range value '";
+
+  if((valueType === "sint32-packed") && Array.isArray(value)) {
+
+    const index = value.findIndex((element: unknown): boolean => !isInt32(element));
+
+    return { detail: prefix + String(value[index]) + "' at index " + String(index), ok: false, reason: "value_out_of_range" };
+  }
+
+  return { detail: prefix + String(value) + "'", ok: false, reason: "value_out_of_range" };
+}
+
+/**
  * Schema-driven command encoder. Looks up the entity schema, applies the schema's enum mappings to translate string aliases into protocol numbers, encodes every
  * declared scalar and has-pattern field, attaches the optional device_id, and returns the framed payload paired with the command's wire message type.
  *
- * Returns a structured failure result when the entity type or key cannot be resolved or when the entity type does not declare a command schema; the host's caller
- * interprets failures into log lines without throwing.
+ * Returns a structured failure result when the entity type or key cannot be resolved, when the entity type does not declare a command schema, or when a field value is
+ * an unknown enum alias or falls outside its value type's integer domain; the host's caller interprets failures into log lines without throwing.
  *
  * @param input - Encoder inputs (entity key, device_id, branded id, raw options).
  * @returns A success record carrying the framed payload + the key set the encoder consumed, or a failure record carrying the reason.
@@ -222,6 +339,13 @@ export function encodeEntityCommand(input: EncodeEntityCommandInput): EncodeResu
       continue;
     }
 
+    // An integer outside its value type's wire domain fails closed here, as an unknown enum alias does above, before it can reach the encoder. The has-pattern and
+    // bitmask passes below apply the same check.
+    if(!isValueInRange(fieldSpec.valueType, value)) {
+
+      return valueOutOfRange({ fieldName: optionName, value, valueType: fieldSpec.valueType });
+    }
+
     processedKeys.add(optionName);
 
     fields.push({
@@ -240,6 +364,11 @@ export function encodeEntityCommand(input: EncodeEntityCommandInput): EncodeResu
     if(value === undefined) {
 
       continue;
+    }
+
+    if(!isValueInRange(hasPatternSpec.valueType, value)) {
+
+      return valueOutOfRange({ fieldName: optionName, value, valueType: hasPatternSpec.valueType });
     }
 
     processedKeys.add(optionName);
@@ -273,6 +402,11 @@ export function encodeEntityCommand(input: EncodeEntityCommandInput): EncodeResu
       if(value === undefined) {
 
         continue;
+      }
+
+      if(!isValueInRange(bitmaskSpec.valueType, value)) {
+
+        return valueOutOfRange({ fieldName: optionName, value, valueType: bitmaskSpec.valueType });
       }
 
       processedKeys.add(optionName);

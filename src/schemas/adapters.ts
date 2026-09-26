@@ -38,10 +38,22 @@ export type CommandAdapter = (options: Record<string, unknown>) => Record<string
 export const COMMAND_ADAPTERS: { [K in keyof typeof ENTITY_SCHEMAS]?: CommandAdapter } = {
 
   // Light's wire shape uses flat red/green/blue/hasRgb; the public API takes `rgb: { r, g, b }`. We expand the object into the four flat fields and drop the rgb key
-  // before the encoder sees it.
+  // before the encoder sees it. The `flashLength` and `transitionLength` fields are varint (uint32 milliseconds), and a consumer computing a duration in floating point
+  // (`0.1 * 3 * 1000` is 300.00000000000006) must not have its command dropped by the encoder's integer check, so we round each one that is present and numeric. The
+  // rounding writes only to `rest`, the fresh copy the destructure produced, so the consumer's options object is never mutated.
   light: (options: Record<string, unknown>): Record<string, unknown> => {
 
     const { rgb, ...rest } = options as { rgb?: { b: number; g: number; r: number } } & Record<string, unknown>;
+
+    for(const field of [ "flashLength", "transitionLength" ]) {
+
+      const value = rest[field];
+
+      if(typeof value === "number") {
+
+        rest[field] = Math.round(value);
+      }
+    }
 
     if(rgb !== undefined) {
 
