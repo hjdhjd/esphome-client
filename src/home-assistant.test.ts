@@ -40,7 +40,7 @@ const recordingLogger = (): RecordingLogger => {
   };
 };
 
-// Captured outbound frame shape - the bridge's host seam send hook records every wire frame here so tests can assert on the wire-protocol contract directly.
+// Captured outbound frame shape - the harness `send` hook records every wire frame here so tests can assert on the wire-protocol contract directly.
 interface CapturedFrame {
 
   payload: Buffer;
@@ -56,7 +56,7 @@ interface Harness {
   outbound: CapturedFrame[];
 }
 
-// Construct a bridge plus its bus, recording logger, decoder counter, and outbound-frame buffer in one call. The decoder counter increments every time the seam's
+// Construct a bridge plus its bus, recording logger, decoder counter, and outbound-frame buffer in one call. The decoder counter increments every time the host's
 // decode hook is invoked so tests can assert on the inbound-context's allocation contract.
 const buildHarness = (): Harness => {
 
@@ -499,7 +499,7 @@ describe("HomeAssistantApi.inboundContext", () => {
     assert.equal(bridge.inboundContext.log, log);
   });
 
-  test("the context's decode forwards through the seam", () => {
+  test("the context's decode forwards through the host's decode hook", () => {
 
     const harness = buildHarness();
 
@@ -814,12 +814,12 @@ describe("HomeAssistantApi edge cases", () => {
     const bridgeA = new HomeAssistantApi(host);
     const bridgeB = new HomeAssistantApi(host);
 
-    // Each bridge memoizes its own context object even when constructed from the same seam.
+    // Each bridge memoizes its own context object even when constructed from the same host.
     assert.notEqual(bridgeA.inboundContext, bridgeB.inboundContext);
   });
 });
 
-// Hot path. 5000-call tight loop confirming no allocation regression in the encode-and-frame path. The seam captures every frame so the count is exact.
+// Hot path. 5000-call tight loop confirming no allocation regression in the encode-and-frame path. The harness `send` hook captures every frame so the count is exact.
 describe("HomeAssistantApi hot path", () => {
 
   test("5000 sendState calls produce exactly 5000 frames with stable per-call shape", () => {
@@ -916,7 +916,7 @@ describe("HomeAssistantApi negative assertions", () => {
     assert.equal(requestCaptured.length, 0);
   });
 
-  test("constructing the bridge does NOT decode anything (inboundContext is built from the seam directly)", () => {
+  test("constructing the bridge does NOT decode anything (inboundContext is built from the host directly)", () => {
 
     const harness = buildHarness();
 
@@ -1223,7 +1223,7 @@ describe("HomeAssistantApi.inboundContext + dispatcher integration", () => {
     assert.equal(captured[0]?.entityId, "sensor.x");
   });
 
-  test("dispatcher path increments the seam's decode counter (the inbound context forwards through the host's bounded decoder)", () => {
+  test("dispatcher path increments the harness decode counter (the inbound context forwards through the host's bounded decoder)", () => {
 
     const harness = buildHarness();
 

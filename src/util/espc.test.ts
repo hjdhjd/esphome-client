@@ -37,7 +37,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { entityId } from "../entity-id.ts";
 import { once } from "node:events";
 
-// In-memory writer used to capture stdout/stderr through the Printer's IO seam. Both `process.stdout` and `process.stderr` satisfy the `PrinterWritable` shape with
+// In-memory writer used to capture stdout/stderr through `PrinterIO`. Both `process.stdout` and `process.stderr` satisfy the `PrinterWritable` shape with
 // `write(data: string): unknown`; this minimal stand-in honors the same contract while accumulating writes for assertion. The `chunks` array preserves write order so
 // tests can assert per-line order in addition to aggregate content.
 class StringWriter {
@@ -296,7 +296,7 @@ describe("Exports - every @internal symbol is importable and well-typed", () => 
 });
 
 // 2. Methods - every public method on Printer, CLILogger, CliError, and the registered handlers via CLI_COMMANDS.
-describe("Printer - per-method emit semantics through the IO seam", () => {
+describe("Printer - per-method emit semantics through PrinterIO", () => {
 
   // The level-method tests are driven directly off LEVEL_THEME, the same table that drives the production writer. Adding a new level (or changing a label/color/stream)
   // is one row in LEVEL_THEME and the loop below picks it up automatically: no per-method test to maintain, no chance for the test list to drift from the production
@@ -380,9 +380,9 @@ describe("Printer - per-method emit semantics through the IO seam", () => {
     assert.equal(stdout.text, "captured\n");
   });
 
-  // Precedence rules for Printer.fromEnvironment, exercised via the `withEnv` helper so each test pins exactly the variables it cares about and is unaffected by
-  // ambient state (notably the Node test runner injects FORCE_COLOR=1 into worker env). The contract is: NO_COLOR > FORCE_COLOR > TTY heuristic. The first test pins
-  // the top of the precedence; the second pins the middle; the third confirms NO_COLOR's veto power over the override beneath it.
+  // Precedence rules for Printer.fromEnvironment, exercised via the `withEnv` helper so each test sets exactly the variables it cares about and is unaffected by
+  // ambient state (notably the Node test runner injects FORCE_COLOR=1 into worker env). The contract is: NO_COLOR > FORCE_COLOR > TTY heuristic. The first test asserts
+  // the top of the precedence; the second asserts the middle; the third confirms NO_COLOR's veto power over the override beneath it.
   test("Printer.fromEnvironment with NO_COLOR set disables color regardless of TTY", () => {
 
     withEnv({ FORCE_COLOR: null, NO_COLOR: "1" }, () => {
@@ -460,7 +460,7 @@ describe("Printer - per-method emit semantics through the IO seam", () => {
   });
 });
 
-// CLILogger - verbose gating across the four log levels.
+// CLILogger - verbose gating across every log level.
 describe("CLILogger - verbose gating + structured-context formatting", () => {
 
   test("non-verbose suppresses debug and info but surfaces warn/error", () => {
@@ -1109,7 +1109,7 @@ describe("dispatch - routes Invocation kinds through the printer", () => {
 
     // --duration is parsed at the boundary, ahead of createClient, so dispatching a watch with a malformed --duration rejects with a typed CliError without ever
     // attempting a connection to the (unreachable) host. The validation is fail-fast by design: a valid --duration would instead proceed to createClient and block on a
-    // real connect, which is why this test pins the malformed-value path.
+    // real connect, which is why this test asserts the malformed-value path.
     const inv = parseInvocation([ "watch", "light-foo", "--host", "0.0.0.0", "--duration", "abc" ]);
 
     await assert.rejects(dispatch(inv, makePrinter().printer), (err: unknown) => (err instanceof CliError) && err.message.includes("--duration"));
@@ -1176,7 +1176,7 @@ describe("dispatch - routes Invocation kinds through the printer", () => {
   test("control defers validation for a numeric-key identifier - its type is unknown without the device", async () => {
 
     // A numeric-key identifier carries no entity type until the device resolves it, so the input check necessarily stays post-connect. The command therefore proceeds to
-    // the connection attempt, which fails fast (ECONNREFUSED) - the rejection must NOT be a boundary input error. This pins the inherent id-form vs key-form asymmetry.
+    // the connection attempt, which fails fast (ECONNREFUSED) - the rejection must NOT be a boundary input error. This asserts the inherent id-form/key-form asymmetry.
     const inv = parseInvocation([ "control", "5", "badmode", "--host", "0.0.0.0" ]);
 
     await assert.rejects(dispatch(inv, makePrinter().printer), (err: unknown): boolean => !((err instanceof CliError) && err.message.includes("valid mode")));
@@ -1193,7 +1193,7 @@ describe("awaitQuietPeriod - adaptive quiet-period settle", () => {
   // real Disposable, lets the test inject events, and verifies cleanup - the three things the contract requires.
   function fakeSubscribe(): { dispose: () => void; disposed: boolean; fire: () => void; subscribe: (onEvent: () => void) => Disposable } {
 
-    let onEvent: (() => void) | null = null;
+    let onEvent: Nullable<() => void> = null;
     const state = { disposed: false } as { disposed: boolean };
 
     return {
@@ -2702,7 +2702,7 @@ describe("runSnapshot - 'snapshot' read-command policy", () => {
     const client = new MockClient();
     const { printer, stdout } = makePrinter();
 
-    // Seed the latest-state cache via the mock's telemetry seam; emitState updates the same cache snapshot() reads from.
+    // Seed the latest-state cache through the mock's `emitState`, which updates the same cache snapshot() reads from.
     client.emitState(mockStateMessage(entityId("switch", "garage"), { state: true }));
     client.emitState(mockStateMessage(entityId("light", "lamp"), { state: false }));
 
@@ -2758,7 +2758,7 @@ describe("buildControlCommand - schema-exhaustive control coverage", () => {
   test("every controllable entity type in ENTITY_SCHEMAS has a builder, and no read-only type does", () => {
 
     // Runtime mirror of the compile-time guarantee: the CONTROL_BUILDERS mapped type forces an entry per controllable type. Asserting the same guarantee against the
-    // live schema means a regression surfaces as a test failure as well as a type error, and pins the read-only/controllable split to the schema.
+    // live schema means a regression surfaces as a test failure as well as a type error, and locks the read-only/controllable split to the schema.
     for(const type of Object.keys(ENTITY_SCHEMAS)) {
 
       assert.equal(Object.hasOwn(CONTROL_BUILDERS, type), isControllableType(type), "builder presence must match controllability for '" + type + "'");
@@ -3441,12 +3441,12 @@ describe("formatSubDeviceList - multi-device parent ESP rendering", () => {
   });
 });
 
-// 5 + 8. dispatch through the command kind path - exercises handleRecord and handleReplay (the two handlers that do not require a real EspHomeClient).
+// 5 + 8. dispatch through the command kind path - exercises handleRecord and handleReplay (the handlers that do not require a real EspHomeClient).
 describe("dispatch - command-kind path (createClient-free handlers)", () => {
 
-  function emptyInvocation(name: keyof typeof CLI_COMMANDS, args: string[] = [], host: string | null = null): { kind: "command";
+  function emptyInvocation(name: keyof typeof CLI_COMMANDS, args: string[] = [], host: Nullable<string> = null): { kind: "command";
     command: keyof typeof CLI_COMMANDS; commandArgs: string[]; commandOptions: CommandOptions;
-    options: { host: string | null; keepAlive: undefined; port: number; psk: undefined; reconnect: undefined; verbose: boolean }; } {
+    options: { host: Nullable<string>; keepAlive: undefined; port: number; psk: undefined; reconnect: undefined; verbose: boolean }; } {
 
     return {
 

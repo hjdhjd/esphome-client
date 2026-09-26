@@ -6,8 +6,8 @@
 /**
  * Serial-proxy sub-API.
  *
- * @remarks Lazy-instantiated single-instance namespace exposed via `client.serial`. Composes with the host via a narrow {@link SerialProxyHost} seam - no reach into
- * host private fields, only the bus, the logger, a synchronous frame-send hook, and an accessor for the latest {@link DeviceInfo}.
+ * @remarks Lazy-instantiated single-instance namespace exposed via `client.serial`. Composes with the host via the narrow {@link SerialProxyHost} interface - no reach
+ * into host private fields, only the bus, the logger, a synchronous frame-send hook, and an accessor for the latest {@link DeviceInfo}.
  *
  * The sub-API owns its own connection-scoped state: a per-request-type `Correlator` for each in-flight await (flush, getModemPins), keyed by instance
  * number, and a `ReissuableSubscription` keyed by instance number for per-instance data streaming, whose subscriber ledger survives reconnect and
@@ -111,7 +111,7 @@ export interface SerialProxyFlushResult {
 }
 
 /**
- * Narrow seam the host implements for the serial-proxy sub-API. Mirrors {@link VoiceAssistantHost} and
+ * Narrow interface the host implements for the serial-proxy sub-API. Mirrors {@link VoiceAssistantHost} and
  * `LogSubscriptionManagerHost` in shape: a bus, a logger, a frame-send hook, plus a read-through accessor for the latest decoded
  * {@link DeviceInfo}. The sub-API never reaches into host private fields.
  *
@@ -177,7 +177,7 @@ export class SerialProxyApi implements SubscriptionLifecycle {
   /**
    * Constructs the sub-API. The host argument carries the bus, logger, send hook, and device-info accessor; the sub-API does not store or read other host state.
    *
-   * @param host - The host seam.
+   * @param host - The host interface.
    * @internal
    */
   public constructor(host: SerialProxyHost) {
@@ -449,7 +449,7 @@ export class SerialProxyApi implements SubscriptionLifecycle {
   /**
    * Decode an inbound `SerialProxyDataReceived` payload and emit it on the bus as `serialData`. Called by the host's run-phase dispatcher.
    *
-   * @internal Inbound dispatch seam; not part of the consumer surface. Invoked exclusively by the host's run-phase message routing.
+   * @internal Inbound dispatch entry point; not part of the consumer surface. Invoked exclusively by the host's run-phase message routing.
    * @param payload - Raw protobuf bytes for the data-received message.
    */
   public acceptDataMessage(payload: Buffer): void {
@@ -474,7 +474,7 @@ export class SerialProxyApi implements SubscriptionLifecycle {
    * @remarks A stale response (no pending await for the instance) is logged at debug and discarded. This can happen when the caller's timeout already fired before the
    * device responded.
    *
-   * @internal Inbound dispatch seam; not part of the consumer surface. Invoked exclusively by the host's run-phase message routing.
+   * @internal Inbound dispatch entry point; not part of the consumer surface. Invoked exclusively by the host's run-phase message routing.
    * @param payload - Raw protobuf bytes for the response message.
    */
   public acceptModemPinsResponse(payload: Buffer): void {
@@ -502,7 +502,7 @@ export class SerialProxyApi implements SubscriptionLifecycle {
    * @remarks The only request type that produces a response is {@link SerialProxyRequestType.FLUSH}. SUBSCRIBE and UNSUBSCRIBE responses (if any device firmware ever
    * sends them) are observational and dropped at debug. A stale FLUSH response (no pending await) is also logged at debug and discarded.
    *
-   * @internal Inbound dispatch seam; not part of the consumer surface. Invoked exclusively by the host's run-phase message routing.
+   * @internal Inbound dispatch entry point; not part of the consumer surface. Invoked exclusively by the host's run-phase message routing.
    * @param payload - Raw protobuf bytes for the response message.
    */
   public acceptRequestResponse(payload: Buffer): void {

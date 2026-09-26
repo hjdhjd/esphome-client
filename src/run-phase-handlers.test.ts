@@ -24,7 +24,7 @@ import type { VoiceAssistantInboundContext } from "./voice-assistant.ts";
 import { WireType } from "./protocol/wire-types.ts";
 import assert from "node:assert/strict";
 
-// Frame the dispatcher captures. The seam's send hook records every outbound frame here so tests can verify wire-protocol behavior end-to-end.
+// Frame the dispatcher captures. The host's `send` hook records every outbound frame here so tests can verify wire-protocol behavior end-to-end.
 interface CapturedFrame {
 
   payload: Buffer;
@@ -86,7 +86,7 @@ const recordingMetrics = (): { metrics: ClientMetrics; recorded: CapturedMetric[
   return { metrics, recorded };
 };
 
-// Snapshot of every host call the dispatcher routed through the seam. Each delegate method on the host pushes a record so tests can verify that the dispatcher
+// Snapshot of every call the dispatcher routed through the host interface. Each delegate method on the host pushes a record so tests can verify that the dispatcher
 // invoked the right delegate with the right arguments.
 interface HostInvocations {
 
@@ -1154,7 +1154,7 @@ describe("run-phase-handlers - documented edge cases", () => {
   test("the heartbeat tap is NOT applied by buildRunPhaseHandlers (host owns the wrap)", () => {
 
     // Construct a host whose acknowledgePingResponse counts invocations; verify that buildRunPhaseHandlers passes the message through unwrapped (no extra activity stamp,
-    // no extra invocation, no extra emission). The wrap is the host's tapInboundActivity concern - this test pins that contract.
+    // no extra invocation, no extra emission). The wrap is the host's tapInboundActivity concern - this test asserts that contract.
     const { host, invocations } = buildHarness();
     const handlers = buildRunPhaseHandlers(host);
 
@@ -1234,9 +1234,9 @@ describe("run-phase-handlers - boundary values", () => {
 
 describe("run-phase-handlers - protocol decode side effects", () => {
 
-  // Verify the decode helpers used by handleGetTimeResponse don't drift away from the host's bounded decoder. These tests exercise the seam contract directly: the host
+  // Verify the decode helpers used by handleGetTimeResponse don't drift away from the host's bounded decoder. These tests exercise the host interface directly: the host
   // owns decodeProtobuf and the bounded field-extractors live in protocol/, not on the host.
-  test("the host's decodeProtobuf seam method is invoked by handleGetTimeResponse", () => {
+  test("the host's decodeProtobuf method is invoked by handleGetTimeResponse", () => {
 
     let decodeCalls = 0;
     const harness = buildHarness();
@@ -1272,9 +1272,9 @@ describe("run-phase-handlers - protocol decode side effects", () => {
   });
 });
 
-describe("run-phase-handlers - mock.fn host seam", () => {
+describe("run-phase-handlers - mock.fn host methods", () => {
 
-  // Verify the seam works with a typical mock.fn() pattern - this is the recommended testing surface for downstream consumers that build their own dispatcher harnesses.
+  // Verify a host built from mock.fn() methods works - this is the recommended testing surface for downstream consumers that build their own dispatcher harnesses.
   test("a mock.fn() acknowledgePingResponse records exactly one call when a PING_RESPONSE is dispatched", () => {
 
     const fn = mock.fn();

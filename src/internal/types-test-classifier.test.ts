@@ -263,7 +263,7 @@ describe("classifyAssertionsInFile - counts and classifies assertion calls", () 
 
   test("classifier reports total = meaningful + trivial as a guarantee", () => {
 
-    // Property-test: across any combination of meaningful and trivial assertions, the total must equal the sum. Pinning the guarantee catches a classifier
+    // Property-test: across any combination of meaningful and trivial assertions, the total must equal the sum. Asserting the guarantee catches a classifier
     // refactor that might double-count or miss a category.
     const sf = parse([
       "import assert from 'node:assert/strict';",

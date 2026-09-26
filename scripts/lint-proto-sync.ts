@@ -32,6 +32,7 @@ import { dirname, resolve } from "node:path";
 import { ENTITY_SCHEMAS } from "../src/schemas/entity-schemas.ts";
 import type { EntitySchema } from "../src/schemas/entity-schemas.ts";
 import { MessageType } from "../src/protocol/message-types.ts";
+import type { Nullable } from "../src/types.ts";
 import { fileURLToPath } from "node:url";
 import { readFile } from "node:fs/promises";
 
@@ -43,7 +44,7 @@ interface ProtoMessage {
 
   deprecatedFields: Set<number>;
   fields: Set<number>;
-  id: number | null;
+  id: Nullable<number>;
   name: string;
 }
 
@@ -75,7 +76,7 @@ async function parseProto(path: string): Promise<Map<number, ProtoMessage>> {
   const lines = source.split("\n");
 
   let depth = 0;
-  let current: ProtoMessage | null = null;
+  let current: Nullable<ProtoMessage> = null;
 
   for(let raw of lines) {
 
@@ -164,8 +165,8 @@ interface SchemaRoleRecord {
  *     the schema actively reads or writes. The bitmask carrier in particular (water-heater's `has_fields` at field 2) names a real wire field; without recognizing
  *     it the lint would falsely report it as unmapped.
  *
- * Adding a new schema slot requires extending exactly this function; nothing else in the lint script needs to change. The architecture replaces the prior text-based
- * parsing approach (regex + brace counting + per-slot carve-outs) with a single structural walker over the typed runtime schema.
+ * Adding a new schema slot requires extending exactly this function; nothing else in the lint script needs to change. A single structural walker over the typed
+ * runtime schema does the work, rather than text-based parsing (regex + brace counting + per-slot carve-outs).
  */
 function collectWireFieldNumbers(roleSchema: Record<string, unknown>): Set<number> {
 

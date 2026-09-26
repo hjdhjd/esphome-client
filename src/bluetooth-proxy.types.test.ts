@@ -17,6 +17,7 @@ import { BluetoothScannerMode, BluetoothScannerState } from "./api-constants.ts"
 import { describe, test } from "node:test";
 import { Buffer } from "node:buffer";
 import { EspHomeClient } from "./esphome-client.ts";
+import type { Nullable } from "./types.ts";
 import assert from "node:assert/strict";
 
 describe("BluetoothProxyApi - public-surface narrowing", () => {
@@ -54,7 +55,7 @@ describe("BluetoothProxyApi - public-surface narrowing", () => {
   test("client.bluetooth.lastScannerState() returns BluetoothScannerStateData | null", () => {
 
     const client = new EspHomeClient({ host: "localhost" });
-    const value: BluetoothScannerStateData | null = client.bluetooth.lastScannerState();
+    const value: Nullable<BluetoothScannerStateData> = client.bluetooth.lastScannerState();
 
     assert.equal(value, null);
 
@@ -117,7 +118,7 @@ describe("ClientEventsMap - bluetoothAdvertisement and bluetoothScannerState typ
   test("client.on(\"bluetoothAdvertisement\", cb) types the callback parameter as BluetoothLERawAdvertisement", () => {
 
     const client = new EspHomeClient({ host: "localhost" });
-    let _seen: BluetoothLERawAdvertisement | null = null;
+    let _seen: Nullable<BluetoothLERawAdvertisement> = null;
 
     using sub = client.on("bluetoothAdvertisement", (ad): void => { _seen = ad; });
 
@@ -127,7 +128,7 @@ describe("ClientEventsMap - bluetoothAdvertisement and bluetoothScannerState typ
   test("client.on(\"bluetoothScannerState\", cb) types the callback parameter as BluetoothScannerStateData", () => {
 
     const client = new EspHomeClient({ host: "localhost" });
-    let _seen: BluetoothScannerStateData | null = null;
+    let _seen: Nullable<BluetoothScannerStateData> = null;
 
     using sub = client.on("bluetoothScannerState", (state): void => { _seen = state; });
 
@@ -281,7 +282,7 @@ describe("BluetoothProxyApi - GATT method argument typing", () => {
 
     const client = new EspHomeClient({ host: "localhost" });
     const flag: boolean = client.bluetooth.isConnected(0xaan);
-    const state: ConnectionStateData | null = client.bluetooth.connectionState(0xaan);
+    const state: Nullable<ConnectionStateData> = client.bluetooth.connectionState(0xaan);
 
     assert.equal(flag, false);
     assert.equal(state, null);
@@ -292,7 +293,7 @@ describe("BluetoothProxyApi - GATT method argument typing", () => {
   test("lastConnectionsFree is a synchronous Nullable accessor", () => {
 
     const client = new EspHomeClient({ host: "localhost" });
-    const snapshot: ConnectionsFreeData | null = client.bluetooth.lastConnectionsFree();
+    const snapshot: Nullable<ConnectionsFreeData> = client.bluetooth.lastConnectionsFree();
 
     assert.equal(snapshot, null);
 
@@ -305,7 +306,7 @@ describe("ClientEventsMap - new GATT event payloads", () => {
   test("client.on(\"bluetoothConnectionState\", cb) types the callback as ConnectionStateData", () => {
 
     const client = new EspHomeClient({ host: "localhost" });
-    let _seen: ConnectionStateData | null = null;
+    let _seen: Nullable<ConnectionStateData> = null;
 
     using sub = client.on("bluetoothConnectionState", (state): void => { _seen = state; });
 
@@ -315,7 +316,7 @@ describe("ClientEventsMap - new GATT event payloads", () => {
   test("client.on(\"bluetoothNotifyData\", cb) types the callback as NotifyDataChunk", () => {
 
     const client = new EspHomeClient({ host: "localhost" });
-    let _seen: NotifyDataChunk | null = null;
+    let _seen: Nullable<NotifyDataChunk> = null;
 
     using sub = client.on("bluetoothNotifyData", (chunk): void => { _seen = chunk; });
 
@@ -325,7 +326,7 @@ describe("ClientEventsMap - new GATT event payloads", () => {
   test("client.on(\"bluetoothConnectionsFree\", cb) types the callback as ConnectionsFreeData", () => {
 
     const client = new EspHomeClient({ host: "localhost" });
-    let _seen: ConnectionsFreeData | null = null;
+    let _seen: Nullable<ConnectionsFreeData> = null;
 
     using sub = client.on("bluetoothConnectionsFree", (data): void => { _seen = data; });
 

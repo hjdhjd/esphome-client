@@ -37,7 +37,7 @@ Runnable examples for every workflow named below live in [`src/examples/showcase
 
 v2.0 is a clean break from v1 designed for modern TypeScript consumers. The surface composes rather than inherits, every wire identity is typed at compile time, and every async path is cancellable and reconnect-aware.
 
-- **Composition over inheritance.** `EspHomeClient` no longer extends `EventEmitter`. Subscriptions return `Disposable` callbacks, one-shot `Promise`s, or `AsyncIterable` streams with explicit backpressure policy. Sub-APIs (`client.voiceAssistant`, `client.camera(id)`, ...) compose through narrow seams.
+- **Composition over inheritance.** `EspHomeClient` composes an `EventBus` rather than extending `EventEmitter`. Subscriptions return `Disposable` callbacks, one-shot `Promise`s, or `AsyncIterable` streams with explicit backpressure policy. Sub-APIs (`client.voiceAssistant`, `client.camera(id)`, ...) compose through narrow host interfaces.
 - **Typed safety.** Branded `EntityId<T>` carries the entity type tag at compile time - passing a switch id to a light command is a type error. The error hierarchy is a typed `EspHomeError` tree with `cause` chains and a `PermanentError` marker the auto-reconnect loop filters on. State-event enum fields narrow to literal unions (e.g., `LockState`, `CoverOperation`, `MediaPlayerState`) rather than plain `number`.
 - **Zero-allocation streams.** `client.telemetry()`, `client.logs()`, `client.lifecycle()`, `client.voiceAssistant.audio()`, and `client.camera(id).stream()` are async iterables with `AbortSignal` cancellation; each has a Web Streams adapter (`telemetryReadable()`, `logsReadable()`, `lifecycleReadable()`, `voiceAssistant.audioReadable()`, and `camera(id).readable()`) that bridges into the pipeline (`pipeThrough`, `tee`, `pipeTo`).
 
@@ -167,7 +167,7 @@ Disposal flows through `Symbol.dispose` (sync, immediate teardown) and `Symbol.a
 - `client.healthStream({ signal })` returns an `AsyncIterable` over health transitions.
 - `client.lifecycle({ signal })` emits `LifecycleEvent`s tagged by `event.kind` (`connect`, carrying `encrypted`; `disconnect`, carrying an optional typed `cause`) - the canonical observation path for disconnect reasons. Reconnect activity surfaces through the `ReconnectConfig.onAttempt` callback and the health stream; the separate `noiseKeySet` boolean event reports a noise-key rotation.
 
-The legacy `disconnect: string | undefined` event remains on the bus for backwards compatibility but is no longer the structured path.
+The legacy `disconnect: string | undefined` event remains on the bus for backwards compatibility; the structured path is `client.lifecycle()`.
 
 ### Auto-reconnect
 
@@ -301,12 +301,12 @@ import { MockClient, MockTransport, mockEntity, mockStateMessage } from "esphome
 ```
 
 - **`MockClient`** - consumer-facing test harness. Mirrors the real `EspHomeClient` surface so production code under test runs unchanged. Drive state via `populate*` / `set*` / `emit*` methods; assert on a `commands` log capturing every issued command. Every sub-API on `MockClient` is a `Proxy`-backed recording mock; address its recorded calls and stage return values through the exported `MOCK` symbol (`mock.bluetooth[MOCK]` exposes a `MockController`).
-- **`MockTransport`** - integration-level seam. Return it from `EspHomeClientOptions.transportFactory` (a factory yielding a fresh transport per connect, e.g. `transportFactory: () => transport`) to exercise the real client's handshake / decoder / dispatcher pipelines against a scripted byte sequence rather than a device. Script that sequence with the exported `push*` fixture-injection helpers.
+- **`MockTransport`** - integration-level transport double. Return it from `EspHomeClientOptions.transportFactory` (a factory yielding a fresh transport per connect, e.g. `transportFactory: () => transport`) to exercise the real client's handshake / decoder / dispatcher pipelines against a scripted byte sequence rather than a device. Script that sequence with the exported `push*` fixture-injection helpers.
 - **Factory helpers** - `mockEntity`, `mockEntityDiscovery`, `mockStateMessage`, `mockDeviceInfo`, `mockHealth`, `mockNoiseHandshakeExchange`.
 
 ## Schema extensions
 
-Downstream consumers integrating vendor firmware that exposes entity types outside the standard set can register additional entity-type schemas at construction time via the `extraSchemas` option. Two helpers cover the common cases:
+Downstream consumers integrating vendor firmware that exposes entity types outside the standard set can register additional entity-type schemas at construction time via the `extraSchemas` option. The `aliasOf` and `extending` helpers cover the common cases:
 
 - `aliasOf("cover")` registers a custom type that mirrors an upstream entity type with a different type tag (encode + decode passes are byte-equal to the upstream).
 - `extending("switch", { addedListEntitiesFields, addedStateFields })` adds read-side fields to an upstream entity type. The command-side spec is preserved verbatim by design - `extending()` is read-side only, locking the encoder to the upstream so a vendor-extended type stays byte-compatible with its parent.

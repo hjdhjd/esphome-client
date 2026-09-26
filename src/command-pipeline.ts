@@ -15,7 +15,7 @@ import { WireType } from "./protocol/index.ts";
 /**
  * Schema-driven command encoder.
  *
- * @remarks Pure encoders that turn a typed `command<T>` input into the wire-shaped `ProtoField[]` for the matching entity command. The host owns the dispatch seam:
+ * @remarks Pure encoders that turn a typed `command<T>` input into the wire-shaped `ProtoField[]` for the matching entity command. The host owns dispatch:
  * it resolves the entity key, looks up its device_id, encodes via these helpers, then frames and sends the resulting payload.
  *
  * @module command-pipeline

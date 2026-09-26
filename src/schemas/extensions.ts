@@ -180,7 +180,7 @@ export function findSchemaByListEntitiesMessageTypeIn(table: SchemasTable, messa
 
 /**
  * Look up an entity schema in a {@link SchemasTable} by its runtime entity-type string. Mirrors {@link getEntitySchema} but consults the
- * per-instance table; the schema-driven command encoder calls this through the `CommandHost` seam so extras-registered entity types resolve
+ * per-instance table; the schema-driven command encoder calls this through the `CommandHost` interface so extras-registered entity types resolve
  * correctly during command dispatch.
  *
  * @param table - The per-instance schemas table.

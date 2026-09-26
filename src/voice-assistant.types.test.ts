@@ -13,7 +13,7 @@ describe("VoiceAssistantApi.respondToRequest - argument-shape narrowing", () => 
   test("respondToRequest accepts no arguments (default API-audio acceptance)", () => {
 
     const client = new EspHomeClient({ host: "localhost" });
-    // eslint-disable-next-line @typescript-eslint/no-invalid-void-type -- type-test: pin the return type to `void` literally.
+    // eslint-disable-next-line @typescript-eslint/no-invalid-void-type -- type-test: assert the return type is literally `void`.
     const result: void = client.voiceAssistant.respondToRequest();
 
     // eslint-disable-next-line @typescript-eslint/no-unused-expressions -- type-test: reference the binding to suppress unused-var without changing the type contract.
@@ -98,7 +98,7 @@ describe("VoiceAssistantApi.respondToRequest - argument-shape narrowing", () => 
 
     const client = new EspHomeClient({ host: "localhost" });
 
-    // eslint-disable-next-line @typescript-eslint/no-invalid-void-type -- type-test: pin the return type to `void` literally.
+    // eslint-disable-next-line @typescript-eslint/no-invalid-void-type -- type-test: assert the return type is literally `void`.
     const result: void = client.voiceAssistant.respondToRequest();
 
     // @ts-expect-error - the result is `void`, not a thenable; assigning to a Promise must fail.

@@ -1,7 +1,7 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
  * api-constants.test.ts: Unit tests for the wire-level enum constants exported from api-constants.ts (AlarmControlPanelState, BluetoothDeviceRequestType, etc.). The
- * tests run a shared shape-consistency pass (distinct, integer, non-negative values; deterministic key order) across every exported constant, then pin each enum's
+ * tests run a shared shape-consistency pass (distinct, integer, non-negative values; deterministic key order) across every exported constant, then assert each enum's
  * member values line-for-line against the api.proto wire numbers. Constants exercised indirectly through their consumers (LockCommand, CoverOperation, ClimateMode,
  * etc.) are intentionally not re-tested here.
  */

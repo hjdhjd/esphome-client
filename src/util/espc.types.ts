@@ -1,6 +1,6 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
- * espc.types.ts: Type-level drift-guard pinning that both the real client and the test mock satisfy the CLI's client dependency contract.
+ * espc.types.ts: Type-level drift-guard asserting that both the real client and the test mock satisfy the CLI's client dependency contract.
  */
 
 /**

@@ -1,11 +1,11 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
- * entity-types.types.ts: Type-level guarantees pinning the per-entity *Entity / *Event alias surface to the schema registry.
+ * entity-types.types.ts: Type-level guarantees asserting the per-entity *Entity / *Event alias surface matches the schema registry.
  */
 
 /**
  * Compile-time guarantees for the per-entity public type-alias surface declared in `entity-types.ts`. Every entity type in {@link ENTITY_SCHEMAS} must expose a
- * conventionally-named `*Entity` alias and a `*Event` alias; this file pins that symmetry structurally so a future entity type added to the registry without its
+ * conventionally-named `*Entity` alias and a `*Event` alias; this file asserts that symmetry structurally so a future entity type added to the registry without its
  * matching aliases fails the typecheck rather than silently shipping an asymmetric public surface.
  *
  * @remarks This file holds **type-level assertions only**. It lives at `.types.ts` (not `.types.test.ts`) and is validated by `tsc` via `tsconfig.check.json`, NOT by

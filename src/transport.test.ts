@@ -201,7 +201,7 @@ describe("Transport - exports and structural compliance", () => {
 
   test("exports Transport, TransportOpenOptions, InboundMessage, NoiseCipherPair, and TransportLike from the module barrel", () => {
 
-    // Compile-time references prove the symbols resolve. Runtime checks pin the value-side: Transport is a class and the open static is callable.
+    // Compile-time references prove the symbols resolve. Runtime checks assert the value-side: Transport is a class and the open static is callable.
     assert.equal(typeof Transport, "function");
     assert.equal(typeof Transport.open, "function");
 
@@ -1146,7 +1146,7 @@ describe("Transport.firstByte", () => {
     await assert.rejects(transport.firstByte(), (err) => err instanceof ProtocolError);
   });
 
-  test("throws ConnectionClosedByPeerError TRANSPORT_CLOSED when called after dispose (regression: previously hung forever)", async () => {
+  test("throws ConnectionClosedByPeerError TRANSPORT_CLOSED when called after dispose rather than hanging", async () => {
 
     const mock = new MockSocket();
     const transport = await openTransport(mock);
@@ -2133,7 +2133,7 @@ describe("Transport - dispose / asyncDispose lifecycle", () => {
 
   test("dispose destroys the installed cipher pair, zeroizing the live session keys", async () => {
 
-    // The teardown must zero the live noise session keys. We install a spy-bearing cipher pair that mirrors the stub's EncryptWithAd / DecryptWithAd seams (the only
+    // The teardown must zero the live noise session keys. We install a spy-bearing cipher pair that mirrors the stub's EncryptWithAd / DecryptWithAd methods (the only
     // surface the transport exercises) plus a destroy() spy that flips a boolean when called. After driving to the noise-data phase and disposing, both ciphers' destroy
     // spies must have fired exactly once each.
     const spies = { receive: false, send: false };

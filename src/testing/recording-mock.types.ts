@@ -4,14 +4,14 @@
  */
 
 /**
- * Compile-time guarantees for {@link createRecordingMock}'s defaults map. The `MockDefaults<T>` shape constrains keys to `keyof T`; this file pins that constraint
+ * Compile-time guarantees for {@link createRecordingMock}'s defaults map. The `MockDefaults<T>` shape constrains keys to `keyof T`; this file asserts that constraint
  * against both construction patterns - inline object literals (which engage TypeScript's excess-property check directly) and reference-passed variables (which
  * engage the check only when the variable is explicitly annotated as `MockDefaults<T>`).
  *
  * @remarks This file holds **type-level assertions only**. The file lives at `.types.ts` (not `.types.test.ts`) and is validated by `tsc` via `tsconfig.check.json`,
  * NOT by `node --test`. Excess-property checking can't be expressed via pure conditional types (structural assignability is permissive between types; the check
  * only fires on object literals at construction sites). Wrapping a deliberately misconfigured construction in a typecheck-only constant + `@ts-expect-error` is
- * the canonical way to pin this kind of guarantee.
+ * the canonical way to assert this kind of guarantee.
  *
  * @module testing/recording-mock.types
  */
@@ -20,7 +20,7 @@ import type { MockDefaults } from "./recording-mock.ts";
 import { createRecordingMock } from "./recording-mock.ts";
 
 /**
- * Positive case: inline-literal construction with valid keys succeeds. Pinning the positive case alongside the negative cases below catches "we accidentally made
+ * Positive case: inline-literal construction with valid keys succeeds. Asserting the positive case alongside the negative cases below catches "we accidentally made
  * the type uninstantiable" regressions - the directive-free construction must compile.
  */
 const _validInlineLiteral = createRecordingMock(BluetoothProxyApi, {
@@ -41,7 +41,7 @@ const _invalidInlineLiteral = createRecordingMock(BluetoothProxyApi, {
 });
 
 /**
- * Reference-passed excess-property rule: variables annotated as `MockDefaults<T>` engage the same excess-property check that inline literals get. Pinning the
+ * Reference-passed excess-property rule: variables annotated as `MockDefaults<T>` engage the same excess-property check that inline literals get. Asserting the
  * annotated-reference path verifies the doc claim in `MockDefaults<T>` that "the annotation re-engages the strict check at the variable's declaration site."
  */
 const _annotatedRejectsTypo: MockDefaults<BluetoothProxyApi> = {

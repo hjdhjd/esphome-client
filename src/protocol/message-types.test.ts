@@ -41,7 +41,7 @@ describe("messageTypeName", () => {
 
   test("returns one of the aliased names for a shared id (3 -> CONNECT_REQUEST or AUTHENTICATION_REQUEST)", () => {
 
-    // The reverse map keeps whichever entry was iterated last per the SSOT comment in message-types.ts. We assert it's one of the two aliases rather than pinning to
+    // The reverse map keeps whichever entry was iterated last per the SSOT comment in message-types.ts. We assert it's one of the two aliases rather than fixing it to
     // either, because the iteration order is alphabetical (CONNECT_REQUEST sorts after AUTHENTICATION_REQUEST so CONNECT_REQUEST wins) but neither alias is wrong.
     const name = messageTypeName(3);
 

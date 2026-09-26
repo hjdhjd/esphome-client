@@ -59,7 +59,7 @@ describe("EntityRegistry - construction", () => {
     assert.deepEqual(registry.all(), []);
   });
 
-  test("the host seam is the only constructor parameter", () => {
+  test("the host interface is the only constructor parameter", () => {
 
     const log = recordingLogger();
     const registry = new EntityRegistry({ log });
@@ -592,7 +592,7 @@ describe("EntityRegistry - byDevice (filter by parent device)", () => {
     assert.deepEqual(registry.byDevice(99), []);
   });
 
-  test("byDevice prefers entity.deviceId over the state-message overlay (v1-compat ordering)", () => {
+  test("byDevice prefers entity.deviceId over the state-message overlay", () => {
 
     const { registry } = buildRegistry();
     const e = mockEntity("light", "x", { deviceId: 3 });

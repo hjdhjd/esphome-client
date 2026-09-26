@@ -79,7 +79,7 @@ export interface MockController {
  * returns when the named method is invoked without a per-test stub override. Methods absent from the map return `undefined`.
  *
  * @remarks The keys are constrained to `keyof T`. At inline-literal construction sites (`createRecordingMock(BluetoothProxyApi, { availabel: false })`), TypeScript's
- * excess-property check rejects unknown keys at compile time - a typo fails to type-check rather than silently landing in the defaults map. This guarantee is pinned
+ * excess-property check rejects unknown keys at compile time - a typo fails to type-check rather than silently landing in the defaults map. This guarantee is asserted
  * by the compile-time test in `recording-mock.types.ts`.
  *
  * Reference-passed defaults are NOT subject to excess-property checking (TypeScript widens to the variable's inferred type before passing). A construction site like
@@ -162,7 +162,7 @@ export function createRecordingMock<T extends object>(Ctor: new(...args: never[]
     }
   }
 
-  // Build the synthetic target object. We do not extend from an instance of Ctor because instantiating it requires the real seam dependencies the mock does not have.
+  // Build the synthetic target object. We do not extend from an instance of Ctor because instantiating it requires the constructor dependencies the mock does not have.
   // The Proxy supplies the surface; the target is just an identity for property access bookkeeping.
   const target: Record<string | symbol, unknown> = {};
 

@@ -4,7 +4,7 @@
  */
 
 /**
- * Wire-level transport for the ESPHome native API. Owns the TCP socket, the inbound receive buffer, plaintext and noise framing, and the cipher install seam.
+ * Wire-level transport for the ESPHome native API. Owns the TCP socket, the inbound receive buffer, plaintext and noise framing, and the `installCipher` entry point.
  *
  * @remarks `Transport` is the I/O floor. It knows about the indicator bytes (`0x00` plaintext, `0x01` noise), about varint length prefixes (plaintext)
  * and 16-bit big-endian length prefixes (noise), and about the inner `[type_high][type_low][len_high][len_low][payload]` shape inside an encrypted noise frame. It does

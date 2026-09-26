@@ -452,7 +452,7 @@ describe("decodeEntityFromSchema", () => {
     assert.equal(e.supportsCurrentHumidity, false, "bit 3 clear");
     assert.equal(e.supportsTargetHumidity, false, "bit 4 clear");
     assert.equal(e.supportsAction, true, "bit 5 set");
-    assert.equal(e.featureFlags, undefined, "raw featureFlags is no longer surfaced - named booleans replace it");
+    assert.equal(e.featureFlags, undefined, "raw featureFlags is not surfaced - the named booleans carry its bits");
   });
 
   test("decodes climate per-capability boolean fields when feature_flags is absent (pre-1.14 firmware fallback)", () => {
@@ -486,7 +486,7 @@ describe("decodeEntityFromSchema", () => {
   test("1.14+ feature_flags overwrites pre-1.14 boolean values when both arrive on the wire", () => {
 
     // ESPHome's back-compat path sends BOTH the deprecated booleans and the new feature_flags. The packed-bits decoder runs after the scalar fields decoder, so the
-    // packed values win. This test pins the "newer wins" semantics by sending feature_flags=0 alongside supportsAction=true - the result should be false because the
+    // packed values win. This test asserts the "newer wins" semantics by sending feature_flags=0 alongside supportsAction=true - the result should be false because the
     // packed source (0) overrides the boolean fallback (true).
     const climateSchema = ENTITY_SCHEMAS.climate;
     const keyBuf = Buffer.alloc(4);

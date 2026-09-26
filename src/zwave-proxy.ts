@@ -13,8 +13,8 @@
  * Consumers are responsible for parsing and generating Z-Wave Serial API frames, typically by routing this stream into a library that speaks Z-Wave (e.g., `zwave-js`).
  * Without such a library, the byte-pipe surface is suitable for protocol research, frame logging, and replay scenarios; it is not a Z-Wave network manager.
  *
- * Lazy-instantiated single-instance namespace exposed via `client.zwave`. Composes with the host via a narrow {@link ZWaveProxyHost} seam - no reach into host private
- * fields, only the bus, the logger, a synchronous frame-send hook, and an accessor for the latest {@link DeviceInfo}.
+ * Lazy-instantiated single-instance namespace exposed via `client.zwave`. Composes with the host via the narrow {@link ZWaveProxyHost} interface - no reach into host
+ * private fields, only the bus, the logger, a synchronous frame-send hook, and an accessor for the latest {@link DeviceInfo}.
  *
  * Module shape mirrors {@link BluetoothProxyApi} simplified for the single-subscription case: a single global-key {@link
  * ReissuableSubscription} (Z-Wave frame streaming is a device-wide subscription, not per-key, so every subscriber groups under one constant
@@ -55,7 +55,7 @@ const HOME_ID_DATA_BYTES = 4;
 const FRAME_CHANNEL = 0;
 
 /**
- * Narrow seam the host implements for the Z-Wave-proxy sub-API. Mirrors {@link BluetoothProxyHost} and {@link SerialProxyHost} in
+ * Narrow interface the host implements for the Z-Wave-proxy sub-API. Mirrors {@link BluetoothProxyHost} and {@link SerialProxyHost} in
  * shape: a bus, a logger, a frame-send hook, plus a read-through accessor for the latest decoded {@link DeviceInfo}. The sub-API never reaches into
  * host private fields.
  *
@@ -108,7 +108,7 @@ export class ZWaveProxyApi implements SubscriptionLifecycle {
   /**
    * Constructs the sub-API. The host argument carries the bus, logger, send hook, and device-info accessor; the sub-API does not store or read other host state.
    *
-   * @param host - The host seam.
+   * @param host - The host interface.
    * @internal
    */
   public constructor(host: ZWaveProxyHost) {
@@ -263,7 +263,7 @@ export class ZWaveProxyApi implements SubscriptionLifecycle {
    * Decode an inbound `ZWaveProxyFrame` payload and emit it on the bus as `zwaveFrame`. Called by the host's run-phase dispatcher. A frame with no `data` field is
    * logged at debug and dropped; this is forward-compatible with future firmwares that may push empty frames as keepalives.
    *
-   * @internal Inbound dispatch seam; not part of the consumer surface. Invoked exclusively by the host's run-phase message routing.
+   * @internal Inbound dispatch entry point; not part of the consumer surface. Invoked exclusively by the host's run-phase message routing.
    * @param payload - Raw protobuf bytes for the frame message.
    */
   public acceptFrame(payload: Buffer): void {
@@ -286,7 +286,7 @@ export class ZWaveProxyApi implements SubscriptionLifecycle {
    * {@link ZWaveProxyRequestType.HOME_ID_CHANGE}; SUBSCRIBE / UNSUBSCRIBE are outbound-only at the wire level. Unknown request types are logged at debug
    * and dropped so a forward-compatible firmware that adds a new request type cannot break this client.
    *
-   * @internal Inbound dispatch seam; not part of the consumer surface. Invoked exclusively by the host's run-phase message routing.
+   * @internal Inbound dispatch entry point; not part of the consumer surface. Invoked exclusively by the host's run-phase message routing.
    * @param payload - Raw protobuf bytes for the request message.
    */
   public acceptRequest(payload: Buffer): void {

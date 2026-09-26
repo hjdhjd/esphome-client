@@ -35,7 +35,7 @@ export interface HeartbeatConfig {
 }
 
 /**
- * Host seam consumed by the scheduler. Decouples timer logic from the host's health-state machine, transport, and disconnect path.
+ * Host interface consumed by the scheduler. Decouples timer logic from the host's health-state machine, transport, and disconnect path.
  */
 export interface HeartbeatHost {
 
@@ -66,7 +66,7 @@ export interface HeartbeatHost {
 export type ClockFn = () => number;
 
 /**
- * Lazy heartbeat scheduler. Holds the timer state, last-activity timestamp, and in-flight ping marker; transitions are surfaced to the host via the seam.
+ * Lazy heartbeat scheduler. Holds the timer state, last-activity timestamp, and in-flight ping marker; transitions reach the host through its `HeartbeatHost` callbacks.
  *
  */
 export class HeartbeatScheduler {
@@ -80,9 +80,9 @@ export class HeartbeatScheduler {
   private timer: Nullable<ReturnType<typeof setInterval>>;
 
   /**
-   * Construct a scheduler bound to a host seam.
+   * Construct a scheduler bound to its host.
    *
-   * @param host - The host seam (logger + send-ping + stall callbacks).
+   * @param host - The host interface (logger + send-ping + stall callbacks).
    * @param config - Resolved {@link HeartbeatConfig} when heartbeat is enabled; `null` to disable. A disabled scheduler short-circuits `start` and `tick`; `stamp`
    * and `lastActivityAt` keep running regardless, since the host reuses them for general inbound-activity tracking independent of the heartbeat ping/stall feature.
    * @param clock - Optional clock function. Defaults to `Date.now`. Tests pass a controlled function to drive deterministic ticks.

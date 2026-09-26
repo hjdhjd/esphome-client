@@ -145,7 +145,7 @@ describe("command-runner - module exports", () => {
 
 describe("runCommand - happy paths through the full pipeline", () => {
 
-  test("encodes a switch command, frames-and-sends through the seam, emits the metric", () => {
+  test("encodes a switch command, frames-and-sends through the CommandHost, emits the metric", () => {
 
     const bundle = mockHost({ keyForId: (): number => 42 });
     const id = entityId("switch", "front_door");
@@ -193,7 +193,7 @@ describe("runCommand - happy paths through the full pipeline", () => {
     assert.equal(bundle.frames[0]?.type, MessageType.SIREN_COMMAND_REQUEST);
   });
 
-  test("logs the per-command debug line through the seam", () => {
+  test("logs the per-command debug line through the CommandHost", () => {
 
     const bundle = mockHost({ keyForId: (): number => 11 });
     const id = entityId("switch", "garage");
@@ -454,7 +454,7 @@ describe("runCommand - boundary input shapes", () => {
     assert.equal(bundle.frames.length, 1);
   });
 
-  test("undefined deviceId from the seam means the encoder omits the device_id field", () => {
+  test("undefined deviceId from the CommandHost means the encoder omits the device_id field", () => {
 
     const bundle = mockHost({ deviceIdForKey: (): number | undefined => undefined, keyForId: (): number => 1 });
 

@@ -27,6 +27,7 @@ import { ConnectionError } from "./errors.ts";
 import { ENTITY_SCHEMAS } from "./schemas/index.ts";
 import { EspHomeClient } from "./esphome-client.ts";
 import { MessageType } from "./protocol/message-types.ts";
+import type { Nullable } from "./types.ts";
 import { WireType } from "./protocol/wire-types.ts";
 import assert from "node:assert/strict";
 import { setTimeout as delay } from "node:timers/promises";
@@ -171,7 +172,7 @@ describe("Infrared list-entities decode via the schema", () => {
       });
     });
 
-    const entity = client.getEntityById(entityId("infrared", "ir_blaster")) as InfraredEntity | null;
+    const entity = client.getEntityById(entityId("infrared", "ir_blaster")) as Nullable<InfraredEntity>;
 
     assert.notEqual(entity, null);
     assert.equal(entity?.type, "infrared");
@@ -200,7 +201,7 @@ describe("Infrared list-entities decode via the schema", () => {
       });
     });
 
-    const entity = client.getEntityById(entityId("infrared", "tx_only")) as InfraredEntity | null;
+    const entity = client.getEntityById(entityId("infrared", "tx_only")) as Nullable<InfraredEntity>;
 
     assert.equal((entity?.capabilities ?? 0) & InfraredCapabilityFlags.TRANSMITTER, InfraredCapabilityFlags.TRANSMITTER);
     assert.equal((entity?.capabilities ?? 0) & InfraredCapabilityFlags.RECEIVER, 0);
@@ -231,7 +232,7 @@ describe("Radio frequency list-entities decode via the schema", () => {
       });
     });
 
-    const entity = client.getEntityById(entityId("radio_frequency", "rf_module")) as RadioFrequencyEntity | null;
+    const entity = client.getEntityById(entityId("radio_frequency", "rf_module")) as Nullable<RadioFrequencyEntity>;
 
     assert.notEqual(entity, null);
     assert.equal(entity?.type, "radio_frequency");

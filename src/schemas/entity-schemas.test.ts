@@ -332,7 +332,7 @@ describe("ENTITY_SCHEMAS listEntities-side enumMappings reference the named cons
 
 describe("ENTITY_SCHEMAS packedBitsFields reference the named-constant bit records", () => {
 
-  // Each entry pins one packedBitsFields entry's `bits` slot against its canonical bit-record constant in api-constants.ts via STRICT REFERENCE IDENTITY. The
+  // Each entry asserts one packedBitsFields entry's `bits` slot against its canonical bit-record constant in api-constants.ts via STRICT REFERENCE IDENTITY. The
   // co-located shape (bits-record exported from api-constants, schema references by name) means the bit values live in exactly one place; drift between schema and
   // constant is structurally impossible because they ARE the same record.
   //

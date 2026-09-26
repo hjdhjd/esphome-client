@@ -20,7 +20,7 @@
  * sink (debug tracing for both directions), and the protobuf field decoder/encoder pipeline. This module owns all of them. Future contributors adding a new HA-bridge
  * message type edit exactly this file plus its co-located test file.
  *
- * The {@link HomeAssistantApi} class composes a narrow {@link HomeAssistantApiHost} seam (`bus`, `log`, `decode`, `send`). It exposes the outbound methods -
+ * The {@link HomeAssistantApi} class composes the narrow {@link HomeAssistantApiHost} interface (`bus`, `log`, `decode`, `send`). It exposes the outbound methods -
  * {@link HomeAssistantApi.subscribeServices}, {@link HomeAssistantApi.subscribeStates}, {@link HomeAssistantApi.sendState}, and {@link HomeAssistantApi.respondToAction}
  * - plus a memoized {@link HomeAssistantApi.inboundContext} accessor that the host forwards into `RunPhaseHost` so the per-message dispatcher avoids per-frame context
  * allocation. The dispatcher entries in `run-phase-handlers` call the module-level {@link dispatchHomeassistantService} / {@link dispatchHomeAssistantStateRequest}
@@ -105,7 +105,7 @@ export interface HomeAssistantInboundContext {
 }
 
 /**
- * Narrow seam the {@link HomeAssistantApi} consumes from the host. Mirrors `LogSubscriptionManagerHost` and
+ * Narrow interface the {@link HomeAssistantApi} consumes from the host. Mirrors `LogSubscriptionManagerHost` and
  * {@link VoiceAssistantHost} - the bus and logger flow in for both inbound emit and outbound diagnostic, the decoder is reused by the inbound
  * dispatchers, and the synchronous frame-send hook backs the outbound subscribe-and-respond methods. The bridge never reads or writes host private state directly.
  *
@@ -130,26 +130,26 @@ export interface HomeAssistantApiHost {
  * {@link EspHomeClient}, which exposes this instance directly through its `homeAssistant` getter rather than through client-level delegate methods.
  *
  * @remarks The bridge's four outbound methods ({@link HomeAssistantApi.subscribeServices}, {@link HomeAssistantApi.subscribeStates}, {@link HomeAssistantApi.sendState},
- * {@link HomeAssistantApi.respondToAction}) are fire-and-forget by contract: they encode a payload and hand it to the host `send` seam, which routes
+ * {@link HomeAssistantApi.respondToAction}) are fire-and-forget by contract: they encode a payload and hand it to the host's `send` hook, which routes
  * through the host's `frameAndSend`. Failure modes are surfaced through the transport's existing error path (a disconnected client throws on send via the transport
  * layer; the bridge does not duplicate that detection because doing so would create a second source of truth for connection state). Not every outbound method is an
  * unconditional passthrough: {@link HomeAssistantApi.sendState}'s optional `attribute` argument encodes field 3 only when the caller passes a non-empty string, and
  * {@link HomeAssistantApi.respondToAction}'s `options.errorMessage` / `options.responseData` each encode their field only when the caller supplies a value, matching
  * ESPHome's proto contract for those optional fields.
  *
- * The {@link HomeAssistantApi.inboundContext} accessor returns a frozen object built once at construction time from the seam's `bus`, `log`, and `decode` members.
+ * The {@link HomeAssistantApi.inboundContext} accessor returns a frozen object built once at construction time from the host's `bus`, `log`, and `decode` members.
  * The frozen-and-memoized shape means the per-message dispatch in `run-phase-handlers` performs zero allocations on the inbound HA-bridge hot path.
  */
 export class HomeAssistantApi implements SubscriptionLifecycle {
 
   /**
-   * Memoized inbound-dispatcher context. Built once at construction from the seam's bus/log/decode; returned unchanged on every read so the per-message dispatch in
+   * Memoized inbound-dispatcher context. Built once at construction from the host's bus/log/decode; returned unchanged on every read so the per-message dispatch in
    * `run-phase-handlers` reuses the same object across every inbound HA-bridge frame.
    */
   private readonly cachedInboundContext: HomeAssistantInboundContext;
 
   /**
-   * Narrow host seam (bus, logger, decoder, frame-send hook). Set in the constructor and never reassigned.
+   * Narrow host interface (bus, logger, decoder, frame-send hook). Set in the constructor and never reassigned.
    */
   private readonly host: HomeAssistantApiHost;
 
@@ -167,10 +167,10 @@ export class HomeAssistantApi implements SubscriptionLifecycle {
   private statesDesired = false;
 
   /**
-   * Construct a bridge bound to a host seam. The seam's `bus`/`log`/`decode` members are captured into the memoized inbound context immediately so the accessor returns
-   * the same object identity for the bridge's lifetime.
+   * Construct a bridge bound to a host interface. The host's `bus`/`log`/`decode` members are captured into the memoized inbound context immediately so the accessor
+   * returns the same object identity for the bridge's lifetime.
    *
-   * @param host - The host seam (bus, logger, decoder, frame-send hook).
+   * @param host - The host interface (bus, logger, decoder, frame-send hook).
    * @internal
    */
   public constructor(host: HomeAssistantApiHost) {

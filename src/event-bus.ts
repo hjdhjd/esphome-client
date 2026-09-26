@@ -12,7 +12,7 @@
  * the per-stream backpressure policy that the platform's `events.on` lacks.
  *
  * One subtlety the facade hides: `node:events` reserves certain event names - notably "error", which it throws on when emitted with no listener. To keep every
- * `keyof EventMap` uniform, the facade translates each logical name to a namespaced channel before it touches the emitter (see `CHANNEL_PREFIX`). Disposal rides
+ * `keyof EventMap` uniform, the facade translates each logical name to a namespaced channel before it touches the emitter (see `CHANNEL_PREFIX`). Disposal goes through
  * a separate `Symbol` channel (`DISPOSE_CHANNEL`) so an internal control signal can never collide with a user event.
  *
  * The three rails map cleanly to the three signal kinds in the client's consumption model:
@@ -122,7 +122,7 @@ const CHANNEL_PREFIX = "esphome:event:";
 /**
  * Internal control channel for teardown notification.
  *
- * Disposal is an out-of-band signal, not a member of the public `EventMap`, so it rides a `Symbol` rather than a string. A Symbol is structurally incapable of
+ * Disposal is an out-of-band signal, not a member of the public `EventMap`, so it travels as a `Symbol` rather than a string. A Symbol is structurally incapable of
  * colliding with any translated user channel or with any string a consumer might register, which is a stronger guarantee than a reserved-string sentinel could offer
  * and the correct primitive for a signal that is private to the bus.
  */

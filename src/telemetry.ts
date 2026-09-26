@@ -11,7 +11,7 @@ import { extractNumberField } from "./protocol/field-extractors.ts";
 /**
  * State-update decoding.
  *
- * @remarks Pure decoders for `*_STATE_RESPONSE` payloads. The host owns the state-mutation seam (event emission, latest-state cache update, entity-device-id
+ * @remarks Pure decoders for `*_STATE_RESPONSE` payloads. The host owns state mutation (event emission, latest-state cache update, entity-device-id
  * registry). This module just turns a decoded protobuf field map plus its schema into a typed {@link TelemetryEvent}.
  *
  * @module telemetry

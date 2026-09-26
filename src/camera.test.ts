@@ -158,7 +158,7 @@ describe("CameraApi.acceptChunk reassembly byte cap", () => {
     const cam = new CameraApi(host, entityId("camera", "front"));
 
     // The cap check is strictly-greater (reassembledBytes > maxImageBytes), so a total of EXACTLY the cap must assemble and emit, not drop. The overflow tests above
-    // cover 5 > 4 (drop); this covers exactly 4 (no drop), pinning the threshold from below.
+    // cover 5 > 4 (drop); this covers exactly 4 (no drop), asserting the threshold from below.
     cam.acceptChunk(Buffer.from([ 0x01, 0x02 ]), false, "front", 1);
     cam.acceptChunk(Buffer.from([ 0x03, 0x04 ]), true, "front", 1);
 

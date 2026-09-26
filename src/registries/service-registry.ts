@@ -23,8 +23,8 @@ import type { EspHomeLogging, Nullable, ServiceEntity } from "../types.ts";
  */
 
 /**
- * Host seam consumed by the registry. The registry needs the host's logger for the per-service debug line emitted at registration time; nothing else flows across this
- * seam. Mirrors the {@link EntityRegistryHost} shape so the two registries share a uniform composition pattern.
+ * Host interface consumed by the registry. The registry needs the host's logger for the per-service debug line emitted at registration time; nothing else flows
+ * across this interface. Mirrors the {@link EntityRegistryHost} shape so the two registries share a uniform composition pattern.
  */
 export interface ServiceRegistryHost {
 
@@ -45,9 +45,9 @@ export class ServiceRegistry {
   private readonly servicesByKey: Map<number, ServiceEntity>;
 
   /**
-   * Construct a registry bound to a host seam. Every internal index starts empty; subsequent {@link register} calls populate them in lock-step.
+   * Construct a registry bound to its host. Every internal index starts empty; subsequent {@link register} calls populate them in lock-step.
    *
-   * @param host - The host seam (logger only).
+   * @param host - The host interface (logger only).
    */
   public constructor(host: ServiceRegistryHost) {
 

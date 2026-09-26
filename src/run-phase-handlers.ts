@@ -7,26 +7,26 @@
  * Single source of truth for "what the client does when it receives each protocol message in steady-state." Implements every entry the host's
  * {@link EspHomeClient.connect} hands to {@link MessageReceiver.startDrain} once the setup phase finishes.
  *
- * @remarks Each per-{@link MessageType} handler is a named module-private function that receives the {@link RunPhaseHost} seam plus the inbound {@link InboundMessage}.
+ * @remarks Each per-{@link MessageType} handler is a named module-private function that receives a {@link RunPhaseHost} plus the inbound {@link InboundMessage}.
  * The module-level {@link buildRunPhaseHandlers} factory assembles those named functions into the {@link MessageHandlers} record the receiver consumes. Every handler is
- * individually exported so the test suite can call it directly with a stub host - the seam's narrowness is what makes that practical.
+ * individually exported so the test suite can call it directly with a stub host - the interface's narrowness is what makes that practical.
  *
- * The narrow seam pattern. The {@link RunPhaseHost} interface is intentionally small. It exposes only what every handler reasonably needs (the bus, the logger, the
+ * The {@link RunPhaseHost} interface is intentionally small. It exposes only what every handler reasonably needs (the bus, the logger, the
  * frame-and-send hook, the bounded-protobuf decoder) plus a handful of host-side coordination methods that handlers delegate into for multi-step bodies (e.g.,
  * {@link RunPhaseHost.acknowledgePingResponse} bundles `consumePingRtt` + `healthRecord` mutation + `healthChange` emission so the handler stays a one-liner). The
  * decoders, registry mutators, and telemetry-routing helpers (`handleLogResponse`, `handleListEntity`, `handleTelemetry`, ...) stay on the host as named methods because
- * the wire-decoding pipeline is a host concern; the dispatcher delegates to them via the seam rather than pulling broad host state across the boundary.
+ * the wire-decoding pipeline is a host concern; the dispatcher delegates to them through the interface rather than pulling broad host state across the boundary.
  *
  * The heartbeat tap is not in this module. {@link buildRunPhaseHandlers} returns the bare unwrapped map; the host's `tapInboundActivity` wraps it so every dispatched
  * message stamps the heartbeat scheduler's activity timestamp. The wrap is a host concern (heartbeat lives on the host); keeping it out of this module preserves the
  * single-responsibility boundary - this module routes messages, the host coordinates liveness.
  *
  * The module-level {@link STATE_MESSAGE_TYPES} and {@link LIST_ENTITIES_MESSAGE_TYPES} constants are the default-table sets, computed once from the canonical
- * {@link ENTITY_SCHEMAS} registry. They are kept as exports for test ergonomics - tests building a stub {@link RunPhaseHost} can drop them straight into the seam
+ * {@link ENTITY_SCHEMAS} registry. They are kept as exports for test ergonomics - tests building a stub {@link RunPhaseHost} can drop them straight in
  * without rebuilding from a schemas table. The host class does NOT consume these directly; it builds per-instance sets from its own {@link
  * SchemasTable} (which folds the consumer's optional {@link ExtraSchemaSet} over the canonical floor) and threads them
  * through the {@link RunPhaseHost.stateMessageTypes} / {@link RunPhaseHost.listEntitiesMessageTypes} fields so an extras-registered entity type's wire-message-types
- * route through the same telemetry / late-discovery paths as built-ins. {@link defaultRunPhaseHandler} consults the seam-supplied sets (not the module-level ones) so
+ * route through the same telemetry / late-discovery paths as built-ins. {@link defaultRunPhaseHandler} consults the host-supplied sets (not the module-level ones) so
  * extras participate in routing.
  *
  * @module run-phase-handlers
@@ -59,7 +59,7 @@ import { WireType } from "./protocol/wire-types.ts";
  *
  * @remarks This module-level constant is the no-extras-supplied set. The host class builds a per-instance superset from its {@link SchemasTable}
  * via {@link buildListEntitiesMessageTypes} so extras-registered entity types route through the same setup-phase awaiter and the run-phase
- * default-dispatcher's late-discovery branch. Tests that wire a stub {@link RunPhaseHost} can drop this constant into the seam unchanged.
+ * default-dispatcher's late-discovery branch. Tests that wire a stub {@link RunPhaseHost} can use this constant unchanged.
  */
 export const LIST_ENTITIES_MESSAGE_TYPES: ReadonlySet<number> = new Set<number>([
 
@@ -81,16 +81,16 @@ export const STATE_MESSAGE_TYPES: ReadonlySet<number> = new Set<number>([
 ]);
 
 /**
- * Narrow seam the run-phase dispatcher consumes from the host. Mirrors {@link LogSubscriptionManagerHost} /
+ * Narrow interface the run-phase dispatcher consumes from the host. Mirrors {@link LogSubscriptionManagerHost} /
  * {@link HeartbeatHost} - a small read surface (logger, bus, decoders, decode-and-emit contexts), a frame-send hook, and a handful of host-side coordination
  * methods that handlers delegate into for multi-step bodies that span subsystems the dispatcher does not own.
  *
- * @remarks Two design decisions hold the seam at this width. First, decoders, registry mutators, and telemetry routers stay on the host (`handleListEntity`,
+ * @remarks Two design decisions hold the interface at this width. First, decoders, registry mutators, and telemetry routers stay on the host (`handleListEntity`,
  * `handleTelemetry`, `handleLogResponse`, `handleCameraImageResponse`, `handleNoiseKeySetResponse`, `handleListServiceEntity`) - they exist independently of the
- * dispatcher and pre-date this module; pulling them across the seam would be moving code, not architecture. Second, the multi-step coordination paths
+ * dispatcher; pulling them across the boundary would be moving code, not architecture. Second, the multi-step coordination paths
  * (`acknowledgePingResponse`, `acknowledgeDisconnectRequest`, `acknowledgeDisconnectResponse`) bundle host-private state mutations behind a single named method per
  * handler so the dispatcher never reaches into host internals - the rule is: any handler that needs more than the read fields here delegates to a host method, and that
- * method becomes part of the seam.
+ * method becomes part of this interface.
  */
 export interface RunPhaseHost {
 
@@ -383,7 +383,7 @@ export interface RunPhaseHost {
   /**
    * Per-instance set of inbound message types that carry telemetry-state updates. The host builds this from its {@link SchemasTable} so
    * extras-registered entity types route through the telemetry path; the default-table {@link STATE_MESSAGE_TYPES} export is kept for test ergonomics. The
-   * dispatcher consults this seam field (not the module-level constant) so extras participate in routing.
+   * dispatcher consults this field (not the module-level constant) so extras participate in routing.
    */
   readonly stateMessageTypes: ReadonlySet<number>;
 
@@ -411,7 +411,7 @@ export interface RunPhaseHost {
  * Handle inbound `PING_REQUEST`. Replies with an empty-payload `PING_RESPONSE` and emits the `heartbeat` event so consumers observing connection liveness see one tick
  * per inbound ping.
  *
- * @param host - The run-phase seam.
+ * @param host - The run-phase host interface.
  */
 export function handlePingRequest(host: RunPhaseHost): void {
 
@@ -425,7 +425,7 @@ export function handlePingRequest(host: RunPhaseHost): void {
  * {@link LiveConnectionHealth.lastPingRttMs}, and fires `healthChange` only when an RTT was produced) and then emits the `heartbeat` event for consumers that
  * observe connection liveness directly.
  *
- * @param host - The run-phase seam.
+ * @param host - The run-phase host interface.
  */
 export function handlePingResponse(host: RunPhaseHost): void {
 
@@ -437,7 +437,7 @@ export function handlePingResponse(host: RunPhaseHost): void {
  * Handle inbound `DISCONNECT_REQUEST` from the device. Delegates to {@link RunPhaseHost.acknowledgeDisconnectRequest}, which sends `DISCONNECT_RESPONSE` and runs the
  * host's internal teardown so auto-reconnect (when enabled) can pick up.
  *
- * @param host - The run-phase seam.
+ * @param host - The run-phase host interface.
  */
 export function handleDisconnectRequest(host: RunPhaseHost): void {
 
@@ -449,7 +449,7 @@ export function handleDisconnectRequest(host: RunPhaseHost): void {
  * awaiter set by {@link EspHomeClient.disconnectAsync} and falls back to `disconnectInternal(undefined, undefined)` when no awaiter is pending - a
  * stray response after the graceful timeout already fired still tears the connection down cleanly.
  *
- * @param host - The run-phase seam.
+ * @param host - The run-phase host interface.
  */
 export function handleDisconnectResponse(host: RunPhaseHost): void {
 
@@ -460,7 +460,7 @@ export function handleDisconnectResponse(host: RunPhaseHost): void {
  * Handle inbound `GET_TIME_REQUEST`. Replies with the current epoch (seconds) encoded as a little-endian fixed32 field at field number 1. Self-contained on the
  * dispatcher because the response is a single field with a constant shape; no host coordination is required.
  *
- * @param host - The run-phase seam.
+ * @param host - The run-phase host interface.
  */
 export function handleGetTimeRequest(host: RunPhaseHost): void {
 
@@ -478,7 +478,7 @@ export function handleGetTimeRequest(host: RunPhaseHost): void {
  * {@link extractFixed32Field} helper, then emits the `timeSync` event when the decode produces a value. Missing or malformed payloads are silently dropped - the device
  * may have rejected the request, and there is nothing useful to surface to consumers in that case.
  *
- * @param host - The run-phase seam.
+ * @param host - The run-phase host interface.
  * @param msg - The inbound message.
  */
 export function handleGetTimeResponse(host: RunPhaseHost, msg: InboundMessage): void {
@@ -496,7 +496,7 @@ export function handleGetTimeResponse(host: RunPhaseHost, msg: InboundMessage): 
  * Handle inbound `SUBSCRIBE_LOGS_RESPONSE`. One-line delegate to {@link RunPhaseHost.handleLogResponse}, which decodes the wire frame, hands the decoded
  * {@link LogEventData} to {@link LogSubscriptionManager.dispatch}, and emits the per-message diagnostic.
  *
- * @param host - The run-phase seam.
+ * @param host - The run-phase host interface.
  * @param msg - The inbound message.
  */
 export function handleSubscribeLogsResponse(host: RunPhaseHost, msg: InboundMessage): void {
@@ -508,7 +508,7 @@ export function handleSubscribeLogsResponse(host: RunPhaseHost, msg: InboundMess
  * Handle inbound `CAMERA_IMAGE_RESPONSE`. One-line delegate to {@link RunPhaseHost.handleCameraImageResponse}, which routes the chunk into the per-camera reassembly
  * pipeline owned by {@link CameraApi}.
  *
- * @param host - The run-phase seam.
+ * @param host - The run-phase host interface.
  * @param msg - The inbound message.
  */
 export function handleCameraImageResponse(host: RunPhaseHost, msg: InboundMessage): void {
@@ -520,7 +520,7 @@ export function handleCameraImageResponse(host: RunPhaseHost, msg: InboundMessag
  * Handle inbound `VOICE_ASSISTANT_REQUEST`. Routes through the host's pre-built {@link RunPhaseHost.voiceAssistantInboundContext}; the decoder owns the wire-format
  * concerns and the bus-emit path - the dispatcher just feeds it the payload.
  *
- * @param host - The run-phase seam.
+ * @param host - The run-phase host interface.
  * @param msg - The inbound message.
  */
 export function handleVoiceAssistantRequest(host: RunPhaseHost, msg: InboundMessage): void {
@@ -532,7 +532,7 @@ export function handleVoiceAssistantRequest(host: RunPhaseHost, msg: InboundMess
  * Handle inbound `VOICE_ASSISTANT_ANNOUNCE_FINISHED`. Routes through {@link RunPhaseHost.voiceAssistantInboundContext}; see {@link handleVoiceAssistantRequest} for the
  * shape of the dispatch.
  *
- * @param host - The run-phase seam.
+ * @param host - The run-phase host interface.
  * @param msg - The inbound message.
  */
 export function handleVoiceAssistantAnnounceFinished(host: RunPhaseHost, msg: InboundMessage): void {
@@ -545,7 +545,7 @@ export function handleVoiceAssistantAnnounceFinished(host: RunPhaseHost, msg: In
  * configuration event on the bus. The voice-assistant API caches the configuration as a side effect of its own `voiceAssistantConfiguration` bus subscription - the
  * decoder holds no API instance and writes no cache directly.
  *
- * @param host - The run-phase seam.
+ * @param host - The run-phase host interface.
  * @param msg - The inbound message.
  */
 export function handleVoiceAssistantConfigurationResponse(host: RunPhaseHost, msg: InboundMessage): void {
@@ -557,7 +557,7 @@ export function handleVoiceAssistantConfigurationResponse(host: RunPhaseHost, ms
  * Handle inbound `VOICE_ASSISTANT_AUDIO`. Routes through {@link RunPhaseHost.voiceAssistantInboundContext}; this is the high-rate audio-chunk path during an active
  * voice-assistant session, so the per-message dispatch must avoid allocations - the pre-built context is the optimization this path depends on.
  *
- * @param host - The run-phase seam.
+ * @param host - The run-phase host interface.
  * @param msg - The inbound message.
  */
 export function handleVoiceAssistantAudio(host: RunPhaseHost, msg: InboundMessage): void {
@@ -569,7 +569,7 @@ export function handleVoiceAssistantAudio(host: RunPhaseHost, msg: InboundMessag
  * Handle inbound `HOMEASSISTANT_SERVICE_RESPONSE`. Routes through {@link RunPhaseHost.homeAssistantInboundContext}; the decoder fans the payload out as the
  * `homeassistantService` event, which Home Assistant integration code observes.
  *
- * @param host - The run-phase seam.
+ * @param host - The run-phase host interface.
  * @param msg - The inbound message.
  */
 export function handleHomeassistantServiceResponse(host: RunPhaseHost, msg: InboundMessage): void {
@@ -581,7 +581,7 @@ export function handleHomeassistantServiceResponse(host: RunPhaseHost, msg: Inbo
  * Handle inbound `SUBSCRIBE_HOME_ASSISTANT_STATE_RESPONSE`. Routes through {@link RunPhaseHost.homeAssistantInboundContext}; the decoder emits the
  * `homeassistantStateRequest` event so consumers can supply the requested entity state back to the device.
  *
- * @param host - The run-phase seam.
+ * @param host - The run-phase host interface.
  * @param msg - The inbound message.
  */
 export function handleSubscribeHomeAssistantStateResponse(host: RunPhaseHost, msg: InboundMessage): void {
@@ -593,7 +593,7 @@ export function handleSubscribeHomeAssistantStateResponse(host: RunPhaseHost, ms
  * Handle inbound `NOISE_ENCRYPTION_SET_KEY_RESPONSE`. One-line delegate to {@link RunPhaseHost.handleNoiseKeySetResponse}, which settles the in-flight resolver promise
  * that {@link EspHomeClient.setNoiseEncryptionKey} awaits.
  *
- * @param host - The run-phase seam.
+ * @param host - The run-phase host interface.
  * @param msg - The inbound message.
  */
 export function handleNoiseEncryptionSetKeyResponse(host: RunPhaseHost, msg: InboundMessage): void {
@@ -606,7 +606,7 @@ export function handleNoiseEncryptionSetKeyResponse(host: RunPhaseHost, msg: Inb
  * and emits the `deviceInfo` event. Run-phase delivery is the device's way of pushing a mid-session device-info refresh; the dispatcher routes it through the same
  * decode path discovery uses so consumer-visible state stays consistent.
  *
- * @param host - The run-phase seam.
+ * @param host - The run-phase host interface.
  * @param msg - The inbound message.
  */
 export function handleDeviceInfoResponse(host: RunPhaseHost, msg: InboundMessage): void {
@@ -620,7 +620,7 @@ export function handleDeviceInfoResponse(host: RunPhaseHost, msg: InboundMessage
  * rediscovery by emitting `entities` and/or `services` for whichever registries changed since the last snapshot. Wired so the message does not fall through to
  * the default handler's "Unhandled message type" warning.
  *
- * @param host - The run-phase seam.
+ * @param host - The run-phase host interface.
  */
 export function handleListEntitiesDoneResponse(host: RunPhaseHost): void {
 
@@ -631,7 +631,7 @@ export function handleListEntitiesDoneResponse(host: RunPhaseHost): void {
  * Handle inbound `EXECUTE_SERVICE_RESPONSE`. One-line delegate to {@link RunPhaseHost.handleExecuteServiceResponse}, which decodes the payload and emits
  * `serviceCallResult` for consumers correlating to a prior `executeService` call.
  *
- * @param host - The run-phase seam.
+ * @param host - The run-phase host interface.
  * @param msg - The inbound message.
  */
 export function handleExecuteServiceResponse(host: RunPhaseHost, msg: InboundMessage): void {
@@ -643,7 +643,7 @@ export function handleExecuteServiceResponse(host: RunPhaseHost, msg: InboundMes
  * Handle inbound `BLUETOOTH_LE_RAW_ADVERTISEMENTS_RESPONSE`. One-line delegate to {@link RunPhaseHost.handleBluetoothAdvertisementsBatch}, which fans each batched
  * advertisement out as an individual `bluetoothAdvertisement` bus event after decoding.
  *
- * @param host - The run-phase seam.
+ * @param host - The run-phase host interface.
  * @param msg - The inbound message.
  */
 export function handleBluetoothAdvertisementsBatch(host: RunPhaseHost, msg: InboundMessage): void {
@@ -655,7 +655,7 @@ export function handleBluetoothAdvertisementsBatch(host: RunPhaseHost, msg: Inbo
  * Handle inbound `BLUETOOTH_SCANNER_STATE_RESPONSE`. One-line delegate to {@link RunPhaseHost.handleBluetoothScannerState}, which updates the cached snapshot and
  * emits the `bluetoothScannerState` bus event. Scanner-state pushes are unsolicited at the wire level.
  *
- * @param host - The run-phase seam.
+ * @param host - The run-phase host interface.
  * @param msg - The inbound message.
  */
 export function handleBluetoothScannerState(host: RunPhaseHost, msg: InboundMessage): void {
@@ -666,7 +666,7 @@ export function handleBluetoothScannerState(host: RunPhaseHost, msg: InboundMess
 /**
  * Handle inbound `BLUETOOTH_DEVICE_CONNECTION_RESPONSE` (id 69). One-line delegate; the sub-API distinguishes connect vs disconnect via the `connected` boolean.
  *
- * @param host - The run-phase seam.
+ * @param host - The run-phase host interface.
  * @param msg - The inbound message.
  */
 export function handleBluetoothDeviceConnectionResponse(host: RunPhaseHost, msg: InboundMessage): void {
@@ -677,7 +677,7 @@ export function handleBluetoothDeviceConnectionResponse(host: RunPhaseHost, msg:
 /**
  * Handle inbound `BLUETOOTH_GATT_GET_SERVICES_RESPONSE` (id 71). Streamed; accumulated by the sub-API.
  *
- * @param host - The run-phase seam.
+ * @param host - The run-phase host interface.
  * @param msg - The inbound message.
  */
 export function handleBluetoothGattGetServicesResponse(host: RunPhaseHost, msg: InboundMessage): void {
@@ -688,7 +688,7 @@ export function handleBluetoothGattGetServicesResponse(host: RunPhaseHost, msg: 
 /**
  * Handle inbound `BLUETOOTH_GATT_GET_SERVICES_DONE_RESPONSE` (id 72). Sentinel terminator for service discovery.
  *
- * @param host - The run-phase seam.
+ * @param host - The run-phase host interface.
  * @param msg - The inbound message.
  */
 export function handleBluetoothGattGetServicesDoneResponse(host: RunPhaseHost, msg: InboundMessage): void {
@@ -699,7 +699,7 @@ export function handleBluetoothGattGetServicesDoneResponse(host: RunPhaseHost, m
 /**
  * Handle inbound `BLUETOOTH_GATT_READ_RESPONSE` (id 74). Shared response for characteristic and descriptor reads.
  *
- * @param host - The run-phase seam.
+ * @param host - The run-phase host interface.
  * @param msg - The inbound message.
  */
 export function handleBluetoothGattReadResponse(host: RunPhaseHost, msg: InboundMessage): void {
@@ -710,7 +710,7 @@ export function handleBluetoothGattReadResponse(host: RunPhaseHost, msg: Inbound
 /**
  * Handle inbound `BLUETOOTH_GATT_NOTIFY_DATA_RESPONSE` (id 79). Per-(address, handle) notification chunk.
  *
- * @param host - The run-phase seam.
+ * @param host - The run-phase host interface.
  * @param msg - The inbound message.
  */
 export function handleBluetoothGattNotifyDataResponse(host: RunPhaseHost, msg: InboundMessage): void {
@@ -721,7 +721,7 @@ export function handleBluetoothGattNotifyDataResponse(host: RunPhaseHost, msg: I
 /**
  * Handle inbound `BLUETOOTH_CONNECTIONS_FREE_RESPONSE` (id 81). Pushed on subscribe and on every change.
  *
- * @param host - The run-phase seam.
+ * @param host - The run-phase host interface.
  * @param msg - The inbound message.
  */
 export function handleBluetoothConnectionsFreeResponse(host: RunPhaseHost, msg: InboundMessage): void {
@@ -732,7 +732,7 @@ export function handleBluetoothConnectionsFreeResponse(host: RunPhaseHost, msg: 
 /**
  * Handle inbound `BLUETOOTH_GATT_ERROR_RESPONSE` (id 82). Routed through the try-each-Correlator-reject pattern in the sub-API.
  *
- * @param host - The run-phase seam.
+ * @param host - The run-phase host interface.
  * @param msg - The inbound message.
  */
 export function handleBluetoothGattErrorResponse(host: RunPhaseHost, msg: InboundMessage): void {
@@ -743,7 +743,7 @@ export function handleBluetoothGattErrorResponse(host: RunPhaseHost, msg: Inboun
 /**
  * Handle inbound `BLUETOOTH_GATT_WRITE_RESPONSE` (id 83). Shared response for characteristic and descriptor writes.
  *
- * @param host - The run-phase seam.
+ * @param host - The run-phase host interface.
  * @param msg - The inbound message.
  */
 export function handleBluetoothGattWriteResponse(host: RunPhaseHost, msg: InboundMessage): void {
@@ -754,7 +754,7 @@ export function handleBluetoothGattWriteResponse(host: RunPhaseHost, msg: Inboun
 /**
  * Handle inbound `BLUETOOTH_GATT_NOTIFY_RESPONSE` (id 84). Acknowledges `setNotify`.
  *
- * @param host - The run-phase seam.
+ * @param host - The run-phase host interface.
  * @param msg - The inbound message.
  */
 export function handleBluetoothGattNotifyResponse(host: RunPhaseHost, msg: InboundMessage): void {
@@ -765,7 +765,7 @@ export function handleBluetoothGattNotifyResponse(host: RunPhaseHost, msg: Inbou
 /**
  * Handle inbound `BLUETOOTH_DEVICE_PAIRING_RESPONSE` (id 85).
  *
- * @param host - The run-phase seam.
+ * @param host - The run-phase host interface.
  * @param msg - The inbound message.
  */
 export function handleBluetoothDevicePairingResponse(host: RunPhaseHost, msg: InboundMessage): void {
@@ -776,7 +776,7 @@ export function handleBluetoothDevicePairingResponse(host: RunPhaseHost, msg: In
 /**
  * Handle inbound `BLUETOOTH_DEVICE_UNPAIRING_RESPONSE` (id 86).
  *
- * @param host - The run-phase seam.
+ * @param host - The run-phase host interface.
  * @param msg - The inbound message.
  */
 export function handleBluetoothDeviceUnpairingResponse(host: RunPhaseHost, msg: InboundMessage): void {
@@ -787,7 +787,7 @@ export function handleBluetoothDeviceUnpairingResponse(host: RunPhaseHost, msg: 
 /**
  * Handle inbound `BLUETOOTH_DEVICE_CLEAR_CACHE_RESPONSE` (id 88).
  *
- * @param host - The run-phase seam.
+ * @param host - The run-phase host interface.
  * @param msg - The inbound message.
  */
 export function handleBluetoothDeviceClearCacheResponse(host: RunPhaseHost, msg: InboundMessage): void {
@@ -798,7 +798,7 @@ export function handleBluetoothDeviceClearCacheResponse(host: RunPhaseHost, msg:
 /**
  * Handle inbound `BLUETOOTH_SET_CONNECTION_PARAMS_RESPONSE` (id 146).
  *
- * @param host - The run-phase seam.
+ * @param host - The run-phase host interface.
  * @param msg - The inbound message.
  */
 export function handleBluetoothSetConnectionParamsResponse(host: RunPhaseHost, msg: InboundMessage): void {
@@ -810,7 +810,7 @@ export function handleBluetoothSetConnectionParamsResponse(host: RunPhaseHost, m
  * Handle inbound `SERIAL_PROXY_DATA_RECEIVED`. One-line delegate to {@link RunPhaseHost.handleSerialProxyData}, which routes the chunk through the serial-proxy
  * sub-API's `acceptDataMessage` decoder.
  *
- * @param host - The run-phase seam.
+ * @param host - The run-phase host interface.
  * @param msg - The inbound message.
  */
 export function handleSerialProxyData(host: RunPhaseHost, msg: InboundMessage): void {
@@ -822,7 +822,7 @@ export function handleSerialProxyData(host: RunPhaseHost, msg: InboundMessage): 
  * Handle inbound `SERIAL_PROXY_GET_MODEM_PINS_RESPONSE`. One-line delegate to {@link RunPhaseHost.handleSerialProxyModemPinsResponse}, which resolves the matching
  * `getModemPins` await on the serial-proxy sub-API.
  *
- * @param host - The run-phase seam.
+ * @param host - The run-phase host interface.
  * @param msg - The inbound message.
  */
 export function handleSerialProxyModemPinsResponse(host: RunPhaseHost, msg: InboundMessage): void {
@@ -834,7 +834,7 @@ export function handleSerialProxyModemPinsResponse(host: RunPhaseHost, msg: Inbo
  * Handle inbound `SERIAL_PROXY_REQUEST_RESPONSE`. One-line delegate to {@link RunPhaseHost.handleSerialProxyRequestResponse}, which resolves the matching `flush`
  * await on the serial-proxy sub-API.
  *
- * @param host - The run-phase seam.
+ * @param host - The run-phase host interface.
  * @param msg - The inbound message.
  */
 export function handleSerialProxyRequestResponse(host: RunPhaseHost, msg: InboundMessage): void {
@@ -846,7 +846,7 @@ export function handleSerialProxyRequestResponse(host: RunPhaseHost, msg: Inboun
  * Handle inbound `ZWAVE_PROXY_FRAME` (id 128). One-line delegate to {@link RunPhaseHost.handleZWaveProxyFrame}, which routes the chunk through the Z-Wave-proxy
  * sub-API's `acceptFrame` decoder.
  *
- * @param host - The run-phase seam.
+ * @param host - The run-phase host interface.
  * @param msg - The inbound message.
  */
 export function handleZWaveProxyFrame(host: RunPhaseHost, msg: InboundMessage): void {
@@ -858,7 +858,7 @@ export function handleZWaveProxyFrame(host: RunPhaseHost, msg: InboundMessage): 
  * Handle inbound `ZWAVE_PROXY_REQUEST` (id 129). One-line delegate to {@link RunPhaseHost.handleZWaveProxyRequest}; the sub-API decodes the tag and routes
  * HOME_ID_CHANGE to the bus while ignoring unknown request types at debug.
  *
- * @param host - The run-phase seam.
+ * @param host - The run-phase host interface.
  * @param msg - The inbound message.
  */
 export function handleZWaveProxyRequest(host: RunPhaseHost, msg: InboundMessage): void {
@@ -878,7 +878,7 @@ export function handleZWaveProxyRequest(host: RunPhaseHost, msg: InboundMessage)
  * - Anything else - log a warning at warn level naming the message type plus the payload hex, then increment the `messages.unknown_type` metric so operators can detect
  *   protocol drift.
  *
- * @param host - The run-phase seam.
+ * @param host - The run-phase host interface.
  * @param msg - The inbound message.
  */
 export function defaultRunPhaseHandler(host: RunPhaseHost, msg: InboundMessage): void {
@@ -927,7 +927,7 @@ export function defaultRunPhaseHandler(host: RunPhaseHost, msg: InboundMessage):
  * suite can call them directly without going through the builder. The map's `default` entry routes through {@link defaultRunPhaseHandler}, which owns the
  * telemetry / late-discovery routing decisions.
  *
- * @param host - The run-phase seam.
+ * @param host - The run-phase host interface.
  * @returns The {@link MessageHandlers} record ready to pass to `startDrain` (after the host's `tapInboundActivity` wrap).
  */
 export function buildRunPhaseHandlers(host: RunPhaseHost): MessageHandlers {

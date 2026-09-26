@@ -792,8 +792,8 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
   // its own connection-scoped state (subscription flag, cached configuration); reset on every connect.
   private voiceAssistantApi: Nullable<VoiceAssistantApi> = null;
 
-  // User-defined services sub-API, lazily constructed on first access via the {@link EspHomeClient.services} getter. Stateless aside from the seam reference; the
-  // service registry, encoder, and frame-send hook flow through the seam from this host.
+  // User-defined services sub-API, lazily constructed on first access via the {@link EspHomeClient.services} getter. Stateless aside from its host reference; the
+  // service registry, encoder, and frame-send hook flow through the `UserServicesApiHost` interface from this host.
   private userServicesApi: Nullable<UserServicesApi> = null;
 
   // Serial-proxy sub-API. Lazy-instantiated on first access via the {@link serial} getter; one instance per client for the lifetime of the client. Owns its own
@@ -823,13 +823,13 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
   // context at construction time.
   private readonly homeAssistantApi: HomeAssistantApi;
 
-  // Pre-built run-phase dispatcher seam. The host composes the `RunPhaseHost` surface once at construction time so every connect() reuses
-  // the same seam object; the dispatcher's per-{@link MessageType} handlers route through this seam (read fields plus host-side coordination methods) without ever
+  // Pre-built `RunPhaseHost` object for the run-phase dispatcher. The host composes it once at construction time so every connect() reuses
+  // the same object; the dispatcher's per-{@link MessageType} handlers route through it (read fields plus host-side coordination methods) without ever
   // touching host private state directly. `buildRunPhaseHandlers` consumes it; the heartbeat-stamp wrap stays on the host where it belongs.
   private readonly runPhaseHost: RunPhaseHost;
 
-  // Pre-built command-runner seam. The host composes the `CommandHost` surface once at construction time so every {@link command} and
-  // {@link commandAndAwait} call reuses the same object; {@link runCommand} and {@link runCommandAndAwait} consume it. Narrow seam (bus, log, metrics, registry's
+  // Pre-built `CommandHost` object for the command runner. The host composes it once at construction time so every {@link command} and
+  // {@link commandAndAwait} call reuses the same object; {@link runCommand} and {@link runCommandAndAwait} consume it. Narrow interface (bus, log, metrics, registry's
   // keyForId / deviceIdForKey, the schemas table's resolveSchema, frameAndSend hook); the runner owns the encode pipeline and the bus pre-subscription.
   private readonly commandHost: CommandHost;
 
@@ -838,8 +838,8 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
   // controllable function (via {@link EspHomeClientOptions.clock}) to drive deterministic timing without real timers.
   private readonly clock: ClockFn;
 
-  // Heartbeat scheduler. Owns the supervisory timer, last-activity timestamp, and in-flight ping marker. `null` config (constructor seam) means heartbeat
-  // is disabled (`keepAlive: false`); otherwise it ticks the configured interval and surfaces stalls through the host seam.
+  // Heartbeat scheduler. Owns the supervisory timer, last-activity timestamp, and in-flight ping marker. A `null` constructor `config` means heartbeat
+  // is disabled (`keepAlive: false`); otherwise it ticks the configured interval and surfaces stalls through the `HeartbeatHost` interface.
   private readonly heartbeat: HeartbeatScheduler;
 
   // Live connection-health record. Updated synchronously on every transition; emitted via the `healthChange` event for streaming consumers.
@@ -909,12 +909,11 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
   private readonly schemasTable: SchemasTable;
 
   // Per-instance set of inbound state-message wire-message-types. Derived once from {@link schemasTable} via {@link buildStateMessageTypes}; threaded into the run-phase
-  // dispatcher seam so the default-handler's telemetry routing branch sees extras-registered state types.
+  // dispatcher's `RunPhaseHost` so the default-handler's telemetry routing branch sees extras-registered state types.
   private readonly stateMessageTypes: ReadonlySet<number>;
 
   // Per-instance set of inbound list-entities wire-message-types. Derived once from {@link schemasTable} via {@link buildListEntitiesMessageTypes}; threaded into
-  // both the
-  // setup-phase discovery awaiter and the run-phase dispatcher seam so an extras-registered `LIST_ENTITIES_*_RESPONSE` is awaited during discovery and routed via the
+  // both the setup-phase discovery awaiter and the `RunPhaseHost` so an extras-registered `LIST_ENTITIES_*_RESPONSE` is awaited during discovery and routed via the
   // default-handler's late-discovery branch during run phase.
   private readonly listEntitiesMessageTypes: ReadonlySet<number>;
 
@@ -999,7 +998,7 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
     };
 
     // Build the Home-Assistant sub-API SSOT. Owns the outbound subscribe-and-respond surface and exposes a memoized inbound-dispatcher context
-    // (`api.inboundContext`) that the run-phase dispatcher consumes for `HOMEASSISTANT_SERVICE_RESPONSE` / `SUBSCRIBE_HOME_ASSISTANT_STATE_RESPONSE` frames. The seam
+    // (`api.inboundContext`) that the run-phase dispatcher consumes for `HOMEASSISTANT_SERVICE_RESPONSE` / `SUBSCRIBE_HOME_ASSISTANT_STATE_RESPONSE` frames. Its host
     // closes over `this.bus`, `this.log`, the bounded protobuf decoder, and the host's `frameAndSend` so the sub-API never reaches into host private state.
     const homeAssistantApiHost: HomeAssistantApiHost = {
 
@@ -1031,8 +1030,8 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
     this.maxImageBytes = options.maxImageBytes ?? DEFAULT_MAX_IMAGE_BYTES;
 
     // Build the per-instance schemas table once, here at the boundary. The merge step throws ConfigurationError("EXTRA_SCHEMA_OVERRIDES_BUILTIN") when an extras key
-    // collides with a built-in entity-type key; surfacing it from the constructor means callers see the failure synchronously rather than at first-command. The two
-    // derived sets - state-message types and list-entities message types - are computed once from the table; downstream seams consume the per-instance copies so
+    // collides with a built-in entity-type key; surfacing it from the constructor means callers see the failure synchronously rather than at first-command. Each
+    // derived set - state-message types and list-entities message types - is computed once from the table; downstream consumers read the per-instance copies so
     // extras-registered wire-message-types route through the same code paths as built-ins.
     this.schemasTable = buildSchemasTable(ENTITY_SCHEMAS, options.extraSchemas);
     this.stateMessageTypes = buildStateMessageTypes(this.schemasTable);
@@ -1044,7 +1043,7 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
     this.gracefulDisconnectTimeoutMs = options.gracefulDisconnectTimeoutMs ?? DEFAULT_GRACEFUL_DISCONNECT_TIMEOUT_MS;
 
     // Heartbeat. Defaults to 30s idle / 60s stall; pass `keepAlive: false` to disable. The scheduler is constructed up front so its lifetime matches the host's;
-    // transitions are surfaced through the seam below.
+    // transitions are surfaced through the `HeartbeatHost` callbacks below.
     const heartbeatConfig: Nullable<HeartbeatConfig> = (options.keepAlive === false) ? null : {
 
       intervalMs: options.keepAlive?.intervalMs ?? 30000,
@@ -1081,9 +1080,9 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
     // Optional metrics sink. Stored as-is so emit sites can use optional chaining; absence means zero-cost emit.
     this.metrics = options.metrics;
 
-    // Build the run-phase dispatcher seam once. The seam exposes a small read surface (bus/log/metrics/decode contexts/maxFieldsPerMessage), the frame-and-send hook, the
+    // Build the dispatcher's `RunPhaseHost` once. It exposes a small read surface (bus/log/metrics/decode contexts/maxFieldsPerMessage), the frame-and-send hook, the
     // bounded protobuf decoder, and a handful of host-side coordination methods that the dispatch table delegates into for multi-step bodies (acknowledge*) plus the
-    // pre-existing decoder methods (handleLogResponse / handleCameraImageResponse / handleNoiseKeySetResponse / handleListEntity / handleListServiceEntity /
+    // host's decoder methods (handleLogResponse / handleCameraImageResponse / handleNoiseKeySetResponse / handleListEntity / handleListServiceEntity /
     // handleTelemetry). Reused unchanged across every connect()/disconnect cycle.
     this.runPhaseHost = {
 
@@ -1165,7 +1164,7 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
       voiceAssistantInboundContext: this.voiceAssistantInboundContext
     };
 
-    // Build the command-runner seam once. Same composition pattern as runPhaseHost: small read surface (bus / log / metrics) plus four method seams that delegate into
+    // Build the runner's `CommandHost` once. Same composition pattern as runPhaseHost: small read surface (bus / log / metrics) plus methods that delegate into
     // the registry (keyForId, deviceIdForKey), the schemas table (resolveSchema), and the transport (frameAndSend). {@link runCommand} and {@link runCommandAndAwait}
     // consume this surface; the encode pipeline and adapter table are pure-function imports inside the runner.
     this.commandHost = {
@@ -1586,7 +1585,7 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
    * heartbeat may have already cleared its in-flight marker on a stall, in which case there is nothing useful to record. Bundled here so the dispatcher's
    * {@link handlePingResponse} stays a one-line delegate.
    *
-   * @internal Dispatcher seam method; not part of the consumer surface. Invoked exclusively by the run-phase handler table.
+   * @internal Dispatcher coordination method; not part of the consumer surface. Invoked exclusively by the run-phase handler table.
    */
   public acknowledgePingResponse(): void {
 
@@ -1605,7 +1604,7 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
    * undefined)` so the disconnect event fans out and auto-reconnect (when enabled) can pick up. Bundled here so the dispatcher's
    * {@link handleDisconnectRequest} stays a one-line delegate.
    *
-   * @internal Dispatcher seam method; not part of the consumer surface. Invoked exclusively by the run-phase handler table.
+   * @internal Dispatcher coordination method; not part of the consumer surface. Invoked exclusively by the run-phase handler table.
    */
   public acknowledgeDisconnectRequest(): void {
 
@@ -1619,7 +1618,7 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
    * `DISCONNECT_RESPONSE` (e.g., arrived after the graceful timeout already fired) still tears the connection down cleanly. Bundled here so the dispatcher's
    * {@link handleDisconnectResponse} stays a one-line delegate.
    *
-   * @internal Dispatcher seam method; not part of the consumer surface. Invoked exclusively by the run-phase handler table.
+   * @internal Dispatcher coordination method; not part of the consumer surface. Invoked exclusively by the run-phase handler table.
    */
   public acknowledgeDisconnectResponse(): void {
 
@@ -2460,7 +2459,7 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
 
   /**
    * Parse a single `LIST_ENTITIES_*_RESPONSE`, decode it, and register it in the internal discovery maps. The decoder lives in `discovery.ts`; this handler owns the
-   * state-mutation seam.
+   * state mutation.
    *
    * @param type - The message type indicating the entity type.
    * @param payload - The entity description payload.
@@ -2623,7 +2622,7 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
     }
 
     // Mutate-then-notify: a listener reading `client.latest(id)` or iterating `client.snapshot()` from inside `on("telemetry")` or the per-type channel must see the
-    // just-emitted event. Pinned by the "cache contract:" test in esphome-client.test.ts. When the entity is unknown (no successful discovery), skip the write rather
+    // just-emitted event. Asserted by the "cache contract:" test in esphome-client.test.ts. When the entity is unknown (no successful discovery), skip the write rather
     // than fabricate an id.
     if(knownEntity) {
 
@@ -2646,12 +2645,12 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
   }
 
   // Schema-driven decoders are implemented in `discovery.ts` (entity discovery + scalar/repeated field extractors) and `telemetry.ts` (state-update decoding). The
-  // host class owns the state-mutation seam: it routes inbound payloads through the pure decoders, then writes the results into its registries and emits bus events.
+  // host class owns state mutation: it routes inbound payloads through the pure decoders, then writes the results into its registries and emits bus events.
 
   /**
    * Send a typed message via the active transport. Routes to plaintext framing or to encrypted noise framing automatically based on the transport's phase. The promise
    * is fire-and-forget at the consumer level: a send-time socket fault tears the transport's iterator down, which the receiver escalates through its terminal-completion
-   * seam to {@link disconnectInternal}, so the fault drives a single teardown (and auto-reconnect) rather than being lost. The method returns synchronously so call sites
+   * hook to {@link disconnectInternal}, so the fault drives a single teardown (and auto-reconnect) rather than being lost. The method returns synchronously so call sites
    * stay one-line; the underlying socket write is awaited internally.
    *
    * @param type - The message type identifier.
@@ -2666,7 +2665,7 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
       return;
     }
 
-    // Fire-and-forget; a send-related socket fault surfaces on the transport's iterator and is routed via the receiver's terminal-completion seam into the disconnect
+    // Fire-and-forget; a send-related socket fault surfaces on the transport's iterator and is routed via the receiver's terminal-completion hook into the disconnect
     // path (which schedules auto-reconnect). The local catch only happens if the socket was destroyed mid-write, which we cannot recover from at the application layer;
     // logging at debug suffices because the iterator-driven teardown is the authoritative recovery.
     void this.transport.send(type, payload).catch((err: unknown) => {
@@ -2898,8 +2897,8 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
   public command<T extends Exclude<ExtendedEntityType<Extras>, TransmitEntityType>>(id: EntityId<T>, options: CommandFor<SchemaForExtended<T, Extras>>): void {
 
     // The internal {@link runCommand} runner is parameterized over the built-in {@link EntityType} for tests' ergonomic continuity. The runtime is brand-erased - the
-    // runner extracts the entity-type string from the id's prefix and consults the seam's per-instance schema resolver - so casting at this single boundary is sound:
-    // for an extras-keyed `T` the cast widens the brand to the runner's accepted type without changing the runtime payload, and the seam routes the schema lookup
+    // runner extracts the entity-type string from the id's prefix and consults the host's per-instance schema resolver - so casting at this single boundary is sound:
+    // for an extras-keyed `T` the cast widens the brand to the runner's accepted type without changing the runtime payload, and the host routes the schema lookup
     // through the per-instance table, not the module-level constant.
     runCommand(this.commandHost, id as unknown as EntityId, options as unknown);
   }
@@ -2943,7 +2942,7 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
     awaitOptions?: CommandAndAwaitOptions<T & Exclude<EntityType, NonAwaitableEntityType>>
   ): Promise<StateEventFor<SchemaForExtended<T, Extras>>> {
 
-    // Same brand-erasure pattern as {@link command}; the per-instance schema resolver flows through the seam so extras-registered entity types resolve correctly.
+    // Same brand-erasure pattern as {@link command}; the per-instance schema resolver flows through the host so extras-registered entity types resolve correctly.
     return runCommandAndAwait(
       this.commandHost,
       id as unknown as EntityId<Exclude<EntityType, NonAwaitableEntityType>>,
@@ -3228,14 +3227,14 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
 
     if(!this.voiceAssistantApi) {
 
-      const seam: VoiceAssistantHost = {
+      const voiceAssistantHost: VoiceAssistantHost = {
 
         bus: this.bus,
         log: this.log,
         send: (type, payload): void => { this.frameAndSend(type, payload); }
       };
 
-      this.voiceAssistantApi = new VoiceAssistantApi(seam);
+      this.voiceAssistantApi = new VoiceAssistantApi(voiceAssistantHost);
     }
 
     return this.voiceAssistantApi;
@@ -3258,7 +3257,7 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
 
     if(!this.serialProxyApi) {
 
-      const seam: SerialProxyHost = {
+      const serialProxyHost: SerialProxyHost = {
 
         bus: this.bus,
         deviceInfo: (): Nullable<DeviceInfo> => this.remoteDeviceInfo,
@@ -3266,7 +3265,7 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
         send: (type, payload): void => { this.frameAndSend(type, payload); }
       };
 
-      this.serialProxyApi = new SerialProxyApi(seam);
+      this.serialProxyApi = new SerialProxyApi(serialProxyHost);
     }
 
     return this.serialProxyApi;
@@ -3290,7 +3289,7 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
 
     if(!this.bluetoothProxyApi) {
 
-      const seam: BluetoothProxyHost = {
+      const bluetoothProxyHost: BluetoothProxyHost = {
 
         bus: this.bus,
         deviceInfo: (): Nullable<DeviceInfo> => this.remoteDeviceInfo,
@@ -3298,7 +3297,7 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
         send: (type, payload): void => { this.frameAndSend(type, payload); }
       };
 
-      this.bluetoothProxyApi = new BluetoothProxyApi(seam);
+      this.bluetoothProxyApi = new BluetoothProxyApi(bluetoothProxyHost);
     }
 
     return this.bluetoothProxyApi;
@@ -3323,7 +3322,7 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
 
     if(!this.zwaveProxyApi) {
 
-      const seam: ZWaveProxyHost = {
+      const zwaveProxyHost: ZWaveProxyHost = {
 
         bus: this.bus,
         deviceInfo: (): Nullable<DeviceInfo> => this.remoteDeviceInfo,
@@ -3331,7 +3330,7 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
         send: (type, payload): void => { this.frameAndSend(type, payload); }
       };
 
-      this.zwaveProxyApi = new ZWaveProxyApi(seam);
+      this.zwaveProxyApi = new ZWaveProxyApi(zwaveProxyHost);
     }
 
     return this.zwaveProxyApi;
@@ -3358,7 +3357,7 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
       return existing;
     }
 
-    const seam: CameraHost = {
+    const cameraHost: CameraHost = {
 
       bus: this.bus,
       log: this.log,
@@ -3366,7 +3365,7 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
       send: (type, payload): void => { this.frameAndSend(type, payload); }
     };
 
-    const fresh = new CameraApi(seam, id);
+    const fresh = new CameraApi(cameraHost, id);
 
     this.cameraInstances.set(id, fresh);
 

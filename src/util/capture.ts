@@ -7,7 +7,7 @@
  * Capture-replay support for the espc CLI's `record` and `replay` commands.
  *
  * The two halves share one byte-level capture format and one design principle: a capture is the ordered stream of decoded inbound protocol messages, recorded at the
- * transport seam. Recording wraps the real {@link Transport} in a {@link RecordingTransport} tee that copies every message the host pulls off the wire;
+ * transport boundary. Recording wraps the real {@link Transport} in a {@link RecordingTransport} tee that copies every message the host pulls off the wire;
  * replay feeds that same stream back through a {@link MockTransport} to drive a real {@link EspHomeClient} through a
  * full connect.
  *

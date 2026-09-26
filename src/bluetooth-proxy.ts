@@ -6,8 +6,8 @@
 /**
  * Bluetooth-proxy sub-API.
  *
- * @remarks Lazy-instantiated single-instance namespace exposed via `client.bluetooth`. Composes with the host via a narrow {@link BluetoothProxyHost} seam - no reach
- * into host private fields, only the bus, the logger, a synchronous frame-send hook, and an accessor for the latest {@link DeviceInfo} (to surface
+ * @remarks Lazy-instantiated single-instance namespace exposed via `client.bluetooth`. Composes with the host via the narrow {@link BluetoothProxyHost} interface -
+ * no reach into host private fields, only the bus, the logger, a synchronous frame-send hook, and an accessor for the latest {@link DeviceInfo} (to surface
  * the BLE-proxy capability flags advertised by the device).
  *
  * Two related surfaces live in this module:
@@ -21,8 +21,8 @@
  *    key map.
  *
  * The composition story mirrors {@link VoiceAssistantApi}: a single sub-API namespace housing related state, refcounted-subscription patterns for
- * streamed events, and cached pushes that synchronous accessors read. The class is intentionally large - BLE GATT is intrinsically wide - but the seam, the host
- * surface, and the in-flight error router are all uniform across operations.
+ * streamed events, and cached pushes that synchronous accessors read. The class is intentionally large - BLE GATT is intrinsically wide - but the host interface it
+ * consumes, the surface it exposes to the host, and the in-flight error router are all uniform across operations.
  *
  * @module bluetooth-proxy
  */
@@ -223,7 +223,7 @@ export interface ConnectionParams {
 }
 
 /**
- * Narrow seam the host implements for the Bluetooth-proxy sub-API. Mirrors {@link VoiceAssistantHost} and
+ * Narrow interface the host implements for the Bluetooth-proxy sub-API. Mirrors {@link VoiceAssistantHost} and
  * {@link SerialProxyHost} in shape: a bus, a logger, a frame-send hook, plus a read-through accessor for the latest decoded {@link
  * DeviceInfo} so the {@link BluetoothProxyApi.available} getter can consult the BLE-proxy feature flags without reaching into host private fields.
  *
@@ -395,7 +395,7 @@ export class BluetoothProxyApi implements SubscriptionLifecycle {
   /**
    * Constructs the sub-API. The host argument carries the bus, logger, send hook, and device-info accessor; the sub-API does not store or read other host state.
    *
-   * @param host - The host seam.
+   * @param host - The host interface.
    * @internal
    */
   public constructor(host: BluetoothProxyHost) {
@@ -1191,7 +1191,7 @@ export class BluetoothProxyApi implements SubscriptionLifecycle {
    * `decodeBluetoothLERawAdvertisement`, which uses {@link readVarintBigInt} for the uint64 address field so 64-bit values round-trip without
    * precision loss.
    *
-   * @internal Inbound dispatch seam; not part of the consumer surface. Invoked exclusively by the host's run-phase message routing.
+   * @internal Inbound dispatch entry point; not part of the consumer surface. Invoked exclusively by the host's run-phase message routing.
    * @param payload - Raw protobuf bytes for the response message.
    */
   public acceptAdvertisementsBatch(payload: Buffer): void {
@@ -1227,7 +1227,7 @@ export class BluetoothProxyApi implements SubscriptionLifecycle {
    * @remarks Pushes are unsolicited - the device emits whenever the scanner transitions. A malformed push (missing required field) is logged at warn and dropped; the
    * cached state is left at its previous value so consumers do not see a partial transition.
    *
-   * @internal Inbound dispatch seam; not part of the consumer surface. Invoked exclusively by the host's run-phase message routing.
+   * @internal Inbound dispatch entry point; not part of the consumer surface. Invoked exclusively by the host's run-phase message routing.
    * @param payload - Raw protobuf bytes for the response message.
    */
   public acceptScannerStateResponse(payload: Buffer): void {
@@ -1260,7 +1260,7 @@ export class BluetoothProxyApi implements SubscriptionLifecycle {
    * either `connectCorrelator` or `disconnectCorrelator`, updates `connectionStateCache`, and emits `bluetoothConnectionState` for streaming
    * consumers regardless of which correlator (if any) had a pending await.
    *
-   * @internal Inbound dispatch seam; not part of the consumer surface. Invoked exclusively by the host's run-phase message routing.
+   * @internal Inbound dispatch entry point; not part of the consumer surface. Invoked exclusively by the host's run-phase message routing.
    * @param payload - Raw protobuf bytes for the response message.
    */
   public acceptDeviceConnectionResponse(payload: Buffer): void {
@@ -1334,7 +1334,7 @@ export class BluetoothProxyApi implements SubscriptionLifecycle {
    * Decode an inbound `BluetoothGATTGetServicesResponse` (id 71). Accumulates the decoded services into the in-flight buffer keyed by address; the matching Done
    * sentinel (id 72) resolves the await with the final accumulator.
    *
-   * @internal Inbound dispatch seam; not part of the consumer surface. Invoked exclusively by the host's run-phase message routing.
+   * @internal Inbound dispatch entry point; not part of the consumer surface. Invoked exclusively by the host's run-phase message routing.
    * @param payload - Raw protobuf bytes for the response message.
    */
   public acceptGetServicesResponse(payload: Buffer): void {
@@ -1365,7 +1365,7 @@ export class BluetoothProxyApi implements SubscriptionLifecycle {
    * Decode an inbound `BluetoothGATTGetServicesDoneResponse` (id 72). Resolves the matching service-discovery await with the accumulated service list and clears the
    * in-flight accumulator.
    *
-   * @internal Inbound dispatch seam; not part of the consumer surface. Invoked exclusively by the host's run-phase message routing.
+   * @internal Inbound dispatch entry point; not part of the consumer surface. Invoked exclusively by the host's run-phase message routing.
    * @param payload - Raw protobuf bytes for the response message.
    */
   public acceptGetServicesDoneResponse(payload: Buffer): void {
@@ -1399,7 +1399,7 @@ export class BluetoothProxyApi implements SubscriptionLifecycle {
    * Decode an inbound `BluetoothGATTReadResponse` (id 74). Resolves the matching `readCorrelator` entry with the `data` field. Shared response for both
    * characteristic read (73) and descriptor read (76).
    *
-   * @internal Inbound dispatch seam; not part of the consumer surface. Invoked exclusively by the host's run-phase message routing.
+   * @internal Inbound dispatch entry point; not part of the consumer surface. Invoked exclusively by the host's run-phase message routing.
    * @param payload - Raw protobuf bytes for the response message.
    */
   public acceptGattReadResponse(payload: Buffer): void {
@@ -1423,7 +1423,7 @@ export class BluetoothProxyApi implements SubscriptionLifecycle {
    * Decode an inbound `BluetoothGATTWriteResponse` (id 83). Resolves the matching `writeCorrelator` entry. Shared response for both characteristic write (75) and
    * descriptor write (77).
    *
-   * @internal Inbound dispatch seam; not part of the consumer surface. Invoked exclusively by the host's run-phase message routing.
+   * @internal Inbound dispatch entry point; not part of the consumer surface. Invoked exclusively by the host's run-phase message routing.
    * @param payload - Raw protobuf bytes for the response message.
    */
   public acceptGattWriteResponse(payload: Buffer): void {
@@ -1449,7 +1449,7 @@ export class BluetoothProxyApi implements SubscriptionLifecycle {
    * Decode an inbound `BluetoothGATTNotifyResponse` (id 84). Resolves the matching `notifySetupCorrelator` entry. Acknowledgment for the
    * `BluetoothGATTNotifyRequest` enable/disable; not to be confused with the notify-data stream (id 79).
    *
-   * @internal Inbound dispatch seam; not part of the consumer surface. Invoked exclusively by the host's run-phase message routing.
+   * @internal Inbound dispatch entry point; not part of the consumer surface. Invoked exclusively by the host's run-phase message routing.
    * @param payload - Raw protobuf bytes for the response message.
    */
   public acceptGattNotifyResponse(payload: Buffer): void {
@@ -1473,7 +1473,7 @@ export class BluetoothProxyApi implements SubscriptionLifecycle {
    * Decode an inbound `BluetoothGATTNotifyDataResponse` (id 79). Emits the chunk on the `bluetoothNotifyData` bus event; consumers iterating {@link notify} filter by
    * their (address, handle) pair on the consumer side.
    *
-   * @internal Inbound dispatch seam; not part of the consumer surface. Invoked exclusively by the host's run-phase message routing.
+   * @internal Inbound dispatch entry point; not part of the consumer surface. Invoked exclusively by the host's run-phase message routing.
    * @param payload - Raw protobuf bytes for the response message.
    */
   public acceptGattNotifyDataResponse(payload: Buffer): void {
@@ -1498,7 +1498,7 @@ export class BluetoothProxyApi implements SubscriptionLifecycle {
    * Iterating the Correlator families is O(1) for practical purposes. The first family with a pending entry, in read, write, notify-setup order, consumes the error -
    * subsequent Correlators are not touched, and any other pending family waits for its own timeout.
    *
-   * @internal Inbound dispatch seam; not part of the consumer surface. Invoked exclusively by the host's run-phase message routing.
+   * @internal Inbound dispatch entry point; not part of the consumer surface. Invoked exclusively by the host's run-phase message routing.
    * @param payload - Raw protobuf bytes for the response message.
    */
   public acceptGattErrorResponse(payload: Buffer): void {
@@ -1538,7 +1538,7 @@ export class BluetoothProxyApi implements SubscriptionLifecycle {
   /**
    * Decode an inbound `BluetoothDevicePairingResponse` (id 85). Resolves the pair await on success, rejects with `code="GATT_PAIR_FAILED"` on failure.
    *
-   * @internal Inbound dispatch seam; not part of the consumer surface. Invoked exclusively by the host's run-phase message routing.
+   * @internal Inbound dispatch entry point; not part of the consumer surface. Invoked exclusively by the host's run-phase message routing.
    * @param payload - Raw protobuf bytes for the response message.
    */
   public acceptPairingResponse(payload: Buffer): void {
@@ -1569,7 +1569,7 @@ export class BluetoothProxyApi implements SubscriptionLifecycle {
   /**
    * Decode an inbound `BluetoothDeviceUnpairingResponse` (id 86).
    *
-   * @internal Inbound dispatch seam; not part of the consumer surface. Invoked exclusively by the host's run-phase message routing.
+   * @internal Inbound dispatch entry point; not part of the consumer surface. Invoked exclusively by the host's run-phase message routing.
    * @param payload - Raw protobuf bytes for the response message.
    */
   public acceptUnpairingResponse(payload: Buffer): void {
@@ -1600,7 +1600,7 @@ export class BluetoothProxyApi implements SubscriptionLifecycle {
   /**
    * Decode an inbound `BluetoothDeviceClearCacheResponse` (id 88).
    *
-   * @internal Inbound dispatch seam; not part of the consumer surface. Invoked exclusively by the host's run-phase message routing.
+   * @internal Inbound dispatch entry point; not part of the consumer surface. Invoked exclusively by the host's run-phase message routing.
    * @param payload - Raw protobuf bytes for the response message.
    */
   public acceptClearCacheResponse(payload: Buffer): void {
@@ -1631,7 +1631,7 @@ export class BluetoothProxyApi implements SubscriptionLifecycle {
   /**
    * Decode an inbound `BluetoothConnectionsFreeResponse` (id 81). Updates `cachedConnectionsFree` and emits `bluetoothConnectionsFree` for streaming consumers.
    *
-   * @internal Inbound dispatch seam; not part of the consumer surface. Invoked exclusively by the host's run-phase message routing.
+   * @internal Inbound dispatch entry point; not part of the consumer surface. Invoked exclusively by the host's run-phase message routing.
    * @param payload - Raw protobuf bytes for the response message.
    */
   public acceptConnectionsFreeResponse(payload: Buffer): void {
@@ -1660,7 +1660,7 @@ export class BluetoothProxyApi implements SubscriptionLifecycle {
    * Decode an inbound `BluetoothSetConnectionParamsResponse` (id 146). Resolves the matching `setConnectionParams` await; rejects with
    * `code="GATT_SET_CONNECTION_PARAMS_FAILED"` on nonzero `error`.
    *
-   * @internal Inbound dispatch seam; not part of the consumer surface. Invoked exclusively by the host's run-phase message routing.
+   * @internal Inbound dispatch entry point; not part of the consumer surface. Invoked exclusively by the host's run-phase message routing.
    * @param payload - Raw protobuf bytes for the response message.
    */
   public acceptSetConnectionParamsResponse(payload: Buffer): void {

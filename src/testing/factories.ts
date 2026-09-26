@@ -107,8 +107,8 @@ StateEventFor<typeof ENTITY_SCHEMAS[T]> {
   // The schema-derived `StateEventFor` type carves a unique discriminated union variant per `EntityType`. The `fields` input is checked against the per-type partial
   // `Partial<StateEventFor<typeof ENTITY_SCHEMAS[T]>>`, so callers get compile-time rejection of typo'd or wrong-typed fields, but proving the assembled object
   // satisfies the exact narrowed variant from a generic `T` would require the call site to enumerate the full union - exactly the boilerplate factories exist to avoid.
-  // The double cast is the structurally honest seam on the assembled RETURN object: the input surface gains checking while the output trusts the caller's shape. This is
-  // one of the documented `as unknown as` boundary casts in the codebase.
+  // The double cast is the structurally honest boundary on the assembled RETURN object: the input surface gains checking while the output trusts the caller's shape.
+  // This is one of the documented `as unknown as` boundary casts in the codebase.
   } as unknown as StateEventFor<typeof ENTITY_SCHEMAS[T]>;
 }
 

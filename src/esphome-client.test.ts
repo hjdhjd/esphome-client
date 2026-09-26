@@ -1384,7 +1384,7 @@ describe("EspHomeClient.connect - error and abort paths", () => {
   test("connect with PSK falls back to plaintext when the peer closed the socket during the noise handshake", async () => {
 
     // PEER_CLOSED_NOISE is one of the two genuine no-encryption signals carried by PeerClosedDuringNoiseError. The gate falls back: a second (plaintext) transport is
-    // constructed and the connect succeeds unencrypted. This pins the OTHER PeerClosedDuringNoiseError code than the plaintext-indicator test below.
+    // constructed and the connect succeeds unencrypted. This asserts the OTHER PeerClosedDuringNoiseError code than the plaintext-indicator test below.
     const transports: MockTransport[] = [];
     const transportFactory = (): MockTransport => {
 
@@ -1999,7 +1999,7 @@ describe("EspHomeClient state fanout - per entity type", () => {
 
   test("cache contract: latest/snapshot/snapshotFor reads from inside telemetry and per-type listeners see the just-emitted event", async () => {
 
-    // This test pins the mutate-then-notify ordering. If a future refactor reverses it (emit before latestCache.set), every assertion below flips to null/0 and the
+    // This test locks in the mutate-then-notify ordering. If a future refactor reverses it (emit before latestCache.set), every assertion below flips to null/0 and the
     // test fails red. The contract matters for connect-then-construct consumers that use `client.snapshot()` from inside `on("telemetry")` as a completion gate.
     const transport = new MockTransport();
     const client = new EspHomeClient({ host: "test.local", logger: quietLogger(), reconnect: false, transportFactory: (): MockTransport => transport });
@@ -2470,9 +2470,9 @@ describe("EspHomeClient.disconnect / disconnectAsync / dispose", () => {
   });
 });
 
-// 6b. Run-phase terminal-completion seam (passive transport death during the run phase)
+// 6b. Run-phase terminal-completion hook (passive transport death during the run phase)
 
-describe("EspHomeClient run-phase terminal-completion seam", () => {
+describe("EspHomeClient run-phase terminal-completion hook", () => {
 
   test("a passive run-phase transport death drives a lifecycle disconnect carrying the real typed cause", async () => {
 
@@ -2488,7 +2488,8 @@ describe("EspHomeClient run-phase terminal-completion seam", () => {
     client.on("disconnect", (reason): void => { disconnectReasons.push(reason); });
 
     // Simulate a passive transport death during the run phase: the run-phase pump is parked on the transport's iterator, and fail() rejects that parked awaiter with a
-    // typed cause (peer RST/FIN, device reboot, mid-session decrypt failure, oversized frame). Pre-seam, this was a silent no-op and the client hung falsely CONNECTED.
+    // typed cause (peer RST/FIN, device reboot, mid-session decrypt failure, oversized frame). Without the terminal hook this death is a silent no-op and the client
+    // hangs falsely CONNECTED.
     const peerDeath = new ConnectionClosedByPeerError("Synthetic run-phase peer death.", "PEER_CLOSED");
 
     transport.fail(peerDeath);
@@ -2533,7 +2534,7 @@ describe("EspHomeClient run-phase terminal-completion seam", () => {
 
     await driveConnect(firstTransport, client, { signal: AbortSignal.timeout(2000) });
 
-    // Kill the live transport passively; the terminal seam must escalate to disconnectInternal, which gates maybeScheduleReconnect on the typed cause.
+    // Kill the live transport passively; the terminal hook must escalate to disconnectInternal, which gates maybeScheduleReconnect on the typed cause.
     firstTransport.fail(new ConnectionClosedByPeerError("Synthetic run-phase peer death.", "PEER_CLOSED"));
 
     // Wait past initialDelayMs so the scheduled reconnect attempt fires.
@@ -2606,8 +2607,8 @@ describe("EspHomeClient run-phase terminal-completion seam", () => {
     };
     const attemptDelays: number[] = [];
 
-    // keepAlive:false disarms the heartbeat stall timer - the sole run-phase liveness detector before this seam. The terminal-completion seam is now the run-phase
-    // detector that survives a disabled heartbeat, so a passive transport death must still drive teardown and auto-reconnect rather than hanging forever.
+    // keepAlive:false disarms the heartbeat stall timer, leaving the terminal-completion hook as the only remaining run-phase liveness detector, so a passive
+    // transport death must still drive teardown and auto-reconnect rather than hanging forever.
     const client = new EspHomeClient({
 
       host: "test.local",
@@ -2626,8 +2627,8 @@ describe("EspHomeClient run-phase terminal-completion seam", () => {
     firstTransport.fail(new ConnectionClosedByPeerError("Synthetic run-phase peer death.", "PEER_CLOSED"));
     await delay(60);
 
-    assert.ok(disconnectReasons.includes("transport terminated"), "with keepAlive disabled, the terminal seam must still tear the connection down");
-    assert.ok(attemptDelays.length > 0, "with keepAlive disabled, the terminal seam must still schedule auto-reconnect (no silent hang)");
+    assert.ok(disconnectReasons.includes("transport terminated"), "with keepAlive disabled, the terminal hook must still tear the connection down");
+    assert.ok(attemptDelays.length > 0, "with keepAlive disabled, the terminal hook must still schedule auto-reconnect (no silent hang)");
 
     client.disconnect();
   });
@@ -3006,7 +3007,7 @@ describe("EspHomeClient.camera per-id sub-API caching", () => {
 
     // Drive the full path through MockTransport: discovery -> snapshot call -> bus dispose -> typed rejection. The bus is the chokepoint behind `camera(id).snapshot()`;
     // when it closes without yielding a matching `camera` event, the for-await loop exits cleanly and the typed throw fires. We reach into the private `bus` field via
-    // the standard TypeScript-private bypass pattern used elsewhere in this file - the bus has no public dispose seam because subscription continuity across
+    // the standard TypeScript-private bypass pattern used elsewhere in this file - the bus has no public dispose method because subscription continuity across
     // connect/disconnect is a design guarantee.
     //
     // The rejection carries six independent assertions: (1) the rejection is CameraStreamClosedError, (2) the tagged code is STREAM_CLOSED, (3) the cameraId
@@ -4823,8 +4824,8 @@ describe("EspHomeClient byte-level wire fixtures", () => {
     assert.notEqual(hello, undefined);
 
     // Tag for field 1 LD = 0x0A; varint length = 14 (length of "esphome-client"); then the string; then field 2 varint major (0x10 0x01); then field 3 varint minor.
-    // The advertised minor is `CLIENT_API_VERSION.minor` in esphome-client.ts (currently 14). Bumping that constant is the deliberate "we honestly support this
-    // version" declaration; this test pins the wire shape so accidental bumps without implementation work are caught.
+    // The advertised minor is `CLIENT_API_VERSION.minor` in esphome-client.ts. Bumping that constant is the deliberate "we honestly support this
+    // version" declaration; this test locks in the wire shape so accidental bumps without implementation work are caught.
     const expected = Buffer.concat([
 
       Buffer.from([0x0A]),
@@ -5598,10 +5599,10 @@ describe("EspHomeClient util.inspect support", () => {
   });
 });
 
-// Build a controllable clock the clock-seam tests advance by hand. Mirrors heartbeat.test.ts's file-local `buildClock` shape (the heartbeat one is not exported), with an
-// explicit return type. The origin is seeded at `Date.now()` by the caller (NOT 0/1000): a near-epoch origin is what gives the `:1026` mutation-check teeth -
+// Build a controllable clock the clock tests advance by hand. Mirrors heartbeat.test.ts's file-local `buildClock` shape (the heartbeat one is not exported), with an
+// explicit return type. The origin is seeded at `Date.now()` by the caller (NOT 0/1000): a near-epoch origin is what gives the heartbeat-clock mutation check teeth -
 // when the heartbeat thread is reverted, the scheduler reads real `Date.now` while the idle baseline is the injected seed, so `idleMs ~= 0` and no stall/ping fires,
-// flipping the clock-seam tests red. A small origin would let a reverted heartbeat read `Date.now (~1.7e12) - seed(small)` = huge and stall anyway, making the
+// flipping the clock tests red. A small origin would let a reverted heartbeat read `Date.now (~1.7e12) - seed(small)` = huge and stall anyway, making the
 // mutation-check vacuous.
 function buildClock(initial: number): { advance: (deltaMs: number) => void; clock: ClockFn; set: (atMs: number) => void } {
 
@@ -5615,20 +5616,21 @@ function buildClock(initial: number): { advance: (deltaMs: number) => void; cloc
   };
 }
 
-// 23. Clock seam - live heartbeat stall / RTT / connect-timeout integration. These drive the heartbeat stall, ping RTT, and stall-recovery behaviors through the REAL
-// EspHomeClient by injecting a controllable clock (the C7 seam) and firing the scheduler's `setInterval` tick synchronously via node:test `mock.timers` (setInterval
-// only).
+// 23. Clock option - live heartbeat stall / RTT / connect-timeout integration. These drive the heartbeat stall, ping RTT, and stall-recovery behaviors through the REAL
+// EspHomeClient by injecting a controllable clock (the `clock` option) and firing the scheduler's `setInterval` tick synchronously via node:test `mock.timers`
+// (setInterval only).
 // The injected clock governs the idle/stall/RTT arithmetic; `mock.timers.tick(tickMs)` fires the supervisory tick the clock cannot drive; `transport.whenIdle()` settles
-// pushed-inbound dispatch. B1/B2/B3 are anti-vacuity mutation-checked by reverting the `:1026` heartbeat-clock thread (the origin = `Date.now()` makes that reversal
-// detectable - each flips red). B4 is mutation-checked against the stall count's carry across the teardown and reconnect and its reset on inbound activity. B5 pins
-// pre-existing `connectTimeoutMs` / `AbortSignal.timeout` behavior and is EXEMPT from the seam-mutation-check.
+// pushed-inbound dispatch. The stall, ping-RTT, and idle-reset tests are anti-vacuity mutation-checked by reverting the client clock the constructor hands to
+// `HeartbeatScheduler` (the origin = `Date.now()` makes that reversal detectable - each flips red). The consecutive-stall test is mutation-checked against the stall
+// count's carry across the teardown and reconnect and its reset on inbound activity. The connect-timeout test asserts `connectTimeoutMs` / `AbortSignal.timeout`
+// behavior that does not read the injected clock, so it is EXEMPT from the clock mutation-check.
 
-describe("EspHomeClient clock seam - live heartbeat stall / RTT / timeout integration", () => {
+describe("EspHomeClient clock option - live heartbeat stall / RTT / timeout integration", () => {
 
-  // B1 - heartbeat stall through the LIVE client -> teardown -> auto-reconnect, with a NEGATIVE CONTROL. The headline test: a budget-crossing idle window stalls the live
+  // Heartbeat stall through the LIVE client -> teardown -> auto-reconnect, with a NEGATIVE CONTROL. The headline test: a budget-crossing idle window stalls the live
   // client, which tears down with a typed HeartbeatStalledError cause and schedules an auto-reconnect. The negative control (tick BEFORE advancing the clock -> no stall)
   // proves the seed and the tick share one clock, so a real stall is distinguished from a spurious seed/tick time-base mismatch.
-  test("B1: a budget-crossing heartbeat stall tears the live client down with a typed cause and schedules auto-reconnect (with a negative control)", async () => {
+  test("a budget-crossing heartbeat stall tears the live client down with a typed cause and schedules auto-reconnect (with a negative control)", async () => {
 
     const clock = buildClock(Date.now());
     const transport = new MockTransport();
@@ -5741,11 +5743,12 @@ describe("EspHomeClient clock seam - live heartbeat stall / RTT / timeout integr
     }
   });
 
-  // B2 - ping RTT through the LIVE client. An idle tick past intervalMs (but short of the stall budget) sends a PING_REQUEST and stamps pingSentAt = clock(); the inbound
+  // Ping RTT through the LIVE client. An idle tick past intervalMs (but short of the stall budget) sends a PING_REQUEST and stamps pingSentAt = clock(); the inbound
   // PING_RESPONSE consumes the RTT = clock() - pingSentAt inside the scheduler's clock (the HeartbeatScheduler clock injection). The RTT lands deterministically
-  // as lastPingRttMs. The seam is the HeartbeatScheduler clock injection (NOT the connect.duration_ms clock read): without it the heartbeat reads Date.now while
-  // the idle baseline is the injected seed, so idleMs ~= 0 < intervalMs, no ping fires, consumePingRtt returns undefined, and lastPingRttMs is never set -> B2 red.
-  test("B2: an idle tick's PING_REQUEST/PING_RESPONSE round-trip lands a deterministic lastPingRttMs through the heartbeat clock", async () => {
+  // as lastPingRttMs. The tested injection is the HeartbeatScheduler clock (NOT the connect.duration_ms clock read): without it the heartbeat reads Date.now while
+  // the idle baseline is the injected seed, so idleMs ~= 0 < intervalMs and no ping fires; consumePingRtt then returns undefined, lastPingRttMs is never set, and
+  // the test fails.
+  test("an idle tick's PING_REQUEST/PING_RESPONSE round-trip lands a deterministic lastPingRttMs through the heartbeat clock", async () => {
 
     const clock = buildClock(Date.now());
     const transport = new MockTransport();
@@ -5798,10 +5801,10 @@ describe("EspHomeClient clock seam - live heartbeat stall / RTT / timeout integr
     }
   });
 
-  // B3 - delayed-frame timing / stall recovery (idle reset), with a MANDATORY positive contrast. An inbound run-phase frame resets the idle window so a subsequent
+  // Delayed-frame timing / stall recovery (idle reset), with a MANDATORY positive contrast. An inbound run-phase frame resets the idle window so a subsequent
   // sub-budget advance does NOT stall; the mandatory positive contrast (a budget-crossing advance from the recovered state DOES stall) proves the no-stall is not
   // vacuous - the tick mechanism is live and the earlier frame genuinely reset the idle window.
-  test("B3: an in-time inbound frame resets the idle window (no stall), and a later budget-crossing advance still stalls (positive contrast)", async () => {
+  test("an in-time inbound frame resets the idle window (no stall), and a later budget-crossing advance still stalls (positive contrast)", async () => {
 
     const clock = buildClock(Date.now());
     const transport = new MockTransport();
@@ -5855,10 +5858,10 @@ describe("EspHomeClient clock seam - live heartbeat stall / RTT / timeout integr
     }
   });
 
-  // B4 - the consecutive-stall count across stall-driven reconnects. A stall tears the session down, so the count has to survive the teardown and the reconnect to be
+  // The consecutive-stall count across stall-driven reconnects. A stall tears the session down, so the count has to survive the teardown and the reconnect to be
   // consecutive at all, and only the reconnected session's first inbound frame proves it live and resets the count. The reconnect handshakes arrive through the
   // setup-phase receiver rather than the run-phase activity tap, so they leave the count alone.
-  test("B4: the consecutive-stall count survives a stall-driven reconnect, reaches 2 on a second stall, and resets on inbound activity", async () => {
+  test("the consecutive-stall count survives a stall-driven reconnect, reaches 2 on a second stall, and resets on inbound activity", async () => {
 
     const clock = buildClock(Date.now());
     const firstTransport = new MockTransport();
@@ -5930,11 +5933,11 @@ describe("EspHomeClient clock seam - live heartbeat stall / RTT / timeout integr
     }
   });
 
-  // B5 - connectTimeoutMs as the sole/binding bound. Pins PRE-EXISTING AbortSignal.timeout behavior (a real coverage gap), NOT the clock seam: no injected clock, no
-  // mock.timers, and EXEMPT from the seam-mutation-check. With a small real connectTimeoutMs (50) and the default larger handshakeTimeoutMs (5000), withholding every
+  // connectTimeoutMs as the sole/binding bound. Asserts AbortSignal.timeout behavior, NOT the clock option: no injected clock, no
+  // mock.timers, and EXEMPT from the clock mutation-check. With a small real connectTimeoutMs (50) and the default larger handshakeTimeoutMs (5000), withholding every
   // handshake response makes the overall connect timeout win. Its anti-vacuity is the timing: the rejection arrives near connectTimeoutMs (~50 ms), NOT near
   // handshakeTimeoutMs (~5000 ms) - that timing IS the proof connectTimeoutMs is the binding bound.
-  test("B5: connectTimeoutMs is the binding connect bound and surfaces a typed ConnectionError wrapping a TimeoutError (no clock, pre-existing behavior)", async () => {
+  test("connectTimeoutMs is the binding connect bound and surfaces a typed ConnectionError wrapping a TimeoutError (no injected clock)", async () => {
 
     const transport = new MockTransport();
     const client = new EspHomeClient({

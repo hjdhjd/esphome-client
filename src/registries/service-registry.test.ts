@@ -67,7 +67,7 @@ describe("ServiceRegistry - construction", () => {
     assert.deepEqual(registry.all(), []);
   });
 
-  test("the host seam is the only constructor parameter", () => {
+  test("the host interface is the only constructor parameter", () => {
 
     const log = recordingLogger();
     const registry = new ServiceRegistry({ log });

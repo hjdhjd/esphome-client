@@ -1,6 +1,6 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
- * zwave-proxy.test.ts: Unit tests for the ZWaveProxyApi class. Exercises every public method against an in-memory host seam (no transport, no real device). Verifies
+ * zwave-proxy.test.ts: Unit tests for the ZWaveProxyApi class. Exercises every public method against an in-memory host (no transport, no real device). Verifies
  * the byte-pipe wire-format encode, the refcounted-subscription pattern for the AsyncIterable frame view, the cached/uncached homeId fallback, and the
  * reset/reissueOnReconnect lifecycle. The byte-pipe contract is enforced at the test level: adversarial Buffer content (null bytes, high bytes, the Z-Wave SOF byte
  * 0x01) is round-tripped end-to-end with no modification.
@@ -13,6 +13,7 @@ import { Buffer } from "node:buffer";
 import type { ClientEventsMap } from "./esphome-client.ts";
 import { EventBus } from "./event-bus.ts";
 import { MessageType } from "./protocol/message-types.ts";
+import type { Nullable } from "./types.ts";
 import { WireType } from "./protocol/wire-types.ts";
 import { ZWaveProxyApi } from "./zwave-proxy.ts";
 import type { ZWaveProxyHost } from "./zwave-proxy.ts";
@@ -38,23 +39,23 @@ interface HostHandle {
   debugLogs: string[];
   host: ZWaveProxyHost;
   sent: CapturedFrame[];
-  setDeviceInfo(info: DeviceInfoFixture | null): void;
+  setDeviceInfo(info: Nullable<DeviceInfoFixture>): void;
   warnLogs: string[];
 }
 
-// Build a fresh host seam in one call. Each test gets its own bus, captured-frames buffer, and recording logger so assertions stay isolated.
+// Build a fresh `ZWaveProxyHost` in one call. Each test gets its own bus, captured-frames buffer, and recording logger so assertions stay isolated.
 function makeHost(): HostHandle {
 
   const bus = new EventBus<ClientEventsMap>();
   const sent: CapturedFrame[] = [];
   const debugLogs: string[] = [];
   const warnLogs: string[] = [];
-  let deviceInfoFixture: DeviceInfoFixture | null = null;
+  let deviceInfoFixture: Nullable<DeviceInfoFixture> = null;
 
   const host: ZWaveProxyHost = {
 
     bus,
-    deviceInfo: (): DeviceInfoFixture | null => deviceInfoFixture,
+    deviceInfo: (): Nullable<DeviceInfoFixture> => deviceInfoFixture,
     log: {
 
       debug: (message: string): void => { debugLogs.push(message); },
@@ -71,7 +72,7 @@ function makeHost(): HostHandle {
     debugLogs,
     host,
     sent,
-    setDeviceInfo: (info: DeviceInfoFixture | null): void => { deviceInfoFixture = info; },
+    setDeviceInfo: (info: Nullable<DeviceInfoFixture>): void => { deviceInfoFixture = info; },
     warnLogs
   };
 }
@@ -194,7 +195,7 @@ describe("ZWaveProxyApi.homeId", () => {
   test("decodes a bit-31-set zwave_home_id from a DEVICE_INFO_RESPONSE wire payload as the unsigned uint32 interpretation", () => {
 
     // End-to-end coverage of the varint signedness rule: build a DEVICE_INFO_RESPONSE-shaped wire payload with field 24 (zwave_home_id) carrying a varint whose high
-    // bit is set, decode it through the real codec, hand the decoded value to the host seam, and confirm ZWaveProxyApi.homeId() reports the correct unsigned value. A
+    // bit is set, decode it through the real codec, hand the decoded value to the host, and confirm ZWaveProxyApi.homeId() reports the correct unsigned value. A
     // varint with bit 31 set must decode to its unsigned uint32 interpretation, 0xDEADBEEF (3735928559), and homeId() must surface it unsigned rather than negative.
     const wirePayload = encodeProtoFields([
       { fieldNumber: 23, value: 0x1, wireType: WireType.VARINT },
@@ -683,7 +684,7 @@ describe("ZWaveProxyApi util.inspect.custom", () => {
 
 // Drive the shared reissuable-subscription contract harness against the Z-Wave global frame channel. The harness asserts its canonical guarantees (first-subscriber
 // SUBSCRIBE / concurrent share / last-release UNSUBSCRIBE, reconnect-survival, dispose-after-reconnect, and clearConnectionState-alone wire-silence) so the
-// Z-Wave sub-API proves the same contract every migrated sub-API does. Z-Wave is a single global wire key, so classify ignores the key and branches purely on the
+// Z-Wave sub-API proves the same contract every harness-driven sub-API does. Z-Wave is a single global wire key, so classify ignores the key and branches purely on the
 // ZWAVE_PROXY_REQUEST type field.
 runReissuableSubscriptionContract<ZWaveProxyApi>({
 

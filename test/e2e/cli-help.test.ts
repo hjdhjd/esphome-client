@@ -1,13 +1,14 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
  * cli-help.test.ts: Subprocess-invocation tests for the espc CLI's help and parsing surface, plus the bin-entry contract that the binary actually starts up under
- * every invocation path npm uses (direct, symlink). The latter forever forecloses the symlink-invocation failure mode that the old self-detecting `argv[1] ===
- * fileURLToPath(import.meta.url)` pattern silently broke on; the entry/library split in espc-bin.ts vs espc.ts makes that bug structurally impossible, but the test
- * stays as a regression guard against any future change that re-introduces a path-comparison entry check.
+ * every invocation path npm uses (direct, symlink). A self-detecting `argv[1] === fileURLToPath(import.meta.url)` entry check silently fails under symlink
+ * invocation; the entry/library split in espc-bin.ts vs espc.ts makes that failure structurally impossible, and the symlink test stays as a regression guard against
+ * any change that re-introduces a path-comparison entry check.
  */
 import { describe, test } from "node:test";
 import { dirname, join } from "node:path";
 import { Buffer } from "node:buffer";
+import type { Nullable } from "../../src/types.ts";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -28,7 +29,7 @@ function runCli(args: readonly string[], cliPath: string = CLI_PATH): { stdout: 
   } catch(err) {
 
     // execFileSync throws on non-zero exit; capture status + streams.
-    const e = err as { status?: number | null; stderr?: string | Buffer; stdout?: string | Buffer };
+    const e = err as { status?: Nullable<number>; stderr?: string | Buffer; stdout?: string | Buffer };
 
     return {
 

@@ -7,16 +7,16 @@
  * Authoritative implementation of the command-dispatch entry points. Owns the orchestration logic behind {@link EspHomeClient.command} and
  * {@link EspHomeClient.commandAndAwait}; the host's two public methods are one-line delegates with their JSDoc preserved for IDE hover.
  *
- * @remarks Two named runners, one shared narrow seam. {@link runCommand} extracts the entity type from the branded id, applies the matching {@link COMMAND_ADAPTERS}
- * runtime adapter (light's RGB flatten, siren's duration round), runs the schema-driven {@link encodeEntityCommand} pipeline, frames-and-sends through the seam, and
+ * @remarks Two named runners, one shared host interface. {@link runCommand} extracts the entity type from the branded id, applies the matching {@link COMMAND_ADAPTERS}
+ * runtime adapter (light's RGB flatten, siren's duration round), runs the schema-driven {@link encodeEntityCommand} pipeline, frames-and-sends through the host, and
  * emits the `entity.commands.sent` metric. {@link runCommandAndAwait} shares that runner's encode and send, and adds a pre-subscription stage (open the bus stream
  * *before* the command sends), an `AbortSignal.any` composition (timeout plus the caller's optional signal), and a predicate-match loop normalized through
  * {@link Promise.try} so sync and async predicates collapse to one rejection path.
  *
- * The narrow seam pattern mirrors {@link RunPhaseHost} and {@link LogSubscriptionManagerHost}: a small read surface
- * plus a handful of method seams for behavior the host owns. The seam carries only state-bearing primitives - the bus the runner subscribes to for state events, the
+ * The narrow `CommandHost` interface mirrors {@link RunPhaseHost} and {@link LogSubscriptionManagerHost}: a small read surface
+ * plus a handful of methods for behavior the host owns. The interface carries only state-bearing primitives - the bus the runner subscribes to for state events, the
  * logger, the metrics sink, the registry's id <-> key bijection (`keyForId`), the registry's device-id overlay (`deviceIdForKey`), and the framing-and-send hook.
- * Pure-function imports ({@link COMMAND_ADAPTERS}, {@link encodeEntityCommand}, {@link reportUnrecognizedOptions}) are not seam members because they have no
+ * Pure-function imports ({@link COMMAND_ADAPTERS}, {@link encodeEntityCommand}, {@link reportUnrecognizedOptions}) are not interface members because they have no
  * host-state dependency.
  *
  * The error-surface asymmetry between the two runners is intentional. {@link runCommand} is fire-and-forget: a malformed branded id, an unknown entity id, an entity
@@ -107,14 +107,14 @@ export interface CommandAndAwaitOptions<T extends CommandAndAwaitable> {
 }
 
 /**
- * Narrow seam {@link runCommand} and {@link runCommandAndAwait} consume from the host. Mirrors {@link RunPhaseHost} - a small read surface
- * (bus, logger, optional metrics sink), a few method seams that delegate into the host's registry and transport, and nothing else. Pure-function imports
+ * Narrow interface {@link runCommand} and {@link runCommandAndAwait} consume from the host. Mirrors {@link RunPhaseHost} - a small read surface
+ * (bus, logger, optional metrics sink), a few methods that delegate into the host's registry and transport, and nothing else. Pure-function imports
  * ({@link COMMAND_ADAPTERS}, {@link encodeEntityCommand}, {@link reportUnrecognizedOptions}) live as direct module imports inside the runner because they have no
  * host-state dependency.
  *
- * @remarks Two design decisions hold the seam at this width. First, the encode pipeline lives in {@link encodeEntityCommand}; the runner consumes
- * it directly rather than routing through the seam, because the encoder is a pure function over the schema registry plus the (key, deviceId, options) inputs. Second,
- * {@link COMMAND_ADAPTERS} is a const-object lookup; routing it through the seam would let tests substitute adapter behavior, but no test scenario calls for
+ * @remarks Two design decisions hold the interface at this width. First, the encode pipeline lives in {@link encodeEntityCommand}; the runner consumes
+ * it directly rather than routing through the host, because the encoder is a pure function over the schema registry plus the (key, deviceId, options) inputs. Second,
+ * {@link COMMAND_ADAPTERS} is a const-object lookup; routing it through the host would let tests substitute adapter behavior, but no test scenario calls for
  * substituting the adapter table - the table itself is the SSOT for wire-vs-API divergences and is tested in {@link COMMAND_ADAPTERS}'s own test file.
  */
 export interface CommandHost {
@@ -331,7 +331,7 @@ function sendEncodedCommand(host: CommandHost, encoded: Extract<EncodeResult, { 
  * throw. {@link runCommandAndAwait} layers typed throws over this same path when its consumer needs the failure surfaced.
  *
  * @typeParam T - Entity type tag carried by the branded id.
- * @param host - The command-dispatch seam.
+ * @param host - The command-dispatch host interface.
  * @param id - The branded entity id.
  * @param options - Type-narrowed command options for the entity type.
  */
@@ -416,7 +416,7 @@ export function runCommand<T extends EntityType>(host: CommandHost, id: EntityId
  * {@link AbortSignal.timeout}, and a caller's abort surfaces as that signal's reason when the reason is an `Error` and as an `AbortError` otherwise.
  *
  * @typeParam T - Entity type tag carried by the branded id; constrained to the {@link CommandAndAwaitable} subset.
- * @param host - The command-dispatch seam.
+ * @param host - The command-dispatch host interface.
  * @param id - The branded entity id.
  * @param options - Type-narrowed command options for the entity type.
  * @param awaitOptions - Optional cancellation signal, custom timeout, and predicate.

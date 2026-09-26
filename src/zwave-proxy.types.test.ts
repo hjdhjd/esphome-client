@@ -6,6 +6,7 @@
 import { describe, test } from "node:test";
 import { Buffer } from "node:buffer";
 import { EspHomeClient } from "./esphome-client.ts";
+import type { Nullable } from "./types.ts";
 import type { ZWaveProxyApi } from "./zwave-proxy.ts";
 import assert from "node:assert/strict";
 
@@ -44,7 +45,7 @@ describe("ZWaveProxyApi - public-surface narrowing", () => {
   test("client.zwave.homeId() returns number | null", () => {
 
     const client = new EspHomeClient({ host: "localhost" });
-    const _result: number | null = client.zwave.homeId();
+    const _result: Nullable<number> = client.zwave.homeId();
 
     client.disconnect();
   });
@@ -105,7 +106,7 @@ describe("ClientEventsMap - zwave channel typing", () => {
   test("client.on(\"zwaveFrame\", cb) types the callback parameter as Buffer", () => {
 
     const client = new EspHomeClient({ host: "localhost" });
-    let _seen: Buffer | null = null;
+    let _seen: Nullable<Buffer> = null;
 
     using sub = client.on("zwaveFrame", (frame): void => { _seen = frame; });
 
@@ -115,7 +116,7 @@ describe("ClientEventsMap - zwave channel typing", () => {
   test("client.on(\"zwaveHomeIdChange\", cb) types the callback parameter as number", () => {
 
     const client = new EspHomeClient({ host: "localhost" });
-    let _seen: number | null = null;
+    let _seen: Nullable<number> = null;
 
     using sub = client.on("zwaveHomeIdChange", (homeId): void => { _seen = homeId; });
 

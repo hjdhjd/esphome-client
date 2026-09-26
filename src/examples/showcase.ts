@@ -160,8 +160,8 @@ export async function disconnectAndCleanupExample(client: EspHomeClient): Promis
 
 /**
  * Run a body callback once per successful connect. The body's signal aborts on the next disconnect so re-entrant operations (`commandAndAwait`, streams) wind down
- * before the next connect attempt. The body's first parameter is the structural `WithReconnectClient` seam (health + lifecycle); to reach the full surface (sub-APIs,
- * command, telemetry stream), close over the outer `client` reference.
+ * before the next connect attempt. The body's first parameter is the structural `WithReconnectClient` interface (health + lifecycle); to reach the full surface
+ * (sub-APIs, command, telemetry stream), close over the outer `client` reference.
  */
 // #region with-reconnect
 export async function withReconnectExample(client: EspHomeClient): Promise<void> {
@@ -902,7 +902,7 @@ export async function alarmControlPanelCommandExample(client: EspHomeClient): Pr
   }, {
 
     // The schema's state-side enumMappings narrows event.state to the AlarmControlPanelState literal-union, so this comparison is a typed compile-time check rather
-    // than a stringly-numeric guess. Forgetting which numeric value corresponds to "armed away" is no longer a thing the consumer has to remember.
+    // than a stringly-numeric guess. The consumer never has to remember which numeric value corresponds to "armed away".
     predicate: (event): boolean => event.state === AlarmControlPanelState.ARMED_AWAY,
     timeoutMs: 30000
   });

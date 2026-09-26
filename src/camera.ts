@@ -11,7 +11,7 @@
  * is dropped at each session boundary - the host clears it on both the disconnect teardown and the fresh connect.
  *
  * Multi-packet image reassembly is owned by this sub-API. The host's run-phase dispatcher decodes one `CameraImageResponse` chunk, resolves the entity-key to the
- * cached `CameraApi` (or constructs one lazily on first chunk), and delegates the chunk via the host-only `acceptChunk` seam. The sub-API buffers chunks in a private
+ * cached `CameraApi` (or constructs one lazily on first chunk), and delegates the chunk via the host-only `acceptChunk` method. The sub-API buffers chunks in a private
  * `imageBuffers` list, concatenates on the `done` flag, and emits the assembled image to the bus so existing `client.on("camera", ...)` consumers continue to fire.
  * {@link CameraApi.snapshot} sends `CAMERA_IMAGE_REQUEST(single=true)` and awaits one image; {@link CameraApi.stream} sends `CAMERA_IMAGE_REQUEST(stream=true)` and
  * yields each reassembled image.
@@ -31,8 +31,8 @@ import { ReadableStream } from "node:stream/web";
 import { encodeProtoFields } from "./protocol/codec.ts";
 
 /**
- * Narrow seam the host implements for the camera sub-API: the bus (for emitting reassembled-image events and for the snapshot/stream subscriptions), a logger, and the
- * frame-and-send hook. The per-id filter branches on the branded entity id stamped on every `camera` event, so no friendly-name resolver seam is required.
+ * Narrow interface the host implements for the camera sub-API: the bus (for emitting reassembled-image events and for the snapshot/stream subscriptions), a logger, and
+ * the frame-and-send hook. The per-id filter branches on the branded entity id stamped on every `camera` event, so no friendly-name resolver hook is required.
  *
  * @internal
  */
@@ -74,7 +74,7 @@ export class CameraApi {
   /**
    * Constructs a new camera sub-API instance for one entity.
    *
-   * @param host - Narrow host seam.
+   * @param host - Narrow host interface.
    * @param id - The branded camera id this instance is bound to.
    *
    * @internal

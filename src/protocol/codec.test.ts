@@ -307,7 +307,7 @@ describe("decodeProtobuf", () => {
   test("raises a typed TruncatedMessageError when a LENGTH_DELIMITED body runs past the buffer end", () => {
 
     // Tag for field 1 LENGTH_DELIMITED is (1 << 3) | 2 = 0x0a, length varint claims 5 bytes, but only 2 body bytes follow. A short buffer raises the typed truncation
-    // error rather than clamping silently. The length varint itself reads cleanly - only the body overruns, so the intentional need-more-bytes varint seam is
+    // error rather than clamping silently. The length varint itself reads cleanly - only the body overruns, so the intentional need-more-bytes varint signal is
     // untouched.
     const truncated = Buffer.from([ 0x0a, 0x05, 0x68, 0x69 ]);
 

@@ -19,7 +19,7 @@ import { messageTypeName } from "./protocol/index.ts";
  * Entity discovery.
  *
  * @remarks Pure decoders for `LIST_ENTITIES_*_RESPONSE` payloads + `DEVICE_INFO_RESPONSE`. Each function takes its dependencies (logger, decoded fields, schema)
- * explicitly so the module is testable in isolation. The host class owns the state-mutation seam: it calls these decoders, then writes the results into its
+ * explicitly so the module is testable in isolation. The host class owns state mutation: it calls these decoders, then writes the results into its
  * discovery maps and emits the appropriate events.
  *
  * @module discovery

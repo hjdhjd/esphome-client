@@ -734,7 +734,7 @@ describe("EventBus reserved-name insulation", () => {
     assert.deepEqual(received, [9], "the \"removeListener\" channel delivers only on an explicit emit");
   });
 
-  test("a user event matching the former dispose sentinel is an ordinary channel and does not tear down the bus", () => {
+  test("a user event named \"__bus.dispose__\" is an ordinary channel and does not tear down the bus", () => {
 
     using bus = new EventBus<ReservedNameMap>();
     const received: string[] = [];
@@ -744,10 +744,10 @@ describe("EventBus reserved-name insulation", () => {
 
     bus.emit("__bus.dispose__", "not-a-control-signal");
 
-    assert.deepEqual(received, ["not-a-control-signal"], "the former sentinel string is now an ordinary user channel");
+    assert.deepEqual(received, ["not-a-control-signal"], "\"__bus.dispose__\" must be an ordinary user channel");
 
-    // The bus must still be alive: a subsequent emit to a live listener returns true, proving the sentinel-named event disposed nothing now that teardown rides a Symbol.
-    assert.equal(bus.emit("error", "still-alive"), true, "emitting the former sentinel string must not have disposed the bus");
+    // The bus must still be alive: a subsequent emit to a live listener returns true, proving the emit above disposed nothing because teardown uses a Symbol.
+    assert.equal(bus.emit("error", "still-alive"), true, "emitting \"__bus.dispose__\" must not dispose the bus");
   });
 });
 

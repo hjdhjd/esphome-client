@@ -20,7 +20,7 @@ interface CapturedWarn {
 }
 
 /**
- * Minimal {@link EspHomeLogging} that records every `warn` call into an array and no-ops the other three levels. The receiver's diagnostics seam emits exclusively at
+ * Minimal {@link EspHomeLogging} that records every `warn` call into an array and no-ops the other levels. The receiver's diagnostics logger emits exclusively at
  * the `warn` level, so this lets a test assert exactly what was surfaced (and that nothing else was) without a real logger.
  */
 function createCapturingLog(): { log: EspHomeLogging; warns: CapturedWarn[] } {
@@ -527,7 +527,7 @@ describe("MessageReceiver edge cases", () => {
   });
 });
 
-describe("MessageReceiver diagnostics seam", () => {
+describe("MessageReceiver diagnostics logger", () => {
 
   test("a run-phase handler throw is logged and the connection is NOT torn down; the pump continues", async () => {
 

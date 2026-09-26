@@ -39,7 +39,7 @@ const recordingLogger = (): RecordingLogger => {
   };
 };
 
-// Captured outbound frame shape - the manager's host seam send hook records every wire frame here so tests can assert on the wire-protocol contract directly.
+// Captured outbound frame shape - the manager's host `send` hook records every wire frame here so tests can assert on the wire-protocol contract directly.
 interface CapturedFrame {
 
   payload: Buffer;
@@ -155,7 +155,7 @@ describe("LogSubscriptionManager - construction", () => {
     assert.equal(manager.subscriberCount, 0);
   });
 
-  test("the host seam is the only constructor parameter", () => {
+  test("the host interface is the only constructor parameter", () => {
 
     const bus = new EventBus<ClientEventsMap>();
     const log = recordingLogger();
@@ -179,7 +179,7 @@ describe("LogSubscriptionManager - construction", () => {
   });
 });
 
-describe("LogSubscriptionManager - requestDeviceLevel (imperative pin)", () => {
+describe("LogSubscriptionManager - requestDeviceLevel (imperative floor)", () => {
 
   test("sends a SUBSCRIBE_LOGS_REQUEST at the requested level with dump_config=false by default", () => {
 
@@ -206,7 +206,7 @@ describe("LogSubscriptionManager - requestDeviceLevel (imperative pin)", () => {
     assert.equal(outbound.length, 1);
     assert.equal(decodeSubscribeLogsFrame(outbound[0]!).level, LogLevel.INFO);
     assert.equal(manager.activeLevel, LogLevel.INFO);
-    // The imperative pin is an internal subscriber, not a consumer iterator, so it does not count toward subscriberCount.
+    // The imperative floor is an internal subscriber, not a consumer iterator, so it does not count toward subscriberCount.
     assert.equal(manager.subscriberCount, 0);
   });
 
@@ -227,7 +227,7 @@ describe("LogSubscriptionManager - requestDeviceLevel (imperative pin)", () => {
 
     manager.requestDeviceLevel(LogLevel.INFO, true);
 
-    // The pin update fires one onChange-driven send (dump config false) and the independent one-shot dump fires a second send (dump config true); both log a debug line.
+    // The floor update fires one onChange-driven send (dump config false) and the independent one-shot dump fires another (dump config true); both log a debug line.
     assert.ok(log.debugged.length >= 1);
     const dumpLine = log.debugged.find((line) => line.includes("dump config: true"));
 
@@ -255,7 +255,7 @@ describe("LogSubscriptionManager - requestDeviceLevel (imperative pin)", () => {
     }
   });
 
-  test("repeated calls at the same level send exactly ONE wire frame (acquire-then-release keeps the re-pin wire-silent)", () => {
+  test("repeated calls at the same level send exactly ONE wire frame (acquire-then-release keeps the floor replacement wire-silent)", () => {
 
     const { manager, outbound } = buildHarness();
 
@@ -263,16 +263,16 @@ describe("LogSubscriptionManager - requestDeviceLevel (imperative pin)", () => {
     manager.requestDeviceLevel(LogLevel.INFO);
     manager.requestDeviceLevel(LogLevel.INFO);
 
-    // The first call sends INFO. Each subsequent call acquires a fresh INFO pin before releasing the prior one, so the aggregate stays at INFO through both recomputes
-    // and neither emits. Re-pinning the level the device already has is silent.
+    // The first call sends INFO. Each subsequent call acquires a fresh INFO floor before releasing the prior one, so the aggregate stays at INFO through both recomputes
+    // and neither emits. Setting the floor to the level the device already has is silent.
     assert.equal(outbound.length, 1);
     assert.equal(manager.activeLevel, LogLevel.INFO);
   });
 });
 
-describe("LogSubscriptionManager - the imperative pin is a floor over subscriber levels", () => {
+describe("LogSubscriptionManager - the imperative level is a floor over subscriber levels", () => {
 
-  test("an iterator below the pin does NOT downgrade the device-side level", () => {
+  test("an iterator below the floor does NOT downgrade the device-side level", () => {
 
     const { manager, outbound } = buildHarness();
 
@@ -281,15 +281,15 @@ describe("LogSubscriptionManager - the imperative pin is a floor over subscriber
     assert.equal(outbound.length, 1);
     assert.equal(manager.activeLevel, LogLevel.VERBOSE);
 
-    // A logs(INFO)-equivalent iterator below the pin does not lower the aggregate; the device stays at the pin's VERBOSE max and no wire frame fires.
+    // A logs(INFO)-equivalent iterator below the floor does not lower the aggregate; the device stays at the floor's VERBOSE max and no wire frame fires.
     manager.subscribe(LogLevel.INFO);
 
-    assert.equal(outbound.length, 1, "an iterator below the pin must not downgrade the device");
+    assert.equal(outbound.length, 1, "an iterator below the floor must not downgrade the device");
     assert.equal(manager.activeLevel, LogLevel.VERBOSE);
     assert.equal(manager.subscriberCount, 1);
   });
 
-  test("requestDeviceLevel below the current aggregate is wire-silent (the pin floors at the max, never a transient downgrade)", () => {
+  test("requestDeviceLevel below the current aggregate is wire-silent (a floor below the max never causes a transient downgrade)", () => {
 
     const { manager, outbound } = buildHarness();
 
@@ -299,14 +299,14 @@ describe("LogSubscriptionManager - the imperative pin is a floor over subscriber
     assert.equal(outbound.length, 1);
     assert.equal(decodeSubscribeLogsFrame(outbound[0]!).level, LogLevel.VERBOSE);
 
-    // Pinning below the aggregate adds a floor that does not exceed the max, so no wire send and the device stays at VERBOSE.
+    // A floor below the aggregate does not exceed the max, so no wire send and the device stays at VERBOSE.
     manager.requestDeviceLevel(LogLevel.INFO);
 
-    assert.equal(outbound.length, 1, "a pin below the aggregate must not downgrade the device");
+    assert.equal(outbound.length, 1, "a floor below the aggregate must not downgrade the device");
     assert.equal(manager.activeLevel, LogLevel.VERBOSE);
   });
 
-  test("the pin raises the device-side level when it exceeds the current aggregate", () => {
+  test("the floor raises the device-side level when it exceeds the current aggregate", () => {
 
     const { manager, outbound } = buildHarness();
 
@@ -315,7 +315,7 @@ describe("LogSubscriptionManager - the imperative pin is a floor over subscriber
     assert.equal(outbound.length, 1);
     assert.equal(manager.activeLevel, LogLevel.INFO);
 
-    // Pinning above the aggregate raises the device level via a follow-up SUBSCRIBE_LOGS_REQUEST(VERBOSE).
+    // A floor above the aggregate raises the device level via a follow-up SUBSCRIBE_LOGS_REQUEST(VERBOSE).
     manager.requestDeviceLevel(LogLevel.VERBOSE);
 
     assert.equal(outbound.length, 2);
@@ -323,17 +323,17 @@ describe("LogSubscriptionManager - the imperative pin is a floor over subscriber
     assert.equal(manager.activeLevel, LogLevel.VERBOSE);
   });
 
-  test("re-pinning below the surviving iterator downgrades the device to the iterator's level in one frame", () => {
+  test("lowering the floor below the surviving iterator downgrades the device to the iterator's level in one frame", () => {
 
     const { manager, outbound } = buildHarness();
 
     manager.requestDeviceLevel(LogLevel.VERBOSE);
     manager.subscribe(LogLevel.INFO);
 
-    // Pin VERBOSE held the aggregate; the INFO iterator was silent below it. Outbound holds only the VERBOSE send.
+    // The VERBOSE floor held the aggregate; the INFO iterator was silent below it. Outbound holds only the VERBOSE send.
     assert.equal(outbound.length, 1);
 
-    // Re-pin to WARN. The pin floor is now WARN; the surviving INFO iterator is the new max, so the device downgrades to INFO via exactly one wire frame.
+    // Lower the floor to WARN. The surviving INFO iterator is the new max, so the device downgrades to INFO via exactly one wire frame.
     manager.requestDeviceLevel(LogLevel.WARN);
 
     assert.equal(outbound.length, 2);
@@ -341,32 +341,32 @@ describe("LogSubscriptionManager - the imperative pin is a floor over subscriber
     assert.equal(manager.activeLevel, LogLevel.INFO);
   });
 
-  test("re-pinning at the same or a higher level over a lower iterator sends at most one frame (never a transient downgrade)", () => {
+  test("replacing the floor at the same or a higher level over a lower iterator sends at most one frame (never a transient downgrade)", () => {
 
     const { manager, outbound } = buildHarness();
 
     manager.requestDeviceLevel(LogLevel.VERBOSE);
     manager.subscribe(LogLevel.INFO);
 
-    // Pin VERBOSE holds the aggregate; the INFO iterator attached silently below it.
+    // The VERBOSE floor holds the aggregate; the INFO iterator attached silently below it.
     assert.equal(outbound.length, 1);
 
-    // Re-pin at the same level. The new pin is acquired before the prior one is released, so the aggregate never dips to the INFO iterator and nothing is sent.
+    // Request the same level again. The new floor is acquired before the prior one is released, so the aggregate never dips to the INFO iterator and nothing is sent.
     manager.requestDeviceLevel(LogLevel.VERBOSE);
 
-    assert.equal(outbound.length, 1, "a same-level re-pin must not send an INFO downgrade followed by a VERBOSE re-upgrade");
+    assert.equal(outbound.length, 1, "a same-level floor replacement must not send an INFO downgrade followed by a VERBOSE re-upgrade");
     assert.equal(manager.activeLevel, LogLevel.VERBOSE);
 
-    // Re-pin higher. The acquire upgrades the device in exactly one frame, and releasing the prior VERBOSE pin afterward is silent.
+    // Raise the floor. The acquire upgrades the device in exactly one frame, and releasing the prior VERBOSE floor afterward is silent.
     manager.requestDeviceLevel(LogLevel.VERY_VERBOSE);
 
-    assert.equal(outbound.length, 2, "a higher re-pin must send exactly one frame");
+    assert.equal(outbound.length, 2, "raising the floor must send exactly one frame");
     assert.equal(decodeSubscribeLogsFrame(outbound[1]!).level, LogLevel.VERY_VERBOSE);
     assert.equal(manager.activeLevel, LogLevel.VERY_VERBOSE);
   });
 });
 
-describe("LogSubscriptionManager - the imperative pin survives reconnect", () => {
+describe("LogSubscriptionManager - the imperative floor survives reconnect", () => {
 
   test("requestDeviceLevel(INFO) re-sends SUBSCRIBE at INFO after clearConnectionState + reissueOnReconnect with no open iterator", () => {
 
@@ -377,7 +377,7 @@ describe("LogSubscriptionManager - the imperative pin survives reconnect", () =>
     assert.equal(outbound.length, 1);
     assert.equal(manager.activeLevel, LogLevel.INFO);
 
-    // Simulate the reconnect cycle. The cache is invalidated, then the surviving pin replays SUBSCRIBE_LOGS_REQUEST(INFO): the imperative level re-arms after
+    // Simulate the reconnect cycle. The cache is invalidated, then the surviving floor replays SUBSCRIBE_LOGS_REQUEST(INFO): the imperative level re-arms after
     // reconnect because it is a first-class subscriber in the ledger, even with no open consumer iterator.
     manager.clearConnectionState();
 
@@ -385,19 +385,19 @@ describe("LogSubscriptionManager - the imperative pin survives reconnect", () =>
 
     manager.reissueOnReconnect();
 
-    assert.equal(outbound.length, 2, "the imperative pin must re-send after reconnect with no open iterator");
+    assert.equal(outbound.length, 2, "the imperative floor must re-send after reconnect with no open iterator");
     assert.equal(decodeSubscribeLogsFrame(outbound[1]!).level, LogLevel.INFO);
     assert.equal(manager.activeLevel, LogLevel.INFO);
   });
 
-  test("the pin and an iterator both survive reconnect; the aggregate max is replayed", () => {
+  test("the floor and an iterator both survive reconnect; the aggregate max is replayed", () => {
 
     const { manager, outbound } = buildHarness();
 
     manager.requestDeviceLevel(LogLevel.INFO);
     manager.subscribe(LogLevel.VERBOSE);
 
-    // Pin INFO sent first; the VERBOSE iterator upgraded the aggregate to VERBOSE.
+    // The INFO floor was sent first; the VERBOSE iterator upgraded the aggregate to VERBOSE.
     assert.equal(outbound.length, 2);
     assert.equal(manager.activeLevel, LogLevel.VERBOSE);
 
@@ -419,18 +419,18 @@ describe("LogSubscriptionManager - dumpConfig is an independent one-shot side-ch
 
     manager.requestDeviceLevel(LogLevel.INFO, true);
 
-    // The pin update sends one frame (dump bit clear); the independent dump sends a distinct frame with the dump bit set.
+    // The floor update sends one frame (dump bit clear); the independent dump sends a distinct frame with the dump bit set.
     const dumpFrame = outbound.map(decodeSubscribeLogsFrame).find((decoded) => decoded.dumpConfig);
 
     assert.ok(dumpFrame);
     assert.equal(dumpFrame.level, LogLevel.INFO);
   });
 
-  test("the dump rides the authoritative level so it never downgrades the device below what iterators need", () => {
+  test("the dump is sent at the authoritative level so it never downgrades the device below what iterators need", () => {
 
     const { manager, outbound } = buildHarness();
 
-    // A VERBOSE iterator holds the aggregate. A dumpConfig pin at INFO must not drop the device to INFO; the dump frame must carry the authoritative VERBOSE level.
+    // A VERBOSE iterator holds the aggregate. A dumpConfig request at INFO must not drop the device to INFO; the dump frame must carry the authoritative VERBOSE level.
     manager.subscribe(LogLevel.VERBOSE);
     manager.requestDeviceLevel(LogLevel.INFO, true);
 
@@ -441,13 +441,13 @@ describe("LogSubscriptionManager - dumpConfig is an independent one-shot side-ch
     assert.equal(manager.activeLevel, LogLevel.VERBOSE);
   });
 
-  test("a subsequent reissueOnReconnect re-arms the pin level but does NOT re-fire the dump bit (the one-shot does not survive reconnect)", () => {
+  test("a subsequent reissueOnReconnect re-arms the floor level but does NOT re-fire the dump bit (the one-shot does not survive reconnect)", () => {
 
     const { manager, outbound } = buildHarness();
 
     manager.requestDeviceLevel(LogLevel.INFO, true);
 
-    // Before reconnect: a non-dump pin send and a dump-bit send.
+    // Before reconnect: a non-dump floor send and a dump-bit send.
     assert.ok(outbound.some((frame) => decodeSubscribeLogsFrame(frame).dumpConfig));
 
     manager.clearConnectionState();
@@ -463,7 +463,7 @@ describe("LogSubscriptionManager - dumpConfig is an independent one-shot side-ch
     assert.equal(decoded.dumpConfig, false);
   });
 
-  test("dumpConfig=true does not influence the cached activeLevel beyond the pin level", () => {
+  test("dumpConfig=true does not influence the cached activeLevel beyond the floor level", () => {
 
     const { manager } = buildHarness();
 
@@ -474,9 +474,9 @@ describe("LogSubscriptionManager - dumpConfig is an independent one-shot side-ch
   });
 });
 
-describe("LogSubscriptionManager - subscriberCount excludes the imperative pin", () => {
+describe("LogSubscriptionManager - subscriberCount excludes the imperative floor", () => {
 
-  test("a pin alone reads zero iterators", () => {
+  test("a floor alone reads zero iterators", () => {
 
     const { manager } = buildHarness();
 
@@ -485,7 +485,7 @@ describe("LogSubscriptionManager - subscriberCount excludes the imperative pin",
     assert.equal(manager.subscriberCount, 0);
   });
 
-  test("a pin plus one iterator reads one iterator", () => {
+  test("a floor plus one iterator reads one iterator", () => {
 
     const { manager } = buildHarness();
 
@@ -495,7 +495,7 @@ describe("LogSubscriptionManager - subscriberCount excludes the imperative pin",
     assert.equal(manager.subscriberCount, 1);
   });
 
-  test("two iterators with no pin read two iterators", () => {
+  test("two iterators with no floor read two iterators", () => {
 
     const { manager } = buildHarness();
 
@@ -714,7 +714,7 @@ describe("LogSubscriptionManager - subscribe: a never-iterated view releases eag
     const { manager, outbound } = buildHarness();
     const controller = new AbortController();
 
-    // An INFO pin sets the floor; a DEBUG view raises the device above it and is never iterated.
+    // An INFO floor is set; a DEBUG view raises the device above it and is never iterated.
     manager.requestDeviceLevel(LogLevel.INFO);
 
     const iter = manager.subscribe(LogLevel.DEBUG, { signal: controller.signal })[Symbol.asyncIterator]();
@@ -723,7 +723,7 @@ describe("LogSubscriptionManager - subscribe: a never-iterated view releases eag
     assert.equal(manager.subscriberCount, 1);
     assert.equal(manager.activeLevel, LogLevel.DEBUG);
 
-    // The abort alone releases the view: no next() ever ran, yet the subscriber leaves and the device drops back to the pin's INFO floor in one frame.
+    // The abort alone releases the view: no next() ever ran, yet the subscriber leaves and the device drops back to the INFO floor in one frame.
     controller.abort();
 
     assert.equal(manager.subscriberCount, 0, "the abort must release a view that was never iterated");
@@ -1423,17 +1423,17 @@ describe("LogSubscriptionManager - documented edge cases", () => {
     await iter.close();
   });
 
-  test("the imperative pin floors the device at its level even when a lower iterator opens after it (the v1 imperative-overridden bug is fixed)", () => {
+  test("the imperative floor holds the device at its level even when a lower iterator opens after it", () => {
 
     const { manager, outbound } = buildHarness();
 
     manager.requestDeviceLevel(LogLevel.DEBUG, true);
     assert.equal(manager.activeLevel, LogLevel.DEBUG);
 
-    // A new iterator at INFO opens below the pin. The aggregate stays at DEBUG (the pin floors it), so no downgrade frame fires when a lower iterator opens.
+    // A new iterator at INFO opens below the floor. The aggregate stays at DEBUG (the floor holds it), so no downgrade frame fires when a lower iterator opens.
     manager.subscribe(LogLevel.INFO);
 
     assert.equal(manager.activeLevel, LogLevel.DEBUG);
-    assert.ok(!outbound.map(decodeSubscribeLogsFrame).some((decoded) => decoded.level === LogLevel.INFO), "the lower iterator must not downgrade the pinned DEBUG level");
+    assert.ok(!outbound.map(decodeSubscribeLogsFrame).some((decoded) => decoded.level === LogLevel.INFO), "the lower iterator must not downgrade the DEBUG floor");
   });
 });

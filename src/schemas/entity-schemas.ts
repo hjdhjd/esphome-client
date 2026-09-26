@@ -8,7 +8,7 @@
  *
  * @remarks This module provides the message type IDs, field numbers, and wire types needed to encode commands and decode state responses. By centralizing these
  * definitions, we eliminate magic numbers scattered throughout the codebase and provide a single source of truth for protocol field mappings. The canonical count
- * and identity of the supported entity types is pinned by the registry-guarantee test in `entity-schemas.test.ts`, not duplicated in narrative comments here.
+ * and identity of the supported entity types is asserted by the registry-guarantee test in `entity-schemas.test.ts`, not duplicated in narrative comments here.
  *
  * @module schemas/entity-schemas
  */
@@ -56,7 +56,7 @@ export interface HasPatternField {
  * single uint32 bitmask field instead of emitting one boolean per option (compare {@link HasPatternField}). The encoder ORs each present option's `bit` into a running
  * mask, emits the value fields, then writes the aggregated mask under the schema's `bitmaskFieldNumber`.
  *
- * Currently used by water heater commands; reusable for any future entity that adopts the same bitmask shape.
+ * Water heater commands use this shape, and any entity type whose wire format carries the same aggregated bitmask can adopt it.
  */
 export interface BitmaskField {
 

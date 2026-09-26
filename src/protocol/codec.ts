@@ -493,7 +493,7 @@ export function decodeProtobuf(buffer: Buffer, options: DecodeOptions): Record<n
 
       case WireType.LENGTH_DELIMITED: {
 
-        // The length prefix is a varint; reading it preserves the intentional need-more-bytes seam (a truncated length varint surfaces as the shared readVarint
+        // The length prefix is a varint; reading it preserves the intentional need-more-bytes signal (a truncated length varint surfaces as the shared readVarint
         // behavior). We guard only the BODY: a declared length that overruns the remaining buffer must raise the typed truncation error rather than silently
         // subarray-clamping to a short buffer (which would also overshoot the offset and corrupt the remaining decode).
         const [ len, lenLen ] = readVarint(buffer, offset);

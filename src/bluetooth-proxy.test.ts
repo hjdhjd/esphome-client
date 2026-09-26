@@ -1,6 +1,6 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
- * bluetooth-proxy.test.ts: Unit tests for the BluetoothProxyApi class. Exercises every public method against an in-memory host seam (no transport, no real device).
+ * bluetooth-proxy.test.ts: Unit tests for the BluetoothProxyApi class. Exercises every public method against an in-memory host (no transport, no real device).
  * Verifies the wire-format encode, the batched fan-out path, the ReissuableSubscription-backed dimensions (advertisement, connections-free, notify) for the
  * AsyncIterable surface, and the clearConnectionState / reissueOnReconnect lifecycle. Drives the shared reissuable-subscription contract harness for each
  * dimension. Pairs with `bluetooth-proxy.types.test.ts`, which covers the type-system surface.
@@ -19,6 +19,7 @@ import type { ClientEventsMap } from "./esphome-client.ts";
 import { ConnectionError } from "./errors.ts";
 import { EventBus } from "./event-bus.ts";
 import { MessageType } from "./protocol/message-types.ts";
+import type { Nullable } from "./types.ts";
 import { WireType } from "./protocol/wire-types.ts";
 import assert from "node:assert/strict";
 import { runReissuableSubscriptionContract } from "./reissuable-subscription-contract.helpers.ts";
@@ -39,7 +40,7 @@ interface HostHandle {
   warnLogs: string[];
 }
 
-// Build a fresh host seam in one call. Each test gets its own bus, captured-frames buffer, and recording logger so assertions stay isolated.
+// Build a fresh `BluetoothProxyHost` in one call. Each test gets its own bus, captured-frames buffer, and recording logger so assertions stay isolated.
 function makeHost(): HostHandle {
 
   const bus = new EventBus<ClientEventsMap>();
@@ -51,7 +52,7 @@ function makeHost(): HostHandle {
   const host: BluetoothProxyHost = {
 
     bus,
-    deviceInfo: (): { bluetoothProxyFeatureFlags?: number } | null => ((flags === undefined) ? null : { bluetoothProxyFeatureFlags: flags }),
+    deviceInfo: (): Nullable<{ bluetoothProxyFeatureFlags?: number }> => ((flags === undefined) ? null : { bluetoothProxyFeatureFlags: flags }),
     log: {
 
       debug: (message: string): void => { debugLogs.push(message); },
@@ -680,7 +681,7 @@ describe("BluetoothProxyApi.clearConnectionState", () => {
     api.clearConnectionState();
 
     // The subscriber ledger is consumer-scoped and MUST survive clearConnectionState - a parked iterator is still open across the reconnect. Only the wire cache resets.
-    // Zeroing the ledger here would leave that survivor deaf to advertisements after reconnect, which is exactly what this assertion pins against.
+    // Zeroing the ledger here would leave that survivor deaf to advertisements after reconnect, which is exactly the failure this assertion guards against.
     assert.equal(api.subscriberCount(), 1, "clearConnectionState must preserve the surviving subscriber ledger");
 
     void iter.return?.();

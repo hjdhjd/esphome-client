@@ -134,7 +134,7 @@ describe("decodeStateFromSchema - fixed32 fields", () => {
 
   test("preserves fixed32-typed numeric fields verbatim", () => {
 
-    // Light's color_mode is a varint enum. This pins that the schema-driven decoder round-trips the varint-enum carrier (colorMode) verbatim: we encode colorMode as a
+    // Light's color_mode is a varint enum. This asserts that the schema-driven decoder round-trips the varint-enum carrier (colorMode) verbatim: we encode colorMode as a
     // VARINT field with value 7 against the real light state schema, decode it, and assert the value survives unchanged.
     const lightSchema = ENTITY_SCHEMAS.light.state;
     const fields = decodeWith(encodeProtoFields([

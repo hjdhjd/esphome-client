@@ -1,6 +1,6 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
- * entity-registry.types.test.ts: Type-level tests for the EntityRegistry brand-narrowing seam.
+ * entity-registry.types.test.ts: Type-level tests for the EntityRegistry brand-narrowing byId<T> lookup.
  */
 import type { EspHomeLogging, Nullable } from "../types.ts";
 import { describe, test } from "node:test";
@@ -22,7 +22,7 @@ const noopLogger: EspHomeLogging = {
 
 const noopHost: EntityRegistryHost = { log: noopLogger };
 
-describe("EntityRegistry - byId<T> brand-narrowing seam", () => {
+describe("EntityRegistry - byId<T> brand-narrowing lookup", () => {
 
   test("byId narrows EntityId<\"light\"> to a light-typed entity record", () => {
 

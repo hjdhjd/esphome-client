@@ -16,7 +16,7 @@
  *
  *   2. **Top-level constants with `@ts-expect-error`** - capture excess-property-check rules. Pure type-level conditional types CAN'T express excess-property
  *      checking (structural assignability is permissive between types; the check only fires on object literals at construction sites). Wrapping a deliberately
- *      misconfigured object literal in a typecheck-only constant + `@ts-expect-error` is the canonical way to pin this kind of rule.
+ *      misconfigured object literal in a typecheck-only constant + `@ts-expect-error` is the canonical way to assert this kind of rule.
  *
  * @module schemas/packed-bits.types
  */
@@ -37,7 +37,7 @@ type CommandBitSpecShape = Assert<Equal<CommandPackedBitsField["bits"][string], 
 
 /**
  * The inbound shape is structurally narrower than the command shape - every inbound spec is a valid command spec (the command spec's `hasFieldBit` is optional, so
- * omitting it satisfies the command type). Pins the "command is a structural superset" relationship so a future refactor that breaks this assignability also
+ * omitting it satisfies the command type). Locks in the "command is a structural superset" relationship so a future refactor that breaks this assignability also
  * breaks the test.
  */
 type InboundExtendsCommand = Assert<Extends<InboundPackedBitsField["bits"][string], CommandPackedBitsField["bits"][string]>>;
@@ -45,7 +45,7 @@ type InboundExtendsCommand = Assert<Extends<InboundPackedBitsField["bits"][strin
 /**
  * Excess-property rule: a literal `{ bit, hasFieldBit }` may NOT be assigned to an `InboundPackedBitsField["bits"][string]` slot via an object-literal
  * construction site. Pure type-level conditional types can't capture this (structural assignability is permissive); a `@ts-expect-error` annotation on a literal
- * construction is the only way to pin it. The constant below is never read at runtime - the .types.ts module is typecheck-only and not picked up by the test
+ * construction is the only way to assert it. The constant below is never read at runtime - the .types.ts module is typecheck-only and not picked up by the test
  * runner.
  */
 const _excessPropertyCheckInbound: InboundPackedBitsField = {
@@ -60,7 +60,7 @@ const _excessPropertyCheckInbound: InboundPackedBitsField = {
 };
 
 /**
- * Positive excess-property case: a literal `{ bit, hasFieldBit }` IS valid on a `CommandPackedBitsField["bits"][string]` slot. Pinning the positive case alongside
+ * Positive excess-property case: a literal `{ bit, hasFieldBit }` IS valid on a `CommandPackedBitsField["bits"][string]` slot. Asserting the positive case alongside
  * the negative one above catches "we accidentally made `hasFieldBit` forbidden everywhere" regressions - the directive-free assignment must compile.
  */
 const _excessPropertyCheckCommand: CommandPackedBitsField = {

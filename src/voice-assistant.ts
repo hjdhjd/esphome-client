@@ -7,8 +7,8 @@
  * Voice-assistant sub-API.
  *
  * @remarks Lazy-instantiated single-instance namespace exposed via `client.voiceAssistant`. Carves the voice-assistant entry points off the host class so the
- * file-size budget stays in check. Composes with the host via a narrow {@link VoiceAssistantHost} seam - no reach into private fields, only the bus, the logger, and a
- * synchronous frame-send hook.
+ * file-size budget stays in check. Composes with the host via the narrow {@link VoiceAssistantHost} interface - no reach into private fields, only the bus,
+ * the logger, and a synchronous frame-send hook.
  *
  * The sub-API holds two distinct state lifetimes: the PRESERVED consumer subscription intent (including the requested flags), which must survive a reconnect so the
  * device is re-armed automatically, and the connection-scoped cached configuration response, which resets per connection. The connection-scoped half clears via
@@ -32,7 +32,7 @@ import { ReadableStream } from "node:stream/web";
 import type { SubscriptionLifecycle } from "./reissuable-subscription.ts";
 
 /**
- * Narrow seam the host implements for the voice-assistant sub-API. The sub-API never touches host private fields directly.
+ * Narrow interface the host implements for the voice-assistant sub-API. The sub-API never touches host private fields directly.
  *
  * @internal
  */
@@ -511,7 +511,7 @@ export interface VoiceAssistantInboundContext {
 }
 
 /**
- * Decode a `VoiceAssistantRequest` payload and emit the resulting event on the bus. Replaces the host-class inline handler.
+ * Decode a `VoiceAssistantRequest` payload and emit the resulting event on the bus.
  *
  * @param payload - The raw protobuf bytes for the request.
  * @param ctx - Inbound context with bus, log, and nested decoder.

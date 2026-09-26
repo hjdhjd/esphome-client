@@ -32,8 +32,8 @@ export type EntityForBranded<T extends EntityType> = { [K in T]: EntityFor<typeo
  */
 
 /**
- * Host seam consumed by the registry. The registry needs the host's logger for the per-entity debug line emitted at registration time and for the warn-level dump in
- * {@link EntityRegistry.logAll}; nothing else flows across this seam.
+ * Host interface consumed by the registry. The registry needs the host's logger for the per-entity debug line emitted at registration time and for the warn-level dump
+ * in {@link EntityRegistry.logAll}; nothing else flows across this interface.
  */
 export interface EntityRegistryHost {
 
@@ -60,9 +60,9 @@ export class EntityRegistry {
   private readonly keysById: Map<EntityId, number>;
 
   /**
-   * Construct a registry bound to a host seam. Every internal index starts empty; subsequent {@link register} calls populate them in lock-step.
+   * Construct a registry bound to its host. Every internal index starts empty; subsequent {@link register} calls populate them in lock-step.
    *
-   * @param host - The host seam (logger only).
+   * @param host - The host interface (logger only).
    */
   public constructor(host: EntityRegistryHost) {
 

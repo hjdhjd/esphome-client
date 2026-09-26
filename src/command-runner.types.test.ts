@@ -1,6 +1,6 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
- * command-runner.types.test.ts: Type-level tests for the runCommand / runCommandAndAwait brand-narrowing seam.
+ * command-runner.types.test.ts: Type-level tests for the brand narrowing in the runCommand / runCommandAndAwait signatures.
  */
 import type { EspHomeLogging, Nullable } from "./types.ts";
 import { describe, test } from "node:test";

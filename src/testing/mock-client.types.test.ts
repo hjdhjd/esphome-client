@@ -14,43 +14,43 @@ import assert from "node:assert/strict";
 import { entityId } from "../entity-id.ts";
 import { mockEntity } from "./factories.ts";
 
-// This file pins MockClient as a faithful test double of EspHomeClient's consumption surface, in two complementary layers that catch different failure modes.
+// This file asserts that MockClient is a faithful test double of EspHomeClient's consumption surface, in two complementary layers that catch different failure modes.
 //
 // The first layer is the derived-surface parity guard below. It computes the members the two classes share rather than hand-listing them, then asserts member by member
 // that the mock's signature mirrors the real client's...so a shared method silently changing shape - the drift class a hand-picked spot-check list misses - becomes a
 // typecheck error at the guard's own declaration. One language constraint shapes this layer: TypeScript checks method PARAMETERS bivariantly, so an assignability
-// comparison of two method types never notices a parameter that drifted looser or tighter. The flat tier therefore pins with `Equal`, which compares symbolically
+// comparison of two method types never notices a parameter that drifted looser or tighter. The flat tier therefore asserts with `Equal`, which compares symbolically
 // rather than by assignability and so DOES catch parameter drift - the `logs(number)` vs `logs(LogLevel)` regression this guard exists to prevent.
 //
-// A companion presence guard closes the derived surface's one blind spot: a member that leaves the mock entirely just drops out of the shared set, unpinned. It requires
+// A companion presence guard closes the derived surface's one blind spot: a member that leaves the mock entirely just drops out of the shared set, unguarded. It requires
 // every string-keyed consumer member of the client, minus a documented not-modelled set, to exist on the mock, so a removed or newly-unmirrored method surfaces by name.
 //
 // The second layer is the value-level narrowing tests that follow. They instantiate the mock and drive the generic methods at concrete type arguments - a branded id
 // carries its type through `latest`/`snapshotFor`, a wrong-typed command is rejected - which both proves the generics NARROW correctly AND exercises their parameters at
 // real call sites, the one place parameter fidelity IS checked strictly. The generic tier below leans on this layer for parameter fidelity while the structural layer
-// pins its return shape, so the two are genuinely complementary rather than redundant.
+// asserts its return shape, so the two are genuinely complementary rather than redundant.
 
 // The shared surface is DERIVED, not curated: `keyof EspHomeClient & keyof MockClient` is exactly the set of members both classes declare, so a new shared method is
-// pinned automatically the moment both sides gain it - there is no parallel list to keep in step. The bare `EspHomeClient` reference resolves to the default
+// asserted automatically the moment both sides gain it - there is no parallel list to keep in step. The bare `EspHomeClient` reference resolves to the default
 // `EspHomeClient<{}>`, the no-extras instantiation a plain consumer sees and the only one the non-generic mock can mirror; under it `ExtendedEntityType<{}>` reduces to
 // `EntityType` and `SchemaForExtended<T, {}>` to `typeof ENTITY_SCHEMAS[T]`, so every Extras-threaded client method collapses to exactly the plain-`EntityType`
 // signature the mock hand-writes.
 type SharedSurfaceKey = keyof EspHomeClient & keyof MockClient;
 
-// The shared members split into three fidelity tiers, each pinned by the predicate its category warrants. Two tiers are declared as exceptions below; every other
+// The shared members split into fidelity tiers, each asserted by the predicate its category warrants. The exception tiers are declared below; every other
 // shared member falls through to the strict flat tier, so a member is guarded strictly by default and only relaxed when it is deliberately categorised here.
 
 // Exception one - the entity methods that thread the client's `Extras` generic. The mock, being non-generic, writes them out in the reduced no-extras form, so they are
 // INTERCHANGEABLE with the real signatures yet not symbolically identical...`Equal` would flag them spuriously because it does not reduce `SchemaForExtended<T, {}>` to
-// `typeof ENTITY_SCHEMAS[T]`. They are pinned with `MutuallyAssignable`, which reduces the conditionals during its check. That predicate cannot see their parameter
-// drift (methods are bivariant under assignability), so the value-level tests carry their parameter fidelity while this tier pins their return shape.
+// `typeof ENTITY_SCHEMAS[T]`. They are asserted with `MutuallyAssignable`, which reduces the conditionals during its check. That predicate cannot see their parameter
+// drift (methods are bivariant under assignability), so the value-level tests carry their parameter fidelity while this tier asserts their return shape.
 type GenericSurfaceKey = "command" | "commandAndAwait" | "latest" | "snapshotFor" | "telemetryFor" | "telemetryForId";
 
 // Exception two - the sub-API getters, whose mock return type intersects the real one with a `{ [MOCK] }` recording handle. That handle is a deliberate SUBTYPE, so they
-// are pinned one-directionally with `Extends` rather than for interchangeability.
+// are asserted one-directionally with `Extends` rather than for interchangeability.
 type SubApiSurfaceKey = "bluetooth" | "camera" | "homeAssistant" | "serial" | "services" | "voiceAssistant" | "zwave";
 
-// The default tier - every other shared member, restricted to string keys (the `Symbol.dispose`/`Symbol.asyncDispose` pair is pinned explicitly further down, keeping
+// The default tier - every other shared member, restricted to string keys (the `Symbol.dispose`/`Symbol.asyncDispose` pair is asserted explicitly further down, keeping
 // the mapped types free of symbol-key edge cases). These must be EXACTLY equal to the real client's - `Equal`, not the looser `MutuallyAssignable` - because a symbolic
 // comparison is the only structural check that catches a method parameter drifting looser (assignability would wave it through under method bivariance), and it also
 // rejects an accidental `any`.
@@ -68,7 +68,7 @@ type SubApiSurfaceDrift = {
   [K in SubApiSurfaceKey as Extends<MockClient[K], EspHomeClient[K]> extends true ? never : K]: [MockClient[K], EspHomeClient[K]];
 };
 
-// The guards. Each fails to compile the instant its drift map is non-empty. The two `Symbol.dispose` members sit outside the string-keyed maps, so they are pinned
+// The guards. Each fails to compile the instant its drift map is non-empty. The two `Symbol.dispose` members sit outside the string-keyed maps, so they are asserted
 // directly...being parameterless, `Equal` is exact and sufficient for them.
 type _FlatSurfaceMirrorsEspHomeClient = Assert<Equal<keyof FlatSurfaceDrift, never>>;
 type _GenericSurfaceMirrorsEspHomeClient = Assert<Equal<keyof GenericSurfaceDrift, never>>;
@@ -76,8 +76,8 @@ type _SubApiSurfaceMirrorsEspHomeClient = Assert<Equal<keyof SubApiSurfaceDrift,
 type _SyncDisposeMirrorsEspHomeClient = Assert<Equal<MockClient[typeof Symbol.dispose], EspHomeClient[typeof Symbol.dispose]>>;
 type _AsyncDisposeMirrorsEspHomeClient = Assert<Equal<MockClient[typeof Symbol.asyncDispose], EspHomeClient[typeof Symbol.asyncDispose]>>;
 
-// Presence guard. The tiers above pin the SHAPE of members both classes declare, but a member that silently LEAVES the mock simply drops out of the derived shared
-// surface, unpinned. This closes that blind spot: every string-keyed public member of the real client, minus the deliberately-unmodelled set below, must exist on the
+// Presence guard. The tiers above assert the SHAPE of members both classes declare, but a member that silently LEAVES the mock simply drops out of the derived shared
+// surface, unguarded. This closes that blind spot: every string-keyed public member of the real client, minus the deliberately-unmodelled set below, must exist on the
 // mock. The exclusion is inverted on purpose...the list documents what the mock does NOT model - wire framing, connection lifecycle, and diagnostics a byteless double
 // has no consumer to serve - so everything else is presence-enforced by default, and a consumer method removed from the mock (or added to the client without being
 // mirrored or excluded here) surfaces below by name.

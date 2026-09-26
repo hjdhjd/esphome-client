@@ -14,7 +14,7 @@
  * Devices that opt into `USE_API_USER_DEFINED_ACTION_RESPONSES` emit an `EXECUTE_SERVICE_RESPONSE` correlated via `callId`; consumers receive these via the host's
  * `serviceCallResult` event. Older firmware treats `executeService` as fire-and-forget and never produces the response message.
  *
- * The class is a thin sub-API namespace - it carries no internal state and delegates every operation to the host seam. The seam supplies the service registry,
+ * The class is a thin sub-API namespace - it carries no internal state and delegates every operation to the host interface, which supplies the service registry,
  * the encoder, the frame-send hook, and the logger; the api class supplies the consumer-facing method names and JSDoc.
  *
  * @module user-services
@@ -29,8 +29,8 @@ import type { ProtoField } from "./protocol/codec.ts";
 import type { ServiceRegistry } from "./registries/service-registry.ts";
 
 /**
- * Narrow seam the {@link UserServicesApi} consumes from the host. Mirrors the other sub-API seams (a few primitives plus the host's `frameAndSend` hook). The api
- * never reaches into host private state - everything it needs flows through this object.
+ * Narrow interface the {@link UserServicesApi} consumes from the host. Mirrors the other sub-API host interfaces (a few primitives plus the host's `frameAndSend`
+ * hook). The api never reaches into host private state - everything it needs flows through this object.
  *
  * @internal
  */
@@ -44,19 +44,19 @@ export interface UserServicesApiHost {
 /**
  * User-defined services sub-API. Exposes the discovered service catalog and the two execution paths (by key or by name).
  *
- * @remarks Stateless aside from the seam reference. Construct one instance per host; the singleton lifetime is managed by the host's `services` lazy getter.
+ * @remarks Stateless aside from the host reference. Construct one instance per host; the singleton lifetime is managed by the host's `services` lazy getter.
  */
 export class UserServicesApi {
 
   /**
-   * Narrow host seam. Set in the constructor and never reassigned.
+   * Narrow host interface. Set in the constructor and never reassigned.
    */
   private readonly host: UserServicesApiHost;
 
   /**
-   * Construct a user-services sub-API bound to a host seam.
+   * Construct a user-services sub-API bound to a host interface.
    *
-   * @param host - The host seam (logger, service registry, frame-send hook).
+   * @param host - The host interface (logger, service registry, frame-send hook).
    * @internal
    */
   public constructor(host: UserServicesApiHost) {

@@ -7,6 +7,7 @@ import type { SerialDataChunk, SerialProxyConfigureOptions, SerialProxyFlushResu
 import { describe, test } from "node:test";
 import { Buffer } from "node:buffer";
 import { EspHomeClient } from "./esphome-client.ts";
+import type { Nullable } from "./types.ts";
 import { SerialProxyRequestType } from "./api-constants.ts";
 import assert from "node:assert/strict";
 
@@ -122,7 +123,7 @@ describe("ClientEventsMap - serialData typing", () => {
 
     const client = new EspHomeClient({ host: "localhost" });
     // No emit is available without a transport; the callback parameter's assignment to a typed binding is the contract under test.
-    let _seen: SerialDataChunk | null = null;
+    let _seen: Nullable<SerialDataChunk> = null;
 
     using sub = client.on("serialData", (chunk): void => { _seen = chunk; });
 

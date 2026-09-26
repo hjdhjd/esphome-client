@@ -65,7 +65,7 @@ describe("ApplyOverride - refining entry shape (override wins over the wire key)
     // EntityOverrides.light tightens `effects`/`supportedColorModes` to readonly arrays for runtime-mutation prevention. Because the wire side's `effects` key
     // is omitted before the intersection runs, the override's readonly type wins outright rather than being intersected against the wire's mutable `string[]`,
     // so the field is not assignable to a mutable `string[]` target (which is what would let a caller push). The assertion below is non-executing - it assigns
-    // the reference, never mutating - so the `@ts-expect-error` pins the compile-time contract without a runtime side effect. If the override ever failed to
+    // the reference, never mutating - so the `@ts-expect-error` asserts the compile-time contract without a runtime side effect. If the override ever failed to
     // win, the field would remain a mutable `string[]`, the assignment would compile, and the `@ts-expect-error` would be UNSATISFIED (itself a type error) -
     // the test fails closed against a regression.
     const r: ApplyOverride<{ effects: string[] }, "x", { x: { effects: readonly string[] } }> = { effects: ["a"] };
@@ -96,7 +96,7 @@ describe("ApplyOverride - omit+add entry shape", () => {
 
     // The `[Omitted] extends [string]` tuple-wrap in ApplyOverride prevents distribution. A naked `Omitted extends string` would distribute the conditional over the
     // union and produce `Omit<Wire, "c"> | Omit<Wire, "d">` - the union would then accept either `c` or `d` on the public shape because each member retains the other.
-    // This test pins the correct behavior: BOTH `c` and `d` are stripped in one pass.
+    // This test locks in the correct behavior: BOTH `c` and `d` are stripped in one pass.
     const r: ApplyOverride<ThreeFields, "x", { x: { add: { b: 2 }; omit: "c" | "d" } }> = { a: 1, b: 2 };
 
     // @ts-expect-error - the `c` field is omitted by the override.
@@ -365,7 +365,7 @@ describe("ClientEventsMap - SchemaEvents inheritance is exhaustive over ENTITY_S
 
   test("every EntityType key is a key of ClientEventsMap", () => {
 
-    // If a future contributor adds a new entity type to ENTITY_SCHEMAS, the SchemaEvents mapped type extends ClientEventsMap automatically. This assertion pins the
+    // If a future contributor adds a new entity type to ENTITY_SCHEMAS, the SchemaEvents mapped type extends ClientEventsMap automatically. This assertion locks in the
     // rule: `EntityType extends keyof ClientEventsMap` must hold. A typo or accidental removal of the `extends SchemaEvents` clause would surface here as the
     // generic function failing to accept a value whose entity-type tag flows through to a bus channel.
     const subscribeOnce = <K extends EntityType>(_event: K, _payload: ClientEventsMap[K]): void => { /* discard */ };

@@ -1,12 +1,12 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
- * health.types.ts: Type-level rules pinning the ConnectionHealth discriminated union's "illegal states unrepresentable" guarantees.
+ * health.types.ts: Type-level rules asserting the ConnectionHealth discriminated union's "illegal states unrepresentable" guarantees.
  */
 
 /**
  * Compile-time rules for the {@link ConnectionHealth} discriminated union. The union models the connection-health record as two mutually-exclusive
  * variants - {@link LiveConnectionHealth} (socket up, carries the `connectedAtMs` epoch) and {@link DownConnectionHealth} (socket down, forbids the
- * epoch and narrows `encrypted` to `false`). This file pins, structurally, that the illegal states the union is designed to forbid genuinely fail to compile: a down
+ * epoch and narrows `encrypted` to `false`). This file asserts, structurally, that the illegal states the union is designed to forbid genuinely fail to compile: a down
  * record with an epoch, a down record on an encrypted wire, a live record missing its epoch, and an un-narrowed read of the epoch. A regression that loosened any of
  * these would either drop a `@ts-expect-error` (turning the directive itself into an error) or break a sentinel assertion, so CI catches it.
  *
@@ -18,7 +18,7 @@
  *
  *   2. **Top-level constants with `@ts-expect-error`** - capture excess-property and required-property checks. Pure type-level conditional types can't express
  *      excess-property checking (structural assignability is permissive; the check only fires on object literals at construction sites), so a deliberately misconfigured
- *      object literal wrapped in a typecheck-only constant + `@ts-expect-error` is the canonical way to pin those rules.
+ *      object literal wrapped in a typecheck-only constant + `@ts-expect-error` is the canonical way to assert those rules.
  *
  * @module health/health.types
  */
@@ -47,8 +47,8 @@ type LiveStateIsSocketUp = Assert<Extends<LiveConnectionHealth["state"], typeof 
 type DownStateIsSocketDown = Assert<Extends<DownConnectionHealth["state"], typeof HealthState.DISCONNECTED | typeof HealthState.RECONNECTING>>;
 
 /**
- * A valid live record: carries the connect epoch and a socket-up state. The directive-free construction must compile, pinning the positive case alongside the negative
- * ones below (a regression that made `connectedAtMs` accidentally forbidden everywhere would break this).
+ * A valid live record: carries the connect epoch and a socket-up state. The directive-free construction must compile, asserting the positive case alongside the
+ * negative ones below (a regression that made `connectedAtMs` accidentally forbidden everywhere would break this).
  */
 const _validLive: LiveConnectionHealth = {
 

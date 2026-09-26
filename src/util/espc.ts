@@ -368,7 +368,7 @@ export const LEVEL_THEME: Readonly<Record<PrinterLevel, LevelTheme>> = {
 };
 
 /**
- * Dependency-injection seam for {@link Printer}. The constructor is pure: every field has a deterministic default that does not consult the runtime environment, so
+ * Injected IO interface for {@link Printer}. The constructor is pure: every field has a deterministic default that does not consult the runtime environment, so
  * tests construct directly with explicit overrides. Production callers obtain an env-aware Printer via {@link Printer.fromEnvironment}, which is the only place that
  * reads `process.stdout.isTTY`, `NO_COLOR`, and `FORCE_COLOR`.
  *
@@ -498,7 +498,7 @@ export class Printer {
   }
 
   // Internal write. When a readline is attached and we have a TTY, save the user's in-progress input, clear the prompt line, write the message, redraw the prompt with
-  // the input restored. Without a TTY (piped to a file or no readline), write directly to stdout/stderr through the IO seam so tests can capture both channels.
+  // the input restored. Without a TTY (piped to a file or no readline), write directly to stdout/stderr through `PrinterIO` so tests can capture both channels.
   private emit(line: string, isErr: boolean): void {
 
     if(this.rl && this.io.tty) {
@@ -632,7 +632,7 @@ export interface CommandOptions {
 
 /**
  * Minimal entity shape consumed by the CLI's lookup and dispatch helpers. Both `EspHomeClient.getEntitiesWithIds()` and `MockClient.getEntitiesWithIds()` return values
- * structurally compatible with this interface; the CLI never reads more than these four fields off an entity.
+ * structurally compatible with this interface; the CLI never reads more than these fields off an entity.
  *
  * @internal
  */
@@ -660,7 +660,7 @@ export interface ControlClient {
 
 /**
  * The CLI's client dependency contract: the broader sibling of {@link ControlClient}, adding the read-surface the non-control commands consume. Both the real
- * {@link EspHomeClient} and the {@link MockClient} satisfy it; src/util/espc.types.ts pins that with a compile-time drift-guard so
+ * {@link EspHomeClient} and the {@link MockClient} satisfy it; src/util/espc.types.ts asserts that with a compile-time drift-guard so
  * a method the CLI needs can never silently leave either. Extracted `run*` command-logic functions take this interface (not the concrete client) so they are
  * unit-testable against MockClient, exactly as executeControl/handleInteractiveCommand take ControlClient.
  *
@@ -2218,7 +2218,7 @@ export function executeControl(input: ExecuteControlInput): void {
 }
 
 /**
- * Print the help text for the interactive REPL. Output flows through the supplied {@link Printer} so tests capture lines via the IO seam rather than monkey-patching
+ * Print the help text for the interactive REPL. Output flows through the supplied {@link Printer} so tests capture lines via `PrinterIO` rather than monkey-patching
  * `console`.
  *
  * @internal
@@ -2714,7 +2714,7 @@ export async function dispatch(invocation: Invocation, printer: Printer): Promis
 }
 
 /**
- * Render the help text by iterating {@link CLI_COMMANDS}. Output flows through the supplied {@link Printer} so tests capture lines via the IO seam; adding or removing
+ * Render the help text by iterating {@link CLI_COMMANDS}. Output flows through the supplied {@link Printer} so tests capture lines via `PrinterIO`; adding or removing
  * a command updates the help automatically because the registry is the contract.
  *
  * @internal

@@ -1,7 +1,7 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
  * serial-proxy.test.ts: Unit tests for the SerialProxyApi class plus the extractSerialProxies device-info decoder. Exercises every public method against an in-memory
- * host seam (no transport, no real device). Verifies the wire-format encode, the Correlator-based request/response correlation, the refcounted-subscription pattern
+ * host (no transport, no real device). Verifies the wire-format encode, the Correlator-based request/response correlation, the refcounted-subscription pattern
  * for the AsyncIterable surface, and the reset/reissueOnReconnect lifecycle.
  */
 import type { CapturedContractFrame, ContractFrameKind } from "./reissuable-subscription-contract.helpers.ts";
@@ -18,6 +18,7 @@ import type { ClientEventsMap } from "./esphome-client.ts";
 import { ConnectionError } from "./errors.ts";
 import { EventBus } from "./event-bus.ts";
 import { MessageType } from "./protocol/message-types.ts";
+import type { Nullable } from "./types.ts";
 import { WireType } from "./protocol/wire-types.ts";
 import assert from "node:assert/strict";
 import { runReissuableSubscriptionContract } from "./reissuable-subscription-contract.helpers.ts";
@@ -38,7 +39,7 @@ interface HostHandle {
   warnLogs: string[];
 }
 
-// Build a fresh host seam in one call. Each test gets its own bus, captured-frames buffer, and recording logger so assertions stay isolated.
+// Build a fresh `SerialProxyHost` in one call. Each test gets its own bus, captured-frames buffer, and recording logger so assertions stay isolated.
 function makeHost(): HostHandle {
 
   const bus = new EventBus<ClientEventsMap>();
@@ -50,7 +51,7 @@ function makeHost(): HostHandle {
   const host: SerialProxyHost = {
 
     bus,
-    deviceInfo: (): { serialProxies?: readonly SerialProxyInfo[] } | null => (serialProxies ? { serialProxies } : null),
+    deviceInfo: (): Nullable<{ serialProxies?: readonly SerialProxyInfo[] }> => (serialProxies ? { serialProxies } : null),
     log: {
 
       debug: (message: string): void => { debugLogs.push(message); },

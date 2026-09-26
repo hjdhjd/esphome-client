@@ -10,7 +10,7 @@ import assert from "node:assert/strict";
 import { entityId } from "./entity-id.ts";
 
 // Construct a tagged TelemetryEvent fixture. The cache treats events as opaque values keyed by id; we only need a minimum-viable shape with the matching `type`
-// tag so `entriesFor` filters correctly. The double cast is the standard test-fixture seam.
+// tag so `entriesFor` filters correctly. The double cast is the standard test-fixture boundary.
 function makeEvent(id: EntityId, type: string, fields: Record<string, unknown> = {}): TelemetryEvent {
 
   return { entity: id, key: 0, type, ...fields } as unknown as TelemetryEvent;

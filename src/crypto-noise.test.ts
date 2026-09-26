@@ -895,7 +895,7 @@ describe("SymmetricState per-method coverage", () => {
 
 describe("Known-Answer Tests (reference vectors)", () => {
 
-  // KAT-1 pins the CipherState nonce construction against an explicitly-written literal nonce. Every other CipherState test in this file is a symmetric round-trip
+  // KAT-1 asserts the CipherState nonce construction against an explicitly-written literal nonce. Every other CipherState test in this file is a symmetric round-trip
   // (encrypt then decrypt with the same code), so a wrong nonce byte-layout - wrong endianness, or the counter at offset 0 instead of offset 4 - would round-trip
   // perfectly because both directions would share the mistake. updateNonce() builds the 12-byte nonce as [00 00 00 00][LE64(n)] (src/crypto-noise.ts:261-262); this KAT
   // drives the private counter to n=5 and asserts our output equals the same plaintext encrypted under the literal nonce [0,0,0,0, 5,0,0,0,0,0,0,0]. A non-zero counter
@@ -930,7 +930,7 @@ describe("Known-Answer Tests (reference vectors)", () => {
   test("KAT-1: DecryptWithAd at counter n=5 recovers the plaintext from the literal-nonce ciphertext", () => {
 
     // The decrypt direction must reconstruct the same nonce to verify the Poly1305 tag and recover the plaintext. A wrong nonce layout would fail the AEAD tag check
-    // rather than returning the plaintext, so this pins the read-side nonce construction independently of the write side.
+    // rather than returning the plaintext, so this asserts the read-side nonce construction independently of the write side.
     const dec = new CipherState();
 
     dec.InitializeKey(Buffer.from(kat1Key));
@@ -938,7 +938,7 @@ describe("Known-Answer Tests (reference vectors)", () => {
     assert.deepEqual(Buffer.from(dec.DecryptWithAd(kat1Ad, kat1Expected)), kat1Plaintext);
   });
 
-  // KAT-2 is an external end-to-end pin of the responder read-path handshake composition. The vector comes from haskell-cryptography/cacophony `vectors/cacophony.txt`,
+  // KAT-2 externally asserts the responder read-path handshake composition end to end. The vector comes from haskell-cryptography/cacophony `vectors/cacophony.txt`,
   // entry `Noise_NNpsk0_25519_ChaChaPoly_SHA256` - an independent Haskell Noise implementation. Its first message is `init_ephemeral_pub (32) || ChaChaPoly ciphertext +
   // Poly1305 tag (32)`. In NNpsk0 the message-1 read order is psk-then-e (the pattern is [["psk","e"],["e","ee"]] at src/crypto-noise.ts:73-77), so no `ee` DH happens
   // until message 2 and msg1 authenticates from public values alone. Our `responder.readMessage(msg1)` therefore reconstructs the matching symmetric state and recovers
@@ -1154,7 +1154,7 @@ describe("Real-cipher edge cases", () => {
 
   test("a low-order responder ephemeral throws a typed NoiseHandshakeError/INVALID_REMOTE_KEY directly from the DH wrap", () => {
 
-    // Direct pin on the diffieHellman wrap, independent of the low-order-ephemeral characterization test above. We drive a fresh paired handshake to msg2, overwrite the
+    // It asserts the diffieHellman wrap directly, independent of the low-order-ephemeral characterization test above. We drive a paired handshake to msg2, overwrite the
     // responder ephemeral with the all-zeros low-order point, and assert the initiator's readMessage throws the typed code the wrap raises - proving the public module
     // never leaks the raw OpenSSL derivation error. We rebuild the pair fresh because an initiator whose readMessage already threw is mid-pattern and must not be reused.
     const initiator = createESPHomeHandshake({ psk: Buffer.alloc(32, 0x42), role: "initiator" });
