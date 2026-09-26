@@ -21,8 +21,9 @@
  *
  * The error-surface asymmetry between the two runners is intentional. {@link runCommand} is fire-and-forget: a malformed branded id, an unknown entity id, an entity
  * type without a command schema all warn-and-drop. The contract is one-shot lossy semantics: consumer code calling fire-and-forget `command()` already accepts the
- * possibility of a dropped send. {@link runCommandAndAwait} returns a Promise; consumers expect typed failure rather than silent drop, so the same conditions throw a
- * {@link ConfigurationError} with a named code. Both behaviors are tested in both directions.
+ * possibility of a dropped send. {@link runCommandAndAwait} returns a Promise; consumers expect typed failure rather than silent drop, so a malformed or unknown id
+ * throws a {@link ConfigurationError} with a named code before anything sends, while an encode refusal (a type without a command schema, an unknown enum alias, an
+ * out-of-range value) is warned and dropped by the inner send and the await then rejects at its timeout. Both behaviors are tested in both directions.
  *
  * The pre-subscribe ordering rule is the architectural keystone of {@link runCommandAndAwait}. The bus stream is opened *before* the command sends, so a fast device
  * cannot race ahead of the listener. The internal `BackpressureStream` attaches its `EventEmitter` listener synchronously in its constructor, so the moment
@@ -56,9 +57,9 @@ export const DEFAULT_COMMAND_AWAIT_TIMEOUT_MS = 2000;
 export type TransmitEntityType = "infrared" | "radio_frequency";
 
 /**
- * Type-level constraint on the entity types {@link EspHomeClient.commandAndAwait} accepts. Excludes the read-only, stateless, and non-key-bearing entity types
- * whose state schemas do not respond to commands - calling `commandAndAwait` against them would hang until timeout. The exclusion is kept in sync with the host
- * method's own type-level constraint.
+ * The entity types {@link EspHomeClient.commandAndAwait} excludes at the type level: the read-only, stateless, and non-key-bearing entity types whose state
+ * schemas do not respond to commands - calling `commandAndAwait` against them would hang until timeout. The exclusion is kept in sync with the host method's own
+ * type-level constraint.
  *
  * @remarks `binary_sensor`, `sensor`, and `text_sensor` are read-only - they emit state but no command surface exists. `button` is stateless on the wire (the device
  * acknowledges with no telemetry). `camera` is excluded because its schema declares no `command` block, so a generic entity command can never be encoded for it;

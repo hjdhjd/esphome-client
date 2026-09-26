@@ -32,7 +32,8 @@ re-exported here so production bundles don't pull in the mock-transport surface.
 The set of barreled modules covers the connection/lifecycle surface (`esphome-client`, `lifecycle`, `health`, `reconnect`, `capabilities`), the entity model
 (`entity-id`, `schemas`, `sub-device`), the named wire-enum constants (`api-constants`) and the API feature-version table (`api-feature-versions`), the sub-APIs
 (`bluetooth-proxy`, `camera`, `home-assistant`, `serial-proxy`, `user-services`, `voice-assistant`, `zwave-proxy`), the typed error hierarchy (`errors`), the
-stream backpressure options, and the protocol-level primitives (`protocol`, `crypto-noise`, `types`).
+stream backpressure options, the type constraints and await options the command methods' signatures name (`command-runner`), and the protocol-level primitives
+(`protocol`, `crypto-noise`, `types`).
 
 ## Classes
 
@@ -97,6 +98,7 @@ stream backpressure options, and the protocol-level primitives (`protocol`, `cry
 | [ClientCapabilities](interfaces/ClientCapabilities.md) | Structured capability record. Consumers gate on named capabilities rather than version numbers or raw bitfields. Version-gated capabilities derive from the `API_FEATURE_VERSIONS` table; subsystem-flag capabilities derive from `DeviceInfo` feature-flag bits. |
 | [ClientEventsMap](interfaces/ClientEventsMap.md) | The complete set of events this client emits. Entity-keyed events are inherited from the module-private `SchemaEvents` map so the entry list tracks the schema registry as the single source of truth. Non-entity events are listed explicitly below. This interface enables strongly typed `.on()`, `.once()`, and `.stream()` overloads without resorting to `any`, and a typo in an entity event name surfaces as a compile error at the subscription site. |
 | [ClientMetrics](interfaces/ClientMetrics.md) | Optional metrics interface for observability. Consumers wire this to their backend (StatsD, OpenTelemetry, Prometheus, Datadog, custom) to count frames, time operations, and gauge state. Tags are passed as a flat record so each backend can shape labels per its conventions. |
+| [CommandAndAwaitOptions](interfaces/CommandAndAwaitOptions.md) | Per-call options for [EspHomeClient.commandAndAwait](classes/EspHomeClient.md#commandandawait). All fields are optional; defaults: 2000ms timeout, no caller signal, predicate accepts any state event for the entity. |
 | [CommandPackedBitsField](interfaces/CommandPackedBitsField.md) | Command-side packed-bits field. Mirrors [InboundPackedBitsField](interfaces/InboundPackedBitsField.md) but allows each named bit to carry an optional `hasFieldBit` that the encoder ORs into the role's `bitmaskFieldNumber` (the has-bitmask carrier) when the consumer supplies the named boolean - signaling the firmware that the corresponding packed bit is meaningful regardless of whether the consumer set it true or false. |
 | [CommandPackedBitSpec](interfaces/CommandPackedBitSpec.md) | One named bit within a [CommandPackedBitsField](interfaces/CommandPackedBitsField.md) (command role). Adds the optional `hasFieldBit` that the encoder ORs into the role's has-bitmask carrier when the consumer touches this named bit. Inbound `PackedBitSpec` deliberately omits this field so a misconfigured state/listEntities schema fails to compile rather than carrying a silently-ignored slot. |
 | [CommandSchema](interfaces/CommandSchema.md) | Defines the command message structure for an entity type. |
@@ -177,6 +179,7 @@ stream backpressure options, and the protocol-level primitives (`protocol`, `cry
 | [ClimatePreset](type-aliases/ClimatePreset.md) | Climate presets supported by ESPHome climate entities. These are predefined configurations for common scenarios. |
 | [ClimateSwingMode](type-aliases/ClimateSwingMode.md) | Climate swing modes supported by ESPHome climate entities. These control the direction of airflow from the HVAC system. |
 | [ColorMode](type-aliases/ColorMode.md) | Color modes supported by ESPHome light entities. These define the color control capabilities of lights. The numeric values are an upstream capability bitfield (`ColorMode` in `api.proto`): each entry ORs together the capability bits its mode requires, which is why the sequence is sparse (0, 1, 3, 7, 11, 19, 35, 39, 47, 51) rather than contiguous. The deprecated `COLOR_MODE_LEGACY_BRIGHTNESS = 2` is intentionally not exported - it was superseded by `BRIGHTNESS` (3). |
+| [CommandAndAwaitable](type-aliases/CommandAndAwaitable.md) | Entity types accepted by [EspHomeClient.commandAndAwait](classes/EspHomeClient.md#commandandawait). The complement of [NonAwaitableEntityType](type-aliases/NonAwaitableEntityType.md) relative to the canonical [EntityType](type-aliases/EntityType.md) set. |
 | [CommandFor](type-aliases/CommandFor.md) | Public command-options shape for a schema. Wire shape minus omitted fields plus added fields per the `CommandOverrides` entry. |
 | [ConnectionHealth](type-aliases/ConnectionHealth.md) | Live connection-health snapshot. A discriminated union over [HealthState](variables/HealthState.md): [LiveConnectionHealth](interfaces/LiveConnectionHealth.md) carries the connect epoch (`connectedAtMs`) while the socket is up; [DownConnectionHealth](interfaces/DownConnectionHealth.md) forbids it while the socket is down. Uptime is never stored; it is derived from `connectedAtMs` via [connectionUptimeMs](functions/connectionUptimeMs.md). |
 | [CoverEntity](type-aliases/CoverEntity.md) | The `cover` entity type: position, tilt, and open / close / stop operation with a current-operation state. |
@@ -219,6 +222,7 @@ stream backpressure options, and the protocol-level primitives (`protocol`, `cry
 | [MediaPlayerState](type-aliases/MediaPlayerState.md) | Media player state values reported by ESPHome media player entities on telemetry. Mirrors `api.proto` `MediaPlayerState`. Use this constant for narrowing on `MediaPlayerEvent.state` instead of raw numeric literals. |
 | [NoiseHandshakeErrorCode](type-aliases/NoiseHandshakeErrorCode.md) | Tagged codes for noise-handshake failure modes that consumers can pattern-match on. |
 | [NoiseRole](type-aliases/NoiseRole.md) | Role in the Noise protocol handshake. |
+| [NonAwaitableEntityType](type-aliases/NonAwaitableEntityType.md) | The entity types [EspHomeClient.commandAndAwait](classes/EspHomeClient.md#commandandawait) excludes at the type level: the read-only, stateless, and non-key-bearing entity types whose state schemas do not respond to commands - calling `commandAndAwait` against them would hang until timeout. The exclusion is kept in sync with the host method's own type-level constraint. |
 | [Nullable](type-aliases/Nullable.md) | Utility type that allows a value to be either the given type or `null`. |
 | [NumberEntity](type-aliases/NumberEntity.md) | The `number` entity type: a bounded numeric value set within its min / max / step range. |
 | [NumberEvent](type-aliases/NumberEvent.md) | - |
@@ -256,6 +260,7 @@ stream backpressure options, and the protocol-level primitives (`protocol`, `cry
 | [TextSensorEvent](type-aliases/TextSensorEvent.md) | - |
 | [TimeEntity](type-aliases/TimeEntity.md) | - |
 | [TimeEvent](type-aliases/TimeEvent.md) | - |
+| [TransmitEntityType](type-aliases/TransmitEntityType.md) | The entity types whose command is a raw-timings transmit. Their consumer entry point is [EspHomeClient.transmitRawTimings](classes/EspHomeClient.md#transmitrawtimings), which refuses an entity whose capabilities lack the transmitter bit, so [EspHomeClient.command](classes/EspHomeClient.md#command) excludes these types at the type level and a transmit cannot reach the wire without that check. [NonAwaitableEntityType](type-aliases/NonAwaitableEntityType.md) includes them because a transmit has no state response to await. |
 | [UpdateCommand](type-aliases/UpdateCommand.md) | Update commands accepted by ESPHome update entities. Mirrors `api.proto` `UpdateCommand`. The schema's command `enumMappings` also accepts the string keys (`"none"` / `"update"` / `"check"`); this constant gives consumers a named alternative that survives wire-enum additions. |
 | [UpdateEntity](type-aliases/UpdateEntity.md) | - |
 | [UpdateEvent](type-aliases/UpdateEvent.md) | - |

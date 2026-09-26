@@ -90,7 +90,8 @@ export class HandshakeError extends ConnectionError {}
  *
  * Code table:
  *
- * - `AUTH_FAILED` - ChaCha20-Poly1305 authentication tag verification failed during decryption (`crypto-noise.ts`). Wrong PSK or tampered ciphertext.
+ * - `AUTH_FAILED` - ChaCha20-Poly1305 authentication tag verification failed during decryption (`crypto-noise.ts`). Wrong PSK or tampered ciphertext; the
+ *   connect-flow handshake re-tags this into a permanent {@link EncryptionKeyInvalidError} coded `NOISE_HANDSHAKE_FAILED`.
  * - `CT_TOO_SHORT` - Inbound ciphertext was shorter than the 16-byte AEAD tag (`crypto-noise.ts`). Malformed inbound noise frame.
  * - `HANDSHAKE_COMPLETE` - A handshake-state operation was attempted after the handshake already completed (`crypto-noise.ts`). Library-internal lifecycle bug.
  * - `HANDSHAKE_REJECTED` - The device rejected the handshake in-band for a reason other than a wrong key, such as a malformed or unexpected handshake frame

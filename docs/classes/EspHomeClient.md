@@ -237,8 +237,8 @@ Home Assistant integration sub-API. Exposes the outbound subscribe-and-respond s
   - `respondToAction(callId, options)` - acknowledge an inbound action with a `callId` and `wantsResponse: true`. Firmware enabling
     `USE_API_HOMEASSISTANT_ACTION_RESPONSES` surfaces these fields on the `homeassistantService` event.
 
-All four methods are connection-scoped on the wire; ESPHome has no unsubscribe message, so subscriptions live until the connection drops. Re-call subscribe
-after each reconnect (typically from a `lifecycle`-stream `connect` handler) when the consumer wants the subscription to span the new session.
+The subscriptions are connection-scoped on the wire, and the client re-issues each requested subscription automatically on every successful reconnect while
+the consumer's intent stands, so a consumer subscribes once rather than after every reconnect.
 
 Usage:
 
@@ -749,7 +749,7 @@ wants the post-command state in one await rather than wiring up a separate subsc
 | ------ | ------ | ------ |
 | `id` | [`EntityId`](../type-aliases/EntityId.md)\<`T`\> | Branded entity id. |
 | `options` | [`CommandFor`](../type-aliases/CommandFor.md)\<[`SchemaForExtended`](../type-aliases/SchemaForExtended.md)\<`T`, `Extras`\>\> | Type-narrowed command options for the entity type. |
-| `awaitOptions?` | `CommandAndAwaitOptions`\<`T` & \| `"number"` \| `"alarm_control_panel"` \| `"climate"` \| `"cover"` \| `"date"` \| `"datetime"` \| `"event"` \| `"fan"` \| `"light"` \| `"lock"` \| `"media_player"` \| `"select"` \| `"siren"` \| `"switch"` \| `"text"` \| `"time"` \| `"update"` \| `"valve"` \| `"water_heater"`\> | Optional cancellation signal, custom timeout, and predicate that further narrows the matching state event. |
+| `awaitOptions?` | [`CommandAndAwaitOptions`](../interfaces/CommandAndAwaitOptions.md)\<`T` & \| `"number"` \| `"alarm_control_panel"` \| `"climate"` \| `"cover"` \| `"date"` \| `"datetime"` \| `"event"` \| `"fan"` \| `"light"` \| `"lock"` \| `"media_player"` \| `"select"` \| `"siren"` \| `"switch"` \| `"text"` \| `"time"` \| `"update"` \| `"valve"` \| `"water_heater"`\> | Optional cancellation signal, custom timeout, and predicate that further narrows the matching state event. |
 
 #### Returns
 
@@ -1986,8 +1986,9 @@ refcounted level upgrades, use [EspHomeClient.logs](#logs) instead.
 
 #### Remarks
 
-ESPHome has no unsubscribe path on the wire, so subsequent calls at a more verbose level upgrade the device-side subscription but a less verbose call
-does not downgrade it for the lifetime of the connection. Reissued automatically on every reconnect.
+ESPHome has no unsubscribe path on the wire, so subsequent calls at a more verbose level upgrade the device-side subscription. The level this method
+sets is a floor held alongside the levels of any open [EspHomeClient.logs](#logs) iterators, and the device level is the maximum across them; a later call at a
+less verbose level lowers the floor to that level without ever sending a level below the surviving maximum. Reissued automatically on every reconnect.
 
 Usage:
 
@@ -2186,7 +2187,7 @@ field layout are shared across both physical layers.
 
 | Type Parameter | Description |
 | ------ | ------ |
-| `T` *extends* `TransmitEntityType` | The branded entity-type tag; must resolve to `"infrared"` or `"radio_frequency"`. |
+| `T` *extends* [`TransmitEntityType`](../type-aliases/TransmitEntityType.md) | The branded entity-type tag; must resolve to `"infrared"` or `"radio_frequency"`. |
 
 #### Parameters
 

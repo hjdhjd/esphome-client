@@ -5,7 +5,7 @@
 
 /**
  * Shared compile-time assertion helpers consumed by the `*.types.ts` files that encode structural-equality or assignability guarantees (the lone exception,
- * `testing/recording-mock.types.ts`, pins its guarantee with the `@ts-expect-error` excess-property pattern instead and imports none of these). These types have no
+ * `testing/recording-mock.types.ts`, asserts its guarantee with the `@ts-expect-error` excess-property pattern instead and imports none of these). These types have no
  * runtime footprint - they exist purely to encode type-level guarantees that fail to compile when violated, giving the typecheck step a strong signal for "the schema
  * engine still has the structural shape it claims to have."
  *
@@ -61,7 +61,9 @@ export type Extends<A, B> = A extends B ? true : false;
  * surfaces are interchangeable for a consumer" guarantees, such as a test double whose generic methods write out in reduced form the type machinery the real class
  * threads through a generic parameter.
  *
- * @remarks Because assignability treats `any` as assignable in both directions, `MutuallyAssignable<any, T>` is `true` for every `T` - an `any` on either side is not
- * caught here. Use {@link Equal} when rejecting an accidental `any` is the point; this helper's job is interchangeability, not identity.
+ * @remarks A top-level `any` against a concrete type fails here. `Extends<any, B>` distributes to `boolean` for every `B` except `any` and `unknown`, and `boolean`
+ * is not `true`, so `MutuallyAssignable<any, T>` is `false`, `MutuallyAssignable<T, any>` is `boolean`, and both fail {@link Assert}. Only `any` against `any` or
+ * `unknown`, or an `any` nested inside an otherwise concrete shape, passes. Use {@link Equal} when rejecting every accidental `any`, nested ones included, is the
+ * point; this helper's job is interchangeability, not identity.
  */
 export type MutuallyAssignable<A, B> = Extends<A, B> extends true ? Extends<B, A> : false;

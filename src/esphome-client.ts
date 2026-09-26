@@ -528,7 +528,9 @@ export interface EspHomeClientOptions<Extras extends ExtraSchemaSet = {}> {
   /**
    * Maximum protobuf field count permitted in a single decoded message. The decoder allocates one record entry per field number; this caps that allocation to defend
    * against malformed or hostile devices that might emit a message claiming an unbounded number of fields. Default 1024 - far above any realistic ESPHome message
-   * (typical: 5-50 fields). Exceeding triggers a `MessageTooManyFieldsError` and disconnects the client.
+   * (typical: 5-50 fields). On an established connection, a message over the cap makes the decoder throw a `MessageTooManyFieldsError`; the receiver logs a warning
+   * and drops that one message, and the connection stays up because the frame was received whole and the stream remains in sync, unlike `maxFrameBytes`, whose fault
+   * ends the connection because an unbuffered frame cannot be skipped.
    */
   maxFieldsPerMessage?: number;
 
@@ -2315,8 +2317,9 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
    * Request the device-side log subscription at the supplied level. Pairs with `client.on("log", ...)` for callback-style consumption; for an `AsyncIterable` view with
    * refcounted level upgrades, use {@link EspHomeClient.logs} instead.
    *
-   * @remarks ESPHome has no unsubscribe path on the wire, so subsequent calls at a more verbose level upgrade the device-side subscription but a less verbose call
-   * does not downgrade it for the lifetime of the connection. Reissued automatically on every reconnect.
+   * @remarks ESPHome has no unsubscribe path on the wire, so subsequent calls at a more verbose level upgrade the device-side subscription. The level this method
+   * sets is a floor held alongside the levels of any open {@link EspHomeClient.logs} iterators, and the device level is the maximum across them; a later call at a
+   * less verbose level lowers the floor to that level without ever sending a level below the surviving maximum. Reissued automatically on every reconnect.
    *
    * Usage:
    *
@@ -3387,8 +3390,8 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
    *   - `respondToAction(callId, options)` - acknowledge an inbound action with a `callId` and `wantsResponse: true`. Firmware enabling
    *     `USE_API_HOMEASSISTANT_ACTION_RESPONSES` surfaces these fields on the `homeassistantService` event.
    *
-   * All four methods are connection-scoped on the wire; ESPHome has no unsubscribe message, so subscriptions live until the connection drops. Re-call subscribe
-   * after each reconnect (typically from a `lifecycle`-stream `connect` handler) when the consumer wants the subscription to span the new session.
+   * The subscriptions are connection-scoped on the wire, and the client re-issues each requested subscription automatically on every successful reconnect while
+   * the consumer's intent stands, so a consumer subscribes once rather than after every reconnect.
    *
    * Usage:
    *

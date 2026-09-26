@@ -1528,9 +1528,10 @@ export class BluetoothProxyApi implements SubscriptionLifecycle {
   /**
    * Decode an inbound `BluetoothGATTErrorResponse` (id 82) and route it to whichever Correlator family has a pending entry for the (address, handle) pair.
    *
-   * The try-each-reject pattern: at most one of `readCorrelator` / `writeCorrelator` / `notifySetupCorrelator` has a pending entry for any (address, handle) at any
-   * time (BLE does not pipeline mixed operations on a single characteristic; the per-method `*_IN_FLIGHT` guards ensure this on the client side), so iterating the
-   * Correlator families is O(1) for practical purposes. The first match consumes the error - subsequent Correlators are not touched.
+   * The try-each-reject pattern: each per-method `*_IN_FLIGHT` guard bounds only its own Correlator family (`readCorrelator` / `writeCorrelator` /
+   * `notifySetupCorrelator`), so a read and a write can be pending on one (address, handle) at once, and the error response does not name the operation it answers.
+   * Iterating the Correlator families is O(1) for practical purposes. The first family with a pending entry, in read, write, notify-setup order, consumes the error -
+   * subsequent Correlators are not touched, and any other pending family waits for its own timeout.
    *
    * @internal Inbound dispatch seam; not part of the consumer surface. Invoked exclusively by the host's run-phase message routing.
    * @param payload - Raw protobuf bytes for the response message.

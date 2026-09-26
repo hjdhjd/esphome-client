@@ -171,7 +171,7 @@ subscribeServices(): void;
 
 Subscribe to Home Assistant service calls from the ESPHome device. When subscribed, consumers receive `homeassistantService` events whenever the device triggers a
 `homeassistant.action` or `homeassistant.service` call in its ESPHome configuration. ESPHome has no unsubscribe message in the protocol; the subscription lives until
-the connection drops.
+the connection drops, and the client re-issues it on every successful reconnect, so a consumer subscribes once.
 
 Usage:
 
@@ -200,7 +200,8 @@ subscribeStates(): void;
 ```
 
 Subscribe to Home Assistant state requests from the ESPHome device. When subscribed, consumers receive `homeassistantStateRequest` events whenever the device wants
-to import the state of a Home Assistant entity. ESPHome has no unsubscribe message in the protocol; the subscription lives until the connection drops.
+to import the state of a Home Assistant entity. ESPHome has no unsubscribe message in the protocol; the subscription lives until the connection drops, and the
+client re-issues it on every successful reconnect, so a consumer subscribes once.
 
 Usage:
 
