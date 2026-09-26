@@ -14,8 +14,8 @@
  * The set of barreled modules covers the connection/lifecycle surface (`esphome-client`, `lifecycle`, `health`, `reconnect`, `capabilities`), the entity model
  * (`entity-id`, `schemas`, `sub-device`), the named wire-enum constants (`api-constants`) and the API feature-version table (`api-feature-versions`), the sub-APIs
  * (`bluetooth-proxy`, `camera`, `home-assistant`, `serial-proxy`, `user-services`, `voice-assistant`, `zwave-proxy`), the typed error hierarchy (`errors`), the
- * stream backpressure options, the type constraints and await options the command methods' signatures name (`command-runner`), and the protocol-level primitives
- * (`protocol`, `crypto-noise`, `types`).
+ * stream backpressure options, the type constraints and await options the command methods' signatures name (`command-runner`), the clock and transport types the
+ * client options name (`heartbeat`, `transport`), and the protocol-level primitives (`protocol`, `crypto-noise`, `types`).
  *
  * @module esphome-client
  */
@@ -31,6 +31,7 @@ export * from "./errors.ts";
 export * from "./esphome-client.ts";
 export type { StreamBackpressureMode, StreamOptions } from "./event-bus.ts";
 export * from "./health.ts";
+export type { ClockFn } from "./heartbeat.ts";
 export * from "./home-assistant.ts";
 export * from "./lifecycle.ts";
 export * from "./protocol/index.ts";
@@ -38,6 +39,7 @@ export * from "./reconnect.ts";
 export * from "./schemas/index.ts";
 export * from "./serial-proxy.ts";
 export * from "./sub-device.ts";
+export type { InboundMessage, NoiseCipherPair, TransportLike, TransportOpenOptions } from "./transport.ts";
 export * from "./types.ts";
 export * from "./user-services.ts";
 export * from "./voice-assistant.ts";

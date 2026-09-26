@@ -9,7 +9,7 @@ import {
   MessageTooManyFieldsError, NegotiationFailedError, NoiseHandshakeError, NoiseHandshakeTimeoutError, NotConnectedError, PeerClosedDuringNoiseError, PermanentError,
   PlaintextHandshakeError, ProtocolError, UnknownEntityTypeError, UnknownMessageTypeError, UnsupportedCapabilityError
 } from "./errors.ts";
-import type { CameraStreamClosedErrorCode, NoiseHandshakeErrorCode } from "./errors.ts";
+import type { CameraStreamClosedErrorCode, ConfigurationErrorCode, NoiseHandshakeErrorCode } from "./errors.ts";
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 
@@ -148,7 +148,7 @@ describe("Error hierarchy - instanceof checks", () => {
 
   test("NotConnectedError, ConfigurationError, UnsupportedCapabilityError extend EspHomeError but NOT PermanentError", () => {
 
-    const errs = [ new NotConnectedError("x"), new ConfigurationError("x"), new UnsupportedCapabilityError("x") ];
+    const errs = [ new NotConnectedError("x"), new ConfigurationError("x", "UNKNOWN_ENTITY_ID"), new UnsupportedCapabilityError("x") ];
 
     for(const e of errs) {
 
@@ -291,7 +291,6 @@ describe("Per-class edge enumeration", () => {
     [ "BufferOverflowError", BufferOverflowError, { permanent: false } ],
     [ "MessageTooManyFieldsError", MessageTooManyFieldsError, { permanent: false } ],
     [ "MalformedVarintError", MalformedVarintError, { permanent: false } ],
-    [ "ConfigurationError", ConfigurationError, { permanent: false } ],
     [ "NegotiationFailedError", NegotiationFailedError, { permanent: true } ],
     [ "UnsupportedCapabilityError", UnsupportedCapabilityError, { permanent: false } ]
   ];
@@ -347,6 +346,27 @@ describe("Per-class edge enumeration", () => {
       assert.equal(err instanceof ConnectionError, true);
       assert.equal(err instanceof EspHomeError, true);
       assert.equal(err.code, code);
+    }
+  });
+
+  test("ConfigurationError carries a tagged ConfigurationErrorCode and round-trips its cause", () => {
+
+    const codes: readonly ConfigurationErrorCode[] = [
+      "AWAIT_STREAM_CLOSED", "COMMAND_UNSUPPORTED", "ENUM_VALUE_UNKNOWN", "EXTRA_SCHEMA_OVERRIDES_BUILTIN", "MALFORMED_ENTITY_ID", "SCHEMA_MISSING_DECODE_CALLBACK",
+      "SCHEMA_UNKNOWN", "UNKNOWN_ENTITY_ID", "VALUE_OUT_OF_RANGE"
+    ];
+    const inner = new Error("inner");
+
+    for(const code of codes) {
+
+      const err = new ConfigurationError("test message", code, { cause: inner });
+
+      assert.equal(err instanceof EspHomeError, true);
+      assert.equal(err instanceof PermanentError, false, "a misconfiguration is not a permanent reconnect failure");
+      assert.equal(err.name, "ConfigurationError");
+      assert.equal(err.message, "test message");
+      assert.equal(err.code, code);
+      assert.equal(err.cause, inner);
     }
   });
 

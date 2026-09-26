@@ -3,11 +3,11 @@
  * command-runner.test.ts: Unit tests for the command-dispatch module.
  */
 import type { ClientMetrics, Nullable } from "./types.ts";
+import type { CommandAndAwaitable, CommandHost } from "./command-runner.ts";
 import { DEFAULT_COMMAND_AWAIT_TIMEOUT_MS, runCommand, runCommandAndAwait } from "./command-runner.ts";
 import { describe, test } from "node:test";
 import type { Buffer } from "node:buffer";
 import type { ClientEventsMap } from "./esphome-client.ts";
-import type { CommandHost } from "./command-runner.ts";
 import { ConfigurationError } from "./errors.ts";
 import { ENTITY_SCHEMAS } from "./schemas/index.ts";
 import type { EntityId } from "./entity-id.ts";
@@ -582,18 +582,80 @@ describe("runCommandAndAwait - typed error paths", () => {
   });
 });
 
+// 3 Errors - an encode refusal rejects at once with a typed code, before any stream opens or any frame sends.
+
+describe("runCommandAndAwait - encode refusals reject at once with a typed code", () => {
+
+  // Each case is a registered key whose command the encoder refuses. The await runs with a generous timeout: a refusal that fell through to the stream would reject
+  // with the timeout's TimeoutError instead of the refusal code, and the listener count read right after the call would show the open stream.
+  const cases: readonly { channel: keyof ClientEventsMap; code: string; id: EntityId<CommandAndAwaitable>; name: string; options: unknown }[] = [
+
+    { channel: "notatype" as keyof ClientEventsMap, code: "SCHEMA_UNKNOWN", id: malformedId<"switch">("notatype-x"), name: "an entity type with no schema",
+      options: { state: true } },
+    { channel: "sensor", code: "COMMAND_UNSUPPORTED", id: malformedId<"switch">("sensor-temp"), name: "an entity type without a command schema",
+      options: { state: true } },
+    { channel: "climate", code: "ENUM_VALUE_UNKNOWN", id: entityId("climate", "thermostat"), name: "an unknown enum alias", options: { mode: "freze" } },
+    { channel: "datetime", code: "VALUE_OUT_OF_RANGE", id: entityId("datetime", "alarm"), name: "an out-of-range value", options: { epochSeconds: -1 } }
+  ];
+
+  for(const { channel, code, id, name, options } of cases) {
+
+    test("rejects " + name + " with ConfigurationError(" + code + "), opening no stream and sending nothing", async () => {
+
+      const bus = new EventBus<ClientEventsMap>();
+      const bundle = mockHost({ bus, keyForId: (): number => 1 });
+      const pending = runCommandAndAwait(bundle.host, id, options as never, { timeoutMs: 5000 });
+
+      assert.equal(bus.listenerCount(channel), 0, "a refused command must not open the state stream");
+
+      await assert.rejects(pending, (err: unknown): boolean => (err instanceof ConfigurationError) && (err.code === code));
+      assert.equal(bundle.frames.length, 0);
+      assert.equal(bundle.metrics.filter((m) => m.name === "entity.commands.sent").length, 0);
+    });
+  }
+
+  test("names the refused field and value in the rejection message", async () => {
+
+    const bundle = mockHost({ keyForId: (): number => 1 });
+
+    await assert.rejects(runCommandAndAwait(bundle.host, entityId("datetime", "alarm"), { epochSeconds: -1 }, { timeoutMs: 5000 }), {
+
+      message: "commandAndAwait(): command for datetime-alarm refused before sending (VALUE_OUT_OF_RANGE): field 'epochSeconds' received out-of-range value '-1'."
+    });
+  });
+
+  test("an accepted command is encoded and sent exactly once", async () => {
+
+    const bus = new EventBus<ClientEventsMap>();
+    const bundle = mockHost({
+
+      bus,
+      keyForId: (): number => 3,
+      send: (): void => {
+
+        bus.emit("switch", { entity: "x", key: 3, state: true, type: "switch" });
+      }
+    });
+
+    await runCommandAndAwait(bundle.host, entityId("switch", "x"), { state: true });
+
+    assert.equal(bundle.logger.debugged.filter((d) => d.includes("sendEntityCommand")).length, 1, "the command is encoded once");
+    assert.equal(bundle.metrics.filter((m) => m.name === "entity.commands.sent").length, 1, "the command is sent once");
+  });
+});
+
 // 5 Async - abort/timeout boundaries (resolved + rejected + pre-aborted + aborted-mid-operation).
 
 describe("runCommandAndAwait - abort + timeout boundaries", () => {
 
-  test("rejects with AbortError when the timeout fires before any matching event", async () => {
+  test("rejects with TimeoutError when the timeout fires before any matching event", async () => {
 
     const bus = new EventBus<ClientEventsMap>();
     const bundle = mockHost({ bus, keyForId: (): number => 1 });
 
     await assert.rejects(
       runCommandAndAwait(bundle.host, entityId("switch", "x"), { state: true }, { timeoutMs: 30 }),
-      (err: unknown): boolean => (err instanceof Error) && ((err.name === "AbortError") || (err.name === "TimeoutError"))
+      (err: unknown): boolean => (err instanceof Error) && (err.name === "TimeoutError")
     );
   });
 
@@ -863,11 +925,11 @@ describe("runCommandAndAwait - key-matching narrowing guards", () => {
   });
 });
 
-// 11 Negative + 3 Errors - runCommand drop semantics inside runCommandAndAwait do NOT mask the typed throws.
+// 11 Negative + 3 Errors - the fire-and-forget runner's warn-and-drop never masks the awaited runner's typed throws.
 
-describe("runCommandAndAwait - interaction with runCommand's drop semantics", () => {
+describe("runCommandAndAwait - typed throws are never masked by the fire-and-forget drop", () => {
 
-  test("malformed id is caught at stage 1 BEFORE runCommand runs (typed throw, not silent drop)", async () => {
+  test("malformed id is caught at stage 1 before anything encodes or sends (typed throw, not silent drop)", async () => {
 
     const bundle = mockHost();
 
@@ -876,12 +938,12 @@ describe("runCommandAndAwait - interaction with runCommand's drop semantics", ()
       (err: unknown): boolean => (err instanceof ConfigurationError) && (err.code === "MALFORMED_ENTITY_ID")
     );
 
-    // No frames sent, no malformed-id warn from runCommand (we threw at stage 1 before runCommand ran).
+    // No frames sent and no fire-and-forget malformed-id warn: the throw at stage 1 comes before anything encodes or sends.
     assert.equal(bundle.frames.length, 0);
     assert.equal(bundle.logger.warned.filter((w) => w.includes("command(): malformed entity id")).length, 0);
   });
 
-  test("unknown id is caught at stage 2 BEFORE runCommand runs (typed throw)", async () => {
+  test("unknown id is caught at stage 2 before anything encodes or sends (typed throw)", async () => {
 
     const bundle = mockHost({ keyForId: (): Nullable<number> => null });
 

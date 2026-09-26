@@ -2929,9 +2929,13 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
    *
    * @throws {ConfigurationError} (`MALFORMED_ENTITY_ID`) when the supplied id is not a valid `${type}-${objectId}` brand.
    * @throws {ConfigurationError} (`UNKNOWN_ENTITY_ID`) when the id parses but the entity has not been discovered on the current connection.
+   * @throws {ConfigurationError} (`SCHEMA_UNKNOWN` / `COMMAND_UNSUPPORTED`) when no schema, or no command schema, is registered for the entity type. Nothing is sent.
+   * @throws {ConfigurationError} (`ENUM_VALUE_UNKNOWN` / `VALUE_OUT_OF_RANGE`) when a command field receives an unknown enum alias or a value outside the integer domain
+   * its wire type carries. Nothing is sent.
    * @throws {ConfigurationError} (`AWAIT_STREAM_CLOSED`) when the underlying telemetry stream ends before a matching state event arrives - typically because the
    * connection dropped while the await was pending.
-   * @throws {DOMException} (`AbortError` / `TimeoutError`) when the caller's signal aborts or the default 2000ms deadline elapses.
+   * @throws {DOMException} (`TimeoutError`) when the deadline elapses (2000ms unless `awaitOptions.timeoutMs` overrides it), or (`AbortError`) when the caller's signal
+   * aborts; a signal aborted with an `Error` reason rejects with that reason instead.
    *
    */
   public async commandAndAwait<T extends Exclude<ExtendedEntityType<Extras>, NonAwaitableEntityType>>(

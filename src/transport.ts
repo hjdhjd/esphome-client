@@ -67,7 +67,7 @@ const Phase = {
 type Phase = typeof Phase[keyof typeof Phase];
 
 /**
- * Construction options for {@link Transport.open}.
+ * Construction options for `Transport.open`.
  */
 export interface TransportOpenOptions {
 
@@ -117,7 +117,7 @@ export interface TransportOpenOptions {
 }
 
 /**
- * One inbound typed message. The async iterator over a {@link Transport} yields entries of this shape during the `plaintext` and `noise-data` phases.
+ * One inbound typed message. The async iterator over a `Transport` yields entries of this shape during the `plaintext` and `noise-data` phases.
  */
 export interface InboundMessage {
 
@@ -133,7 +133,7 @@ export interface InboundMessage {
 }
 
 /**
- * Cipher state pair installed via {@link Transport.installCipher}.
+ * Cipher state pair installed via `Transport.installCipher`.
  */
 export interface NoiseCipherPair {
 
@@ -160,7 +160,7 @@ interface Awaiter<T> {
 }
 
 /**
- * Structural interface mirroring the public surface of {@link Transport}. Both the real {@link Transport} and the test-only `MockTransport` (from
+ * Structural interface mirroring the public surface of `Transport`. Both the real `Transport` and the test-only `MockTransport` (from
  * `esphome-client/testing`) implement this so {@link EspHomeClient} can drive either with no concrete-class coupling. Consumers who never write
  * tests can ignore this interface; only the host class and the test infrastructure reference it.
  */

@@ -9,9 +9,9 @@
  *
  * @remarks Two named runners, one shared narrow seam. {@link runCommand} extracts the entity type from the branded id, applies the matching {@link COMMAND_ADAPTERS}
  * runtime adapter (light's RGB flatten, siren's duration round), runs the schema-driven {@link encodeEntityCommand} pipeline, frames-and-sends through the seam, and
- * emits the `entity.commands.sent` metric. {@link runCommandAndAwait} composes that runner with a pre-subscription stage (open the bus stream *before* the command
- * sends), an `AbortSignal.any` composition (timeout plus the caller's optional signal), and a predicate-match loop normalized through {@link Promise.try} so sync and
- * async predicates collapse to one rejection path.
+ * emits the `entity.commands.sent` metric. {@link runCommandAndAwait} shares that runner's encode and send, and adds a pre-subscription stage (open the bus stream
+ * *before* the command sends), an `AbortSignal.any` composition (timeout plus the caller's optional signal), and a predicate-match loop normalized through
+ * {@link Promise.try} so sync and async predicates collapse to one rejection path.
  *
  * The narrow seam pattern mirrors {@link RunPhaseHost} and {@link LogSubscriptionManagerHost}: a small read surface
  * plus a handful of method seams for behavior the host owns. The seam carries only state-bearing primitives - the bus the runner subscribes to for state events, the
@@ -22,8 +22,8 @@
  * The error-surface asymmetry between the two runners is intentional. {@link runCommand} is fire-and-forget: a malformed branded id, an unknown entity id, an entity
  * type without a command schema all warn-and-drop. The contract is one-shot lossy semantics: consumer code calling fire-and-forget `command()` already accepts the
  * possibility of a dropped send. {@link runCommandAndAwait} returns a Promise; consumers expect typed failure rather than silent drop, so a malformed or unknown id
- * throws a {@link ConfigurationError} with a named code before anything sends, while an encode refusal (a type without a command schema, an unknown enum alias, an
- * out-of-range value) is warned and dropped by the inner send and the await then rejects at its timeout. Both behaviors are tested in both directions.
+ * and an encode refusal (a type without a command schema, an unknown enum alias, an out-of-range value) each throw a {@link ConfigurationError} with a named code
+ * before anything subscribes or sends. Both behaviors are tested in both directions.
  *
  * The pre-subscribe ordering rule is the architectural keystone of {@link runCommandAndAwait}. The bus stream is opened *before* the command sends, so a fast device
  * cannot race ahead of the listener. The internal `BackpressureStream` attaches its `EventEmitter` listener synchronously in its constructor, so the moment
@@ -35,10 +35,12 @@ import type { BaseEntity, ENTITY_SCHEMAS, EntitySchema, EntityType } from "./sch
 import type { ClientMetrics, EspHomeLogging, Nullable } from "./types.ts";
 import type { CommandFor, StateEventFor } from "./schemas/derived.ts";
 import { ConfigurationError, ConnectionError } from "./errors.ts";
+import type { EncodeFailureReason, EncodeResult } from "./command-pipeline.ts";
 import { encodeEntityCommand, reportUnrecognizedOptions } from "./command-pipeline.ts";
 import type { Buffer } from "node:buffer";
 import { COMMAND_ADAPTERS } from "./schemas/index.ts";
 import type { ClientEventsMap } from "./esphome-client.ts";
+import type { ConfigurationErrorCode } from "./errors.ts";
 import type { EntityId } from "./entity-id.ts";
 import type { EventBus } from "./event-bus.ts";
 import { InfraredCapabilityFlags } from "./api-constants.ts";
@@ -218,6 +220,108 @@ export function assertTransmitter(entity: BaseEntity, id: EntityId): void {
 }
 
 /**
+ * The one place an encode refusal becomes a {@link ConfigurationError} code: {@link runCommandAndAwait} rejects a refused command with the code its reason maps to.
+ * The map is exhaustive over {@link EncodeFailureReason}, so a new refusal reason fails the typecheck here until it is given a code. A missing key maps to
+ * `UNKNOWN_ENTITY_ID` because an entity with no registered key is an unknown entity id.
+ */
+const ENCODE_REFUSAL_CODES = {
+
+  "command_unsupported": "COMMAND_UNSUPPORTED",
+  "enum_value_unknown": "ENUM_VALUE_UNKNOWN",
+  "key_not_found": "UNKNOWN_ENTITY_ID",
+  "schema_unknown": "SCHEMA_UNKNOWN",
+  "value_out_of_range": "VALUE_OUT_OF_RANGE"
+} as const satisfies Record<EncodeFailureReason, ConfigurationErrorCode>;
+
+/**
+ * Inputs for {@link encodeCommand}.
+ */
+interface EncodeCommandInput {
+
+  /**
+   * The entity type the calling runner extracted from the id's prefix.
+   */
+  readonly entityType: string;
+
+  /**
+   * The command-dispatch host the key and schema lookups go through.
+   */
+  readonly host: CommandHost;
+
+  /**
+   * The branded entity id.
+   */
+  readonly id: EntityId;
+
+  /**
+   * The caller's command options in their public shape.
+   */
+  readonly options: unknown;
+}
+
+/**
+ * The outcome of {@link encodeCommand}: the encoder's result and the wire-shaped options the adapter produced, which the send reports unrecognized keys against.
+ */
+interface CommandEncoding {
+
+  readonly result: EncodeResult;
+  readonly wireOptions: Record<string, unknown>;
+}
+
+/**
+ * Adapt, key, and encode one command. Both runners encode through this function exactly once per command, so the fire-and-forget send and the awaited send put the
+ * same bytes on the wire and refuse the same inputs.
+ *
+ * @param input - The {@link EncodeCommandInput} bag.
+ * @returns The encode result paired with the adapted wire options.
+ */
+function encodeCommand(input: EncodeCommandInput): CommandEncoding {
+
+  const { entityType, host, id, options } = input;
+
+  // Stage 2: apply the runtime adapter for any wire-vs-API divergence (light's rgb expansion, siren's duration round). Adapters return a freshly-shaped record without
+  // mutating the input. When no adapter exists the wire shape and the public shape are identical.
+  const adapter = COMMAND_ADAPTERS[entityType as EntityType];
+  const wireOptions = adapter ? adapter(options as Record<string, unknown>) : (options as Record<string, unknown>);
+
+  // Stage 3: resolve the entity key through the host's registry. The encoder accepts `undefined` and reports `key_not_found` when the lookup misses; we do not
+  // pre-throw because the fire-and-forget runner gives that refusal the same warn-and-drop treatment as schema_unknown / command_unsupported.
+  const key = host.keyForId(id) ?? undefined;
+
+  host.log.debug("sendEntityCommand - type: " + entityType + " | ID: " + id + " | KEY: " + String(key) + " | options: " + JSON.stringify(wireOptions));
+
+  // Stage 4: encode through the schema-driven pipeline. The encoder is pure - it does not touch host state - so the runner consumes it as a direct import rather than
+  // through the host. The per-instance schema resolver goes through the host so extras-registered entity types resolve correctly.
+  const result = encodeEntityCommand({
+
+    deviceId: (key !== undefined) ? host.deviceIdForKey(key) : undefined,
+    id,
+    key,
+    options: wireOptions,
+    resolveSchema: (entityTypeArg: string): EntitySchema | undefined => host.resolveSchema(entityTypeArg)
+  });
+
+  return { result, wireOptions };
+}
+
+/**
+ * Send one encoded command: report any option keys the encoder did not consume, frame-and-send the payload, and count the send. Both runners send through this
+ * function once the encode succeeds.
+ *
+ * @param host - The command-dispatch host.
+ * @param encoded - The successful encode result, which carries the entity type the metric is tagged with.
+ * @param wireOptions - The adapted wire options the encode consumed.
+ */
+function sendEncodedCommand(host: CommandHost, encoded: Extract<EncodeResult, { ok: true }>, wireOptions: Record<string, unknown>): void {
+
+  // Stage 6: report unrecognized option keys at debug level, frame-and-send the wire payload, increment the metrics counter. The metric tag is the entity type so
+  // dashboards can break command throughput out per type.
+  reportUnrecognizedOptions({ entityType: encoded.entityType, log: host.log, options: wireOptions, processedKeys: encoded.processedKeys });
+  host.send(encoded.value.messageType, encoded.value.payload);
+  host.metrics?.increment("entity.commands.sent", 1, { type: encoded.entityType });
+}
+
+/**
  * Single canonical command-dispatch entry point. Body of the host's {@link EspHomeClient.command} method.
  *
  * @remarks Named stages, top-to-bottom: extract entity type, run wire-vs-API adapter, resolve entity key, encode through the schema-driven pipeline, handle encode
@@ -244,27 +348,8 @@ export function runCommand<T extends EntityType>(host: CommandHost, id: EntityId
     return;
   }
 
-  // Stage 2: apply the runtime adapter for any wire-vs-API divergence (light's rgb expansion, siren's duration round). Adapters return a freshly-shaped record without
-  // mutating the input. When no adapter exists the wire shape and the public shape are identical.
-  const adapter = COMMAND_ADAPTERS[entityType as EntityType];
-  const wireOptions = adapter ? adapter(options as Record<string, unknown>) : (options as Record<string, unknown>);
-
-  // Stage 3: resolve the entity key through the registry seam. The encoder accepts `undefined` and reports `key_not_found` when the lookup miss happens; we do not
-  // pre-throw because the failure path needs the same warn-and-drop treatment as schema_unknown / command_unsupported.
-  const key = host.keyForId(id) ?? undefined;
-
-  host.log.debug("sendEntityCommand - type: " + entityType + " | ID: " + id + " | KEY: " + String(key) + " | options: " + JSON.stringify(wireOptions));
-
-  // Stage 4: encode through the schema-driven pipeline. The encoder is pure - it does not touch host state - so the runner consumes it as a direct import rather than
-  // through the seam. The per-instance schema resolver flows through the seam so extras-registered entity types resolve correctly.
-  const result = encodeEntityCommand({
-
-    deviceId: (key !== undefined) ? host.deviceIdForKey(key) : undefined,
-    id,
-    key,
-    options: wireOptions,
-    resolveSchema: (entityTypeArg: string): EntitySchema | undefined => host.resolveSchema(entityTypeArg)
-  });
+  // Stages 2 through 4: adapt, key, and encode.
+  const { result, wireOptions } = encodeCommand({ entityType, host, id, options });
 
   // Stage 5: handle encode failure. Each failure reason has a distinct warn message so operators can see why a command was dropped at the host's debug log.
   if(!result.ok) {
@@ -307,19 +392,17 @@ export function runCommand<T extends EntityType>(host: CommandHost, id: EntityId
     }
   }
 
-  // Stage 6: report unrecognized option keys at debug level, frame-and-send the wire payload, increment the metrics counter. The metric tag is the entity type so
-  // dashboards can break command throughput out per type.
-  reportUnrecognizedOptions({ entityType, log: host.log, options: wireOptions, processedKeys: result.processedKeys });
-  host.send(result.value.messageType, result.value.payload);
-  host.metrics?.increment("entity.commands.sent", 1, { type: entityType });
+  // Stage 6: send the encoded command.
+  sendEncodedCommand(host, result, wireOptions);
 }
 
 /**
  * Send a command and resolve with the next matching state event for the same entity. Body of the host's {@link EspHomeClient.commandAndAwait} method.
  *
- * @remarks Stages: extract entity type (typed throw on malformed id), resolve target key (typed throw on unknown id), compose abort sources, pre-subscribe to the
- * entity's state stream, send the command via {@link runCommand}, run the predicate-match loop. The pre-subscribe stage (#4) runs before the send (#5) so a fast
- * device cannot beat the listener; the BackpressureStream attaches its emitter listener synchronously in its constructor, so the listener is live the moment
+ * @remarks Stages: extract entity type (typed throw on malformed id), resolve target key (typed throw on unknown id), encode the command (typed throw on an encode
+ * refusal), compose abort sources, pre-subscribe to the entity's state stream, send the encoded command, run the predicate-match loop. The command is encoded once,
+ * before anything subscribes, so a refused command rejects at once and opens no stream. The pre-subscribe stage (#5) runs before the send (#6) so a fast device
+ * cannot beat the listener; the BackpressureStream attaches its emitter listener synchronously in its constructor, so the listener is live the moment
  * `host.bus.stream(...)` returns.
  *
  * Predicate normalization. Supports sync `boolean` and async `Promise<boolean>` predicates - both go through {@link Promise.try}, which collapses sync throws and
@@ -327,10 +410,10 @@ export function runCommand<T extends EntityType>(host: CommandHost, id: EntityId
  * target.
  *
  * Error surface. Throws {@link ConfigurationError} with code `MALFORMED_ENTITY_ID` when the branded id has no `-` separator (consumer-side unsafe cast
- * across the brand boundary), `UNKNOWN_ENTITY_ID` when the key resolution misses (consumer issued a command before discovery completed, or for an entity that no
- * longer exists),
- * or `AWAIT_STREAM_CLOSED` when the bus is disposed without a matching event arriving. Timeout and signal-abort propagate as the standard `AbortError`
- * {@link AbortSignal.any} surfaces.
+ * across the brand boundary), `UNKNOWN_ENTITY_ID` when the key resolution misses (consumer issued a command before discovery completed, or for an entity that is not
+ * on the current connection), `SCHEMA_UNKNOWN`, `COMMAND_UNSUPPORTED`, `ENUM_VALUE_UNKNOWN`, or `VALUE_OUT_OF_RANGE` when the encoder refuses the command (nothing
+ * is sent), or `AWAIT_STREAM_CLOSED` when the bus is disposed without a matching event arriving. The timeout surfaces as the `TimeoutError` of
+ * {@link AbortSignal.timeout}, and a caller's abort surfaces as that signal's reason when the reason is an `Error` and as an `AbortError` otherwise.
  *
  * @typeParam T - Entity type tag carried by the branded id; constrained to the {@link CommandAndAwaitable} subset.
  * @param host - The command-dispatch seam.
@@ -357,8 +440,8 @@ export async function runCommandAndAwait<T extends CommandAndAwaitable>(
     throw new ConfigurationError("commandAndAwait(): malformed entity id '" + id + "'.", "MALFORMED_ENTITY_ID");
   }
 
-  // Stage 2: resolve the target key for the predicate-match loop. We need the key here (not just inside runCommand) because the predicate matches by `key === targetKey`;
-  // sending a command for an unregistered entity would also fail downstream, but throwing here surfaces the misuse as a typed error rather than a silent timeout.
+  // Stage 2: resolve the target key for the predicate-match loop. We need the key here (not just inside the encode) because the predicate matches by
+  // `key === targetKey`; the encode would refuse an unregistered entity too, but throwing here surfaces the misuse as the unknown-id error before anything else runs.
   const targetKey = host.keyForId(id) ?? undefined;
 
   if(targetKey === undefined) {
@@ -366,7 +449,19 @@ export async function runCommandAndAwait<T extends CommandAndAwaitable>(
     throw new ConfigurationError("commandAndAwait(): unknown entity id '" + id + "'.", "UNKNOWN_ENTITY_ID");
   }
 
-  // Stage 3: compose the abort sources. The timeout always fires; the caller's signal is layered on when supplied. AbortSignal.any returns a single composite that
+  // Stage 3: encode the command before anything subscribes or sends. A refused command (a type without a command schema, an unknown enum alias, an out-of-range
+  // value) rejects at once with its refusal code rather than sending nothing and waiting out the timeout.
+  const { result, wireOptions } = encodeCommand({ entityType, host, id, options });
+
+  if(!result.ok) {
+
+    const code = ENCODE_REFUSAL_CODES[result.reason];
+
+    throw new ConfigurationError("commandAndAwait(): command for " + id + " refused before sending (" + code + ")" +
+      ((result.detail === undefined) ? "." : ": " + result.detail + "."), code);
+  }
+
+  // Stage 4: compose the abort sources. The timeout always fires; the caller's signal is layered on when supplied. AbortSignal.any returns a single composite that
   // aborts on any source - the BackpressureStream attaches a one-shot listener and rejects parked iterators with the timeout's TimeoutError or the caller's own
   // abort reason, whichever source fired first.
   const sources: AbortSignal[] = [AbortSignal.timeout(timeoutMs)];
@@ -378,20 +473,17 @@ export async function runCommandAndAwait<T extends CommandAndAwaitable>(
 
   const composedSignal = AbortSignal.any(sources);
 
-  /* Stage 4 (architectural keystone): pre-subscribe to the entity's state stream BEFORE the command sends. The bus.stream() constructor attaches its EventEmitter
-   * listener synchronously, so the moment this line returns we are listening for state events. Stage 5's runCommand then sends the wire frame; any state response the
-   * device emits between this line and the for-await consumption queues into the BackpressureStream's internal buffer and surfaces on the first iterator pull. Reordering
-   * stages 4 and 5 would re-introduce a race where a fast device can beat the listener and the await hangs until timeout.
+  /* Stage 5 (architectural keystone): pre-subscribe to the entity's state stream BEFORE the command sends. The bus.stream() constructor attaches its EventEmitter
+   * listener synchronously, so the moment this line returns we are listening for state events. Stage 6 then sends the wire frame; any state response the device
+   * emits between this line and the for-await consumption queues into the BackpressureStream's internal buffer and surfaces on the first iterator pull. Reordering
+   * stages 5 and 6 would re-introduce a race where a fast device can beat the listener and the await hangs until timeout.
    */
   const stream = host.bus.stream(entityType as T, { signal: composedSignal });
 
-  // Stage 5: send the command. runCommand's fire-and-forget contract means a malformed id at this point would warn-and-drop rather than throw - but stages 1 and 2
-  // already validated the id, so the runner reaches the encode-and-send path. If runCommand silently drops (e.g., command_unsupported for an entity type without a
-  // command schema), the await still hangs on the open stream until the timeout fires; the caller sees an AbortError, which is the correct surface for "command was
-  // accepted but the device produced no response."
-  runCommand(host, id, options);
+  // Stage 6: send the command stage 3 encoded. An accepted command the device never answers waits out the timeout, and the caller sees its TimeoutError.
+  sendEncodedCommand(host, result, wireOptions);
 
-  // Stage 6: run the predicate-match loop. Iterate the stream until we see a state event whose key matches the resolved target and whose predicate accepts. Predicate
+  // Stage 7: run the predicate-match loop. Iterate the stream until we see a state event whose key matches the resolved target and whose predicate accepts. Predicate
   // normalization through Promise.try handles sync boolean, async boolean, sync throw, and async reject in one path.
   for await (const event of stream) {
 
@@ -419,6 +511,6 @@ export async function runCommandAndAwait<T extends CommandAndAwaitable>(
   }
 
   // Fallthrough only happens when the stream ends cleanly (EventBus disposed) without a matching event. Surface a typed error rather than hanging or returning undefined;
-  // the timeout path raises AbortError before we reach here.
+  // the timeout and abort paths reject from the iterator before we reach here.
   throw new ConfigurationError("commandAndAwait(): stream ended before a matching state event arrived.", "AWAIT_STREAM_CLOSED");
 }

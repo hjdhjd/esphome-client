@@ -344,7 +344,8 @@ export function decodeEntityFromSchema(options: DecodeEntityOptions): Entity | u
     // mismatch is a misconfiguration the consumer must fix - we surface it with a typed error rather than silently dropping the field.
     if(!decodeNested) {
 
-      throw new ConfigurationError("decodeEntityFromSchema: schema '" + entityType + "' declares repeatedMessageFields but no decodeNested callback was supplied.");
+      throw new ConfigurationError("decodeEntityFromSchema: schema '" + entityType + "' declares repeatedMessageFields but no decodeNested callback was supplied.",
+        "SCHEMA_MISSING_DECODE_CALLBACK");
     }
 
     for(const [ fieldName, fieldSpec ] of Object.entries(listSchema.repeatedMessageFields)) {

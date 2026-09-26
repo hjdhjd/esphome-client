@@ -390,14 +390,57 @@ export class CameraStreamClosedError extends EspHomeError {
 // User-facing / negotiation.
 
 /**
+ * Tagged codes for {@link ConfigurationError}. The code table lives on the class.
+ */
+export type ConfigurationErrorCode = "AWAIT_STREAM_CLOSED" | "COMMAND_UNSUPPORTED" | "ENUM_VALUE_UNKNOWN" | "EXTRA_SCHEMA_OVERRIDES_BUILTIN" | "MALFORMED_ENTITY_ID" |
+  "SCHEMA_MISSING_DECODE_CALLBACK" | "SCHEMA_UNKNOWN" | "UNKNOWN_ENTITY_ID" | "VALUE_OUT_OF_RANGE";
+
+/**
  * Construction-time misconfiguration: bad PSK length, missing host, conflicting options, etc. Caught at the boundary so internal code can trust validated structures.
+ *
+ * @remarks Carries a required {@link ConfigurationErrorCode} so consumers can pattern-match the specific misuse without parsing the message string.
+ *
+ * Code table:
+ *
+ * - `AWAIT_STREAM_CLOSED` - The state stream {@link EspHomeClient.commandAndAwait} was awaiting ended before a matching state event arrived, typically because the
+ *   connection dropped while the await was pending.
+ * - `COMMAND_UNSUPPORTED` - {@link EspHomeClient.commandAndAwait} was called for an entity type whose schema declares no command. Nothing is sent.
+ * - `ENUM_VALUE_UNKNOWN` - A {@link EspHomeClient.commandAndAwait} command field received a string that is not one of the field's enum aliases. The message names the
+ *   field and the value. Nothing is sent.
+ * - `EXTRA_SCHEMA_OVERRIDES_BUILTIN` - A key in the client's `extraSchemas` option names a built-in entity type. Raised at client construction.
+ * - `MALFORMED_ENTITY_ID` - {@link EspHomeClient.commandAndAwait} received an id that is not a valid `${type}-${objectId}` brand.
+ * - `SCHEMA_MISSING_DECODE_CALLBACK` - An entity schema declares repeated message fields but the discovery decoder was given no nested-message decoder for them.
+ * - `SCHEMA_UNKNOWN` - {@link EspHomeClient.commandAndAwait} was called for an entity type no schema is registered for. Nothing is sent.
+ * - `UNKNOWN_ENTITY_ID` - {@link EspHomeClient.commandAndAwait} was called for an id that has not been discovered on the current connection. Nothing is sent.
+ * - `VALUE_OUT_OF_RANGE` - A {@link EspHomeClient.commandAndAwait} command field received a value outside the integer domain its wire type carries. The message
+ *   names the field and the value. Nothing is sent.
  *
  * Usage:
  *
  * {@includeCode ./examples/showcase.ts#command-error-handling}
  *
  */
-export class ConfigurationError extends EspHomeError {}
+export class ConfigurationError extends EspHomeError {
+
+  /**
+   * Narrowed configuration error code. Overrides the base class's optional `code` to make it required and narrowed.
+   */
+  public override readonly code: ConfigurationErrorCode;
+
+  /**
+   * Creates a new ConfigurationError.
+   *
+   * @param message - Human-readable error description.
+   * @param code - Narrowed configuration error code.
+   * @param options - Standard ErrorOptions; pass `{ cause }` to preserve an underlying error.
+   */
+  constructor(message: string, code: ConfigurationErrorCode, options?: ErrorOptions) {
+
+    super(message, code, options);
+
+    this.code = code;
+  }
+}
 
 /**
  * API version negotiation found no overlap between the client's supported range and the device's announced range. Permanent without consumer intervention.
