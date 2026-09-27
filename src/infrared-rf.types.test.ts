@@ -3,7 +3,7 @@
  * infrared-rf.types.test.ts: Type-level guarantees for the infrared and radio_frequency entity types.
  *
  * Locks in the schema-derived ClientEventsMap auto-extension, the brand distinction on transmitRawTimings, and the transmit-type exclusions on command and
- * commandAndAwait. Every `@ts-expect-error` annotation below MUST fail to compile if removed; `npm run typecheck` (tsc against tsconfig.check.json) enforces this.
+ * commandAndAwait. Every `@ts-expect-error` annotation below MUST fail to compile if removed; `npm run typecheck` (tsc against tsconfig.json) enforces this.
  * The annotations live inside helper functions that are never executed - the type checker walks them at compile time but the test runner only confirms the file
  * parses cleanly.
  */

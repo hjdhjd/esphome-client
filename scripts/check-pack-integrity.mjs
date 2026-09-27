@@ -83,8 +83,8 @@ function main() {
     console.error("[lint:pack] The tarball carries " + declarations.length + " declaration file(s) and " + declarationMaps.length + " declaration map(s); the " +
       "package's exports map promises types, so both counts must be greater than zero.");
     console.error("");
-    console.error("  Fix: confirm `tsconfig.json` extends the homebridge-plugin-utils library profile, which turns declaration and declaration map emit on, then " +
-      "rebuild.");
+    console.error("  Fix: confirm `tsconfig.build.json` extends the homebridge-plugin-utils library profile, which turns declaration and declaration map emit on, " +
+      "then rebuild.");
     process.exit(1);
   }
 

@@ -3,15 +3,16 @@
  * eslint.config.mjs: Linting defaults for the ESPHome client library. Inherits the homebridge-plugin-utils baseline as-is. Most rule exceptions live next to
  * the code that needs them - either an in-file `eslint-disable` / `eslint-enable` block for a contiguous file region, or a per-line `eslint-disable-next-line`
  * with a rationale comment for one-off exceptions. A blanket exception below covers rules whose violations in test files are not bugs but the *purpose* of
- * the test (probing async-runner behavior, mock seams, type-system edges), where per-site disables would be absurd in volume and the pattern is structurally
+ * the test (probing async-runner behavior, mock injection points, type-system edges), where per-site disables would be absurd in volume and the pattern is structurally
  * test-only.
+ *
+ * `tsconfig.json` claims this file through `allowJs`, so it lints under a real project and needs no `allowDefaultProject` fallback.
  */
 import { ESLINT_LOOSE_PATTERNS } from "./scripts/test-file-patterns.mjs";
 import hbPluginUtils from "homebridge-plugin-utils/eslint";
 
 const baseConfig = hbPluginUtils({
 
-  allowDefaultProject: ["eslint.config.mjs"],
   js: ["eslint.config.mjs"],
   ts: ["src/**/*.ts"]
 });

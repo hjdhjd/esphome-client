@@ -18,7 +18,7 @@
  *
  *   - {@link BUILD_EXCLUDED_PATTERNS}: mirrored by `tsconfig.build.json`'s `exclude` array. Validated structurally at CI time by `scripts/check-test-file-globs.mjs`,
  *     which reads both and fails the build if any canonical pattern is missing from the tsconfig copy. The tsconfig legitimately excludes ADDITIONAL paths (the
- *     `dist/`, `node_modules/`, `test/`, `tests/`, `bench/`, and `src/internal/` directories) that aren't part of this SSOT - those exclusions are unrelated
+ *     `dist/`, `node_modules/`, and `src/internal/` directories) that aren't part of this SSOT - those exclusions are unrelated
  *     concerns; the SSOT is specifically for the dev-only file SHAPES.
  *
  * @module scripts/test-file-patterns

@@ -9,7 +9,7 @@
  * `null` must fail to compile. A regression that widened the option would drop a `@ts-expect-error` (turning the directive itself into an error); one that narrowed it
  * would break a sentinel assertion or a directive-free construction.
  *
- * @remarks This file holds **type-level assertions only**. It lives at `.types.ts` (not `.types.test.ts`) and is validated by `tsc` via `tsconfig.check.json`, NOT by
+ * @remarks This file holds **type-level assertions only**. It lives at `.types.ts` (not `.types.test.ts`) and is validated by `tsc` via `tsconfig.json`, NOT by
  * `node --test`.
  *
  * @module esphome-client.types

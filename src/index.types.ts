@@ -9,7 +9,7 @@
  * generically or supplies those options must be able to import the types from the package root. Each assertion imports the name through the barrel and holds it
  * equal to its declaration: a dropped re-export fails to resolve at the import, and a re-export that reached a different declaration breaks the equality.
  *
- * @remarks This file holds **type-level assertions only**. It lives at `.types.ts` (not `.types.test.ts`) and is validated by `tsc` via `tsconfig.check.json`, NOT by
+ * @remarks This file holds **type-level assertions only**. It lives at `.types.ts` (not `.types.test.ts`) and is validated by `tsc` via `tsconfig.json`, NOT by
  * `node --test`.
  *
  * @module index.types

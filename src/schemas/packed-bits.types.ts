@@ -8,7 +8,7 @@
  * structurally rejected on the inbound (state / listEntities) `InboundPackedBitsField`. The runtime engine treats `hasFieldBit` as a no-op on inbound roles; this
  * type-level constraint surfaces a misconfiguration at compile time so the no-op never silently ships.
  *
- * @remarks This file holds **type-level assertions only**. The file lives at `.types.ts` (not `.types.test.ts`) and is validated by `tsc` via `tsconfig.check.json`,
+ * @remarks This file holds **type-level assertions only**. The file lives at `.types.ts` (not `.types.test.ts`) and is validated by `tsc` via `tsconfig.json`,
  * NOT by `node --test`. The patterns below coexist:
  *
  *   1. **Sentinel-assertion type aliases** (`Assert<Equal<A, B>>`) - capture structural-equality rules. A failed assertion produces a typecheck error at the

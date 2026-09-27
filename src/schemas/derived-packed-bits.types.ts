@@ -11,7 +11,7 @@
  * role). Asserting the computed output for real registry entries holds the consumer-facing key set, its optionality, and the neutral `unknown` result for a role that
  * declares no packed bits fixed against any change to the projection's declaration.
  *
- * @remarks This file holds **type-level assertions only**. It lives at `.types.ts` (not `.types.test.ts`) and is validated by `tsc` via `tsconfig.check.json`, NOT by
+ * @remarks This file holds **type-level assertions only**. It lives at `.types.ts` (not `.types.test.ts`) and is validated by `tsc` via `tsconfig.json`, NOT by
  * `node --test`. Each guarantee is a sentinel-assertion type alias (`Assert<Equal<A, B>>`) whose declaration site fails to compile when the claim is false. Two
  * altitudes are covered deliberately: the aliases applied directly to a schema role's record, and the `infer P` conditional written exactly as `derived.ts` writes it
  * at its own call sites, because those call sites are what the public entity, state-event, and command types are assembled from.

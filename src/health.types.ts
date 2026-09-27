@@ -10,7 +10,7 @@
  * record with an epoch, a down record on an encrypted wire, a live record missing its epoch, and an un-narrowed read of the epoch. A regression that loosened any of
  * these would either drop a `@ts-expect-error` (turning the directive itself into an error) or break a sentinel assertion, so CI catches it.
  *
- * @remarks This file holds **type-level assertions only**. It lives at `.types.ts` (not `.types.test.ts`) and is validated by `tsc` via `tsconfig.check.json`, NOT by
+ * @remarks This file holds **type-level assertions only**. It lives at `.types.ts` (not `.types.test.ts`) and is validated by `tsc` via `tsconfig.json`, NOT by
  * `node --test` (the runner globs `*.test.ts`). Two patterns coexist, matching `schemas/packed-bits.types.ts`:
  *
  *   1. **Sentinel-assertion type aliases** (`Assert<Equal<A, B>>` / `Assert<Extends<A, B>>`) - capture structural rules. A failed assertion produces a typecheck

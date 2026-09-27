@@ -1,12 +1,21 @@
+/* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
+ *
+ * tsconfig.json: This is the project that IDEs, `typescript-eslint`'s project service, and `npm run typecheck` use. Its broad include with `allowJs` gives every
+ * owned tree and the root-level config a real project, rather than leaving them to the default-project fallback. `noEmit` keeps `tsc -p tsconfig.json` from producing
+ * build output, because emit belongs to `tsconfig.build.json` alone.
+ */
 {
   "compilerOptions": {
 
+    "allowJs": true,
+
+    // Exact optional property types are this library's own strictness choice, set in both tsconfig files because the shared profile leaves the flag off.
     "exactOptionalPropertyTypes": true,
-    "outDir": "dist",
-    "rootDir": "src"
+
+    "noEmit": true
   },
 
-  "exclude": [ "dist", "node_modules", "test", "tests", "bench" ],
+  "exclude": [ "dist", "node_modules" ],
   "extends": "./node_modules/homebridge-plugin-utils/build/tsconfig.library.json",
-  "include": [ "eslint.config.mjs", "src" ]
+  "include": [ "bench", "eslint.config.mjs", "scripts", "src", "test" ]
 }

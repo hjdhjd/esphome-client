@@ -8,7 +8,7 @@
  * conventionally-named `*Entity` alias and a `*Event` alias; this file asserts that symmetry structurally so a future entity type added to the registry without its
  * matching aliases fails the typecheck rather than silently shipping an asymmetric public surface.
  *
- * @remarks This file holds **type-level assertions only**. It lives at `.types.ts` (not `.types.test.ts`) and is validated by `tsc` via `tsconfig.check.json`, NOT by
+ * @remarks This file holds **type-level assertions only**. It lives at `.types.ts` (not `.types.test.ts`) and is validated by `tsc` via `tsconfig.json`, NOT by
  * `node --test`. Each assertion is a sentinel-assertion type alias (`Assert<Equal<A, B>>`): a failed assertion produces a typecheck error at the alias's declaration
  * site. The mechanism: the union of every named `*Entity` alias must equal the schema-distributed {@link Entity} union, and the union of every named `*Event` alias
  * must equal the schema-distributed {@link TelemetryEvent} union. A missing alias drops one variant from the union, so the equality fails and CI breaks.

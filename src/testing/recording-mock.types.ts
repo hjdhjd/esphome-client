@@ -8,7 +8,7 @@
  * against both construction patterns - inline object literals (which engage TypeScript's excess-property check directly) and reference-passed variables (which
  * engage the check only when the variable is explicitly annotated as `MockDefaults<T>`).
  *
- * @remarks This file holds **type-level assertions only**. The file lives at `.types.ts` (not `.types.test.ts`) and is validated by `tsc` via `tsconfig.check.json`,
+ * @remarks This file holds **type-level assertions only**. The file lives at `.types.ts` (not `.types.test.ts`) and is validated by `tsc` via `tsconfig.json`,
  * NOT by `node --test`. Excess-property checking can't be expressed via pure conditional types (structural assignability is permissive between types; the check
  * only fires on object literals at construction sites). Wrapping a deliberately misconfigured construction in a typecheck-only constant + `@ts-expect-error` is
  * the canonical way to assert this kind of guarantee.

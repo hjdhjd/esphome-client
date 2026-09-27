@@ -1,17 +1,30 @@
+/* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
+ *
+ * tsconfig.build.json: This is the project `npm run build` emits the published `dist/` output from. It is scoped to `src/` minus the project-internal `src/internal/`
+ * directory and the dev-only file shapes, so nothing test-related ships. Those shapes mirror the canonical list in `scripts/test-file-patterns.mjs`, which
+ * `npm run lint:test-file-globs` holds this file to. The IDE, lint, and typecheck project lives in `tsconfig.json`.
+ */
 {
-  "extends": "./tsconfig.json",
+  "compilerOptions": {
+
+    // Exact optional property types are this library's own strictness choice, set in both tsconfig files because the shared profile leaves the flag off.
+    "exactOptionalPropertyTypes": true,
+
+    "outDir": "dist",
+    "rootDir": "src"
+  },
 
   "exclude": [
+
     "dist",
     "node_modules",
-    "test",
-    "tests",
-    "bench",
     "src/internal",
-    "src/**/*.test.ts",
     "src/**/*.fixtures.ts",
     "src/**/*.helpers.ts",
+    "src/**/*.test.ts",
     "src/**/*.types.test.ts",
     "src/**/*.types.ts"
-  ]
+  ],
+  "extends": "./node_modules/homebridge-plugin-utils/build/tsconfig.library.json",
+  "include": [ "src" ]
 }

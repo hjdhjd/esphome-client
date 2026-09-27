@@ -11,7 +11,7 @@
  * sub-API over a recording host, how to open a subscription iterator, and how to classify a captured frame as SUBSCRIBE / UNSUBSCRIBE for a given key). The harness
  * registers a `node:test` `describe` block that asserts the guarantees the primitive makes.
  *
- * @remarks This is a non-shipping test helper. The `*.helpers.ts` suffix is excluded from `dist/` by `tsconfig.build.json`; it is typechecked by `tsconfig.check.json`
+ * @remarks This is a non-shipping test helper. The `*.helpers.ts` suffix is excluded from `dist/` by `tsconfig.build.json`; it is typechecked by `tsconfig.json`
  * and is NOT discovered by the test runner standalone (the runner globs `*.test.ts`). It runs only when a `*.test.ts` file imports and invokes it, so the registered
  * `describe` / `test` blocks attach to the importing file's test context.
  *
