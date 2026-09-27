@@ -334,6 +334,8 @@ export function readVarint(buffer: Buffer, offset: number): [ number, number ] {
  *
  * @param buffer - Source buffer.
  * @param offset - Offset of the length prefix.
+ * @param fieldNum - Field number the truncation message names. {@link decodeProtobuf} passes it so its error identifies the field; the hand-written walkers, which
+ * discard the error, omit it.
  * @returns A tuple `[body, bytesRead]`. `body` is a view into `buffer`, not a copy; `bytesRead` counts the prefix and the body, so advance the caller's cursor by this
  * amount.
  *
@@ -346,15 +348,15 @@ export function readVarint(buffer: Buffer, offset: number): [ number, number ] {
  *
  * @internal
  */
-export function readLengthDelimited(buffer: Buffer, offset: number): [ Buffer, number ] {
+export function readLengthDelimited(buffer: Buffer, offset: number, fieldNum?: number): [ Buffer, number ] {
 
   const [ len, lenLen ] = readVarint(buffer, offset);
   const start = offset + lenLen;
 
   if((start + len) > buffer.length) {
 
-    throw new TruncatedMessageError("LENGTH_DELIMITED field declares " + String(len) + " bytes but only " + String(buffer.length - start) + " remain.",
-      "TRUNCATED_MESSAGE");
+    throw new TruncatedMessageError("LENGTH_DELIMITED field " + ((fieldNum === undefined) ? "" : String(fieldNum) + " ") + "declares " + String(len) +
+      " bytes but only " + String(buffer.length - start) + " remain.", "TRUNCATED_MESSAGE");
   }
 
   return [ buffer.subarray(start, start + len), lenLen + len ];
@@ -493,21 +495,14 @@ export function decodeProtobuf(buffer: Buffer, options: DecodeOptions): Record<n
 
       case WireType.LENGTH_DELIMITED: {
 
-        // The length prefix is a varint; reading it preserves the intentional need-more-bytes signal (a truncated length varint surfaces as the shared readVarint
-        // behavior). We guard only the BODY: a declared length that overruns the remaining buffer must raise the typed truncation error rather than silently
-        // subarray-clamping to a short buffer (which would also overshoot the offset and corrupt the remaining decode).
-        const [ len, lenLen ] = readVarint(buffer, offset);
+        // The length prefix is a varint; readLengthDelimited reads it through readVarint, which preserves the intentional need-more-bytes signal (a truncated length
+        // varint surfaces as the shared readVarint behavior). It guards only the BODY: a declared length that overruns the remaining buffer must raise the typed
+        // truncation error rather than silently subarray-clamping to a short buffer (which would also overshoot the offset and corrupt the remaining decode). We pass
+        // the field number so that error names the field.
+        const [ body, bytesRead ] = readLengthDelimited(buffer, offset, fieldNum);
 
-        offset += lenLen;
-
-        if((offset + len) > buffer.length) {
-
-          throw new TruncatedMessageError("LENGTH_DELIMITED field " + String(fieldNum) + " declares " + String(len) + " bytes but only " +
-            String(buffer.length - offset) + " remain.", "TRUNCATED_MESSAGE");
-        }
-
-        value = buffer.subarray(offset, offset + len);
-        offset += len;
+        value = body;
+        offset += bytesRead;
 
         break;
       }

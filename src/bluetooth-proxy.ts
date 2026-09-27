@@ -1269,7 +1269,7 @@ export class BluetoothProxyApi implements SubscriptionLifecycle {
 
     if(decoded === null) {
 
-      this.host.log.warn("Received BluetoothDeviceConnectionResponse with missing address; dropping.");
+      this.host.log.warn("Received malformed BluetoothDeviceConnectionResponse; dropping.");
 
       return;
     }
@@ -1343,7 +1343,7 @@ export class BluetoothProxyApi implements SubscriptionLifecycle {
 
     if(decoded === null) {
 
-      this.host.log.warn("Received BluetoothGATTGetServicesResponse with missing address; dropping.");
+      this.host.log.warn("Received malformed BluetoothGATTGetServicesResponse; dropping.");
 
       return;
     }
@@ -1374,7 +1374,7 @@ export class BluetoothProxyApi implements SubscriptionLifecycle {
 
     if(address === null) {
 
-      this.host.log.warn("Received BluetoothGATTGetServicesDoneResponse with missing address; dropping.");
+      this.host.log.warn("Received malformed BluetoothGATTGetServicesDoneResponse; dropping.");
 
       return;
     }
@@ -1648,8 +1648,17 @@ export class BluetoothProxyApi implements SubscriptionLifecycle {
     }
 
     // Field 3 is `repeated uint64 allocated`. Each entry arrives as its own VARINT value in the field map; readVarintBigInt is the right reader for the 64-bit
-    // dynamic range. The standard decoder dropped each value as a JS number (the `extractNumberField` path), so we re-decode the raw bytes for this field instead.
+    // dynamic range. The generic decode yields each value as a JS number (the `extractNumberField` path), which cannot hold a 64-bit address exactly, so we re-decode
+    // the raw bytes for this field with bigint precision.
     const allocated = this.decodeRepeatedUint64Field(payload, 3);
+
+    if(allocated === null) {
+
+      this.host.log.warn("Received malformed BluetoothConnectionsFreeResponse; dropping.");
+
+      return;
+    }
+
     const data: ConnectionsFreeData = { allocated, free, limit };
 
     this.cachedConnectionsFree = data;
@@ -2301,9 +2310,17 @@ export class BluetoothProxyApi implements SubscriptionLifecycle {
   }
 
   /**
-   * Decode a payload that carries only a uint64 `address` field at field 1. Used for `BluetoothGATTGetServicesDoneResponse` (id 72).
+   * Decode a payload that carries only a uint64 `address` field at field 1. Used for `BluetoothGATTGetServicesDoneResponse` (id 72). The walk reads every field
+   * rather than stopping at the address, so a malformed frame (a truncated varint, or a length-delimited field that declares more bytes than remain) returns `null` and
+   * the caller drops it, the same fail-closed rule the other address-keyed decoders here follow...an address taken from a frame whose tail is corrupt would resolve a
+   * service discovery from bytes we cannot trust. When the address field repeats, the last value wins.
+   *
+   * @param payload - The protobuf-encoded payload.
+   * @returns The decoded address, or `null` when the address is missing or the payload is malformed.
    */
   private decodeAddressOnly(payload: Buffer): Nullable<bigint> {
+
+    let address: Nullable<bigint> = null;
 
     try {
 
@@ -2318,13 +2335,12 @@ export class BluetoothProxyApi implements SubscriptionLifecycle {
 
         if((wireType === WireType.VARINT) && (fieldNum === 1)) {
 
-          const [value] = readVarintBigInt(payload, offset);
+          const [ value, bytesRead ] = readVarintBigInt(payload, offset);
 
-          return value;
-        }
+          address = value;
+          offset += bytesRead;
 
-        // Any other field shape - skip.
-        if(wireType === WireType.LENGTH_DELIMITED) {
+        } else if(wireType === WireType.LENGTH_DELIMITED) {
 
           const [ , bytesRead ] = readLengthDelimited(payload, offset);
 
@@ -2332,6 +2348,7 @@ export class BluetoothProxyApi implements SubscriptionLifecycle {
 
         } else if(wireType === WireType.VARINT) {
 
+          // Unknown VARINT field; skip the value.
           const [ , bytesRead ] = readVarint(payload, offset);
 
           offset += bytesRead;
@@ -2347,15 +2364,17 @@ export class BluetoothProxyApi implements SubscriptionLifecycle {
       return null;
     }
 
-    return null;
+    return address;
   }
 
   /**
    * Decode every `repeated uint64` value at the given field number from a payload. ESPHome's firmware encoder emits this repeated field as back-to-back unpacked
    * VARINT entries - one tag-plus-value pair per element - rather than a single packed length-delimited blob, so we walk byte-by-byte and accumulate the matching
    * VARINT entries. The implementation deliberately allocates a fresh array each call - the connections-free push is low-cadence so the allocation cost is irrelevant.
+   *
+   * @returns The matching values in wire order, or `null` when the payload carries an unknown wire type or is malformed.
    */
-  private decodeRepeatedUint64Field(payload: Buffer, fieldNumber: number): bigint[] {
+  private decodeRepeatedUint64Field(payload: Buffer, fieldNumber: number): Nullable<bigint[]> {
 
     const values: bigint[] = [];
 
@@ -2391,13 +2410,16 @@ export class BluetoothProxyApi implements SubscriptionLifecycle {
 
         } else {
 
-          break;
+          return null;
         }
       }
 
     } catch {
 
-      // Truncated varint or out-of-bounds read; return whatever we accumulated.
+      // A truncated varint, a length-delimited field that declares more bytes than remain, or the unknown wire type above fails the whole decode, the same fail-closed
+      // rule the other decoders here follow...a walk that stops early leaves a short allocation list a consumer cannot tell from a complete one, so the caller drops
+      // the frame rather than publishing it.
+      return null;
     }
 
     return values;

@@ -168,6 +168,14 @@ describe("readLengthDelimited", () => {
     assert.throws(() => readLengthDelimited(truncated, 0), TruncatedMessageError, "a declared length past the end must raise the typed truncation error");
     assert.throws(() => readLengthDelimited(truncated, 0), { code: "TRUNCATED_MESSAGE", message: "LENGTH_DELIMITED field declares 5 bytes but only 2 remain." });
   });
+
+  test("names the field in the truncation message when the caller passes a field number", () => {
+
+    // The prefix declares five bytes but only two follow. decodeProtobuf passes the field number, so the typed truncation error names the field it could not read.
+    const truncated = Buffer.from([ 0x05, 0x68, 0x69 ]);
+
+    assert.throws(() => readLengthDelimited(truncated, 0, 3), { code: "TRUNCATED_MESSAGE", message: "LENGTH_DELIMITED field 3 declares 5 bytes but only 2 remain." });
+  });
 });
 
 describe("encodeProtoFields", () => {
@@ -313,6 +321,8 @@ describe("decodeProtobuf", () => {
 
     assert.throws(() => decodeProtobuf(truncated, { maxFieldsPerMessage: 100 }), { name: "TruncatedMessageError" },
       "a LENGTH_DELIMITED body exceeding the remaining bytes must raise the typed truncation error rather than silently clamping");
+    assert.throws(() => decodeProtobuf(truncated, { maxFieldsPerMessage: 100 }),
+      { code: "TRUNCATED_MESSAGE", message: "LENGTH_DELIMITED field 1 declares 5 bytes but only 2 remain." });
   });
 });
 

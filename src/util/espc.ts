@@ -103,12 +103,57 @@ export function tryParseIntStrict(value: string): Nullable<number> {
 }
 
 /**
+ * Inputs for {@link assertInRange}.
+ */
+interface AssertInRangeInput {
+
+  /**
+   * The flag or argument name the error message leads with (e.g. "--brightness" or "date day").
+   */
+  readonly flag: string;
+
+  /**
+   * The parsed number to check against `range`.
+   */
+  readonly parsed: number;
+
+  /**
+   * The inclusive bounds `parsed` must lie within.
+   */
+  readonly range: { readonly max: number; readonly min: number };
+
+  /**
+   * The input as the user typed it, quoted in the error message. For a timestamp this is the timestamp text, not the epoch computed from it, so the message always
+   * points at what the user wrote.
+   */
+  readonly value: string;
+}
+
+/**
+ * Throw a typed {@link CliError} when a parsed CLI value lies outside its inclusive range. Every bounded CLI parser checks its range here, so each out-of-range value
+ * fails in one message shape naming the flag, both bounds, and the input as typed.
+ *
+ * @param input - The {@link AssertInRangeInput} bag.
+ * @throws {@link CliError} when `parsed` lies outside `range`.
+ * @internal
+ */
+function assertInRange(input: AssertInRangeInput): void {
+
+  const { flag, parsed, range, value } = input;
+
+  if((parsed < range.min) || (parsed > range.max)) {
+
+    throw new CliError(flag + " must be between " + String(range.min) + " and " + String(range.max) + ". Received: '" + value + "'.");
+  }
+}
+
+/**
  * Parse a CLI option's string value as a strict base-10 integer. Throws a typed {@link CliError} naming the option and the offending value when validation fails. This
  * is the throw-on-bad-input variant for call sites where a non-numeric value is a usage error (every `--brightness`, `--duration`, `--rgb`, `--temp`, `--port`, etc.).
  *
- * @remarks A `range` makes a well-formed integer outside the option's domain a usage error too, in the message shape {@link normalizeToWireUnit} uses, so the value
- * never reaches the connection or the wire. A call site passes the domain its value lands in whenever that domain is static: a calendar or clock component, the TCP
- * port range, or the wire domain the command encoder enforces for the field.
+ * @remarks A `range` makes a well-formed integer outside the option's domain a usage error too, through the {@link assertInRange} check every bounded CLI parser
+ * shares, so the value never reaches the connection or the wire. A call site passes the domain its value lands in whenever that domain is static: a calendar or clock
+ * component, the TCP port range, or the wire domain the command encoder enforces for the field.
  *
  * @param value - The raw string from the parsed argv.
  * @param flag - The flag name to surface in the error message (e.g. "--brightness").
@@ -126,16 +171,16 @@ export function parseIntOption(value: string, flag: string, range?: { readonly m
     throw new CliError("Invalid integer for " + flag + ": '" + value + "'. Expected a base-10 integer (no hex, no trailing characters).");
   }
 
-  if(range && ((parsed < range.min) || (parsed > range.max))) {
+  if(range) {
 
-    throw new CliError(flag + " must be between " + String(range.min) + " and " + String(range.max) + ". Received: '" + value + "'.");
+    assertInRange({ flag, parsed, range, value });
   }
 
   return parsed;
 }
 
-// The wire domains of the integer command fields the control builders parse, taken from the command encoder's own bounds so the CLI refuses exactly the values the
-// encoder would.
+// The wire domains of the integer command fields, taken from the command encoder's own bounds so every CLI parser that lands an integer on the wire refuses exactly
+// the values the encoder would.
 const INT32_DOMAIN = { max: INT32_MAX, min: INT32_MIN };
 const UINT32_DOMAIN = { max: UINT32_MAX, min: 0 };
 
@@ -184,10 +229,7 @@ function normalizeToWireUnit(value: string, label: string, max: number): number 
 
   const parsed = parseFloatOption(value, label);
 
-  if((parsed < 0) || (parsed > max)) {
-
-    throw new CliError(label + " must be between 0 and " + String(max) + ". Received: '" + value + "'.");
-  }
+  assertInRange({ flag: label, parsed, range: { max, min: 0 }, value });
 
   return parsed / max;
 }
@@ -1694,8 +1736,8 @@ function requireArg(args: readonly string[], index: number, message: string): st
 }
 
 /**
- * Parse a `YYYY-MM-DD` token into the date command's component fields. Each component is validated as a strict integer; a missing or malformed component throws a
- * {@link CliError} naming the offending part.
+ * Parse a `YYYY-MM-DD` token into the date command's component fields. Each component is validated as a strict integer within its calendar range, the day against the
+ * length of the parsed month in the parsed year; a missing, malformed, or out-of-range component throws a {@link CliError} naming the offending part.
  *
  * @internal
  */
@@ -1708,11 +1750,20 @@ function parseDateArg(value: string): { day: number; month: number; year: number
     throw new CliError("Date entity requires a value in YYYY-MM-DD form. Example: 2026-05-23.");
   }
 
+  const year = parseIntOption(parts[0] ?? "", "date year", { max: 9999, min: 0 });
+  const month = parseIntOption(parts[1] ?? "", "date month", { max: 12, min: 1 });
+
+  // Day zero of the following month is the last day of this one, so the Date object supplies both the month length and the leap-year rule. We set the year through
+  // setUTCFullYear on the zero epoch because Date.UTC maps years 0-99 onto 1900-1999, which would size year 0's February by 1900's calendar.
+  const monthEnd = new Date(0);
+
+  monthEnd.setUTCFullYear(year, month, 0);
+
   return {
 
-    day:   parseIntOption(parts[2] ?? "", "date day", { max: 31, min: 1 }),
-    month: parseIntOption(parts[1] ?? "", "date month", { max: 12, min: 1 }),
-    year:  parseIntOption(parts[0] ?? "", "date year", { max: 9999, min: 0 })
+    day: parseIntOption(parts[2] ?? "", "date day", { max: monthEnd.getUTCDate(), min: 1 }),
+    month,
+    year
   };
 }
 
@@ -1740,17 +1791,17 @@ function parseTimeArg(value: string): { hour: number; minute: number; second: nu
 
 /**
  * Parse a datetime token into epoch seconds. Accepts either a strict integer epoch-seconds value or any timestamp `Date` can parse (e.g. an ISO-8601 string), in which
- * case the result is floored to whole seconds. Throws a {@link CliError} on anything else.
+ * case the result is floored to whole seconds, and throws a {@link CliError} on anything else. Whichever form is given, the result is checked against the uint32 domain
+ * the command encoder enforces for the fixed32 `epochSeconds` field, so an instant before 1970 or past the uint32 ceiling in 2106 is a usage error that quotes the
+ * token as typed.
  *
  * @internal
  */
 function parseEpochArg(value: string): number {
 
-  const asInt = tryParseIntStrict(value);
+  if(tryParseIntStrict(value) !== null) {
 
-  if(asInt !== null) {
-
-    return asInt;
+    return parseIntOption(value, "datetime epoch", UINT32_DOMAIN);
   }
 
   const asDate = new Date(value);
@@ -1760,7 +1811,11 @@ function parseEpochArg(value: string): number {
     throw new CliError("Datetime entity requires epoch seconds or an ISO-8601 timestamp. Example: 1748044800 or 2026-05-23T12:00:00Z.");
   }
 
-  return Math.floor(asDate.getTime() / 1000);
+  const epochSeconds = Math.floor(asDate.getTime() / 1000);
+
+  assertInRange({ flag: "datetime epoch", parsed: epochSeconds, range: UINT32_DOMAIN, value });
+
+  return epochSeconds;
 }
 
 /**

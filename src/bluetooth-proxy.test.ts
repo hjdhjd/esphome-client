@@ -10,13 +10,13 @@ import type {
   BluetoothGATTService, BluetoothLERawAdvertisement, BluetoothProxyHost, BluetoothScannerStateData, ConnectionStateData, ConnectionsFreeData, NotifyDataChunk
 } from "./bluetooth-proxy.ts";
 import type { CapturedContractFrame, ContractFrameKind } from "./reissuable-subscription-contract.helpers.ts";
+import { ConnectionError, TruncatedMessageError } from "./errors.ts";
 import type { FieldValue, ProtoField } from "./protocol/codec.ts";
 import { decodeProtobuf, encodeProtoFields, encodeVarintBigInt } from "./protocol/codec.ts";
 import { describe, test } from "node:test";
 import { BluetoothProxyApi } from "./bluetooth-proxy.ts";
 import { Buffer } from "node:buffer";
 import type { ClientEventsMap } from "./esphome-client.ts";
-import { ConnectionError } from "./errors.ts";
 import { EventBus } from "./event-bus.ts";
 import { MessageType } from "./protocol/message-types.ts";
 import type { Nullable } from "./types.ts";
@@ -1081,13 +1081,14 @@ describe("BluetoothProxyApi.connect", () => {
 
     handle.bus.on("bluetoothConnectionState", (state): void => { captured.push(state); });
 
-    // A well-formed connected=true response followed by an unknown field 5 (tag 0x2a) that declares four bytes with one following. The decoder never reads that field,
-    // but a declared length past the end still marks the frame as truncated, so the response is dropped at warn instead of reporting the address connected.
+    // We append an unknown field 5 (tag 0x2a) that declares four bytes with one following to a well-formed connected=true response. The decoder never reads that
+    // field, but a declared length past the end still marks the frame as truncated, so the response is dropped at warn instead of reporting the address connected.
     api.acceptDeviceConnectionResponse(Buffer.concat([ encodeDeviceConnection(0x77n, true), Buffer.from([ 0x2a, 0x04, 0x01 ]) ]));
 
     assert.equal(captured.length, 0, "a truncated response must not emit a connection-state event");
     assert.equal(api.connectionState(0x77n), null, "a truncated response must not update the connection-state cache");
     assert.equal(handle.warnLogs.length, 1);
+    assert.equal(handle.warnLogs[0], "Received malformed BluetoothDeviceConnectionResponse; dropping.");
   });
 });
 
@@ -1215,6 +1216,117 @@ describe("BluetoothProxyApi.getServices", () => {
 
     api.acceptGetServicesDoneResponse(encodeProtoFields([{ fieldNumber: 1, value: address, wireType: WireType.VARINT }]));
     await fresh;
+  });
+
+  test("a services response with no address field is dropped at warn and adds nothing to the discovery", async () => {
+
+    const handle = makeHost();
+    const api = new BluetoothProxyApi(handle.host);
+    const address = 0xe1n;
+    const promise = api.getServices(address);
+    const service = encodeProtoFields([{ fieldNumber: 2, value: 1, wireType: WireType.VARINT }]);
+
+    // A frame carrying a service entry but no address field decodes cleanly yet names no discovery, so it is dropped at warn and its service never accumulates.
+    api.acceptGetServicesResponse(encodeProtoFields([{ fieldNumber: 2, value: service, wireType: WireType.LENGTH_DELIMITED }]));
+
+    assert.equal(handle.warnLogs.length, 1);
+    assert.equal(handle.warnLogs[0], "Received malformed BluetoothGATTGetServicesResponse; dropping.");
+
+    api.acceptGetServicesDoneResponse(encodeProtoFields([{ fieldNumber: 1, value: address, wireType: WireType.VARINT }]));
+
+    assert.deepEqual(await promise, [], "a dropped services response must not contribute a service to the discovery");
+  });
+
+  test("a services response whose trailing length-delimited field declares more bytes than remain is dropped at warn, even though its address decodes", async () => {
+
+    const handle = makeHost();
+    const api = new BluetoothProxyApi(handle.host);
+    const address = 0xe2n;
+    const promise = api.getServices(address);
+    const frame = encodeGetServicesResponse(address, [{ handle: 1, shortUuid: 0x1800 }]);
+
+    // We append an unknown field 5 (tag 0x2a) that declares four bytes with one following to the well-formed frame. The address decodes, but a declared length past the
+    // end marks the frame as truncated, so its service must not accumulate. The same frame without the trailing bytes then accumulates normally.
+    api.acceptGetServicesResponse(Buffer.concat([ frame, Buffer.from([ 0x2a, 0x04, 0x01 ]) ]));
+
+    assert.equal(handle.warnLogs.length, 1);
+    assert.equal(handle.warnLogs[0], "Received malformed BluetoothGATTGetServicesResponse; dropping.");
+
+    api.acceptGetServicesResponse(frame);
+    api.acceptGetServicesDoneResponse(encodeProtoFields([{ fieldNumber: 1, value: address, wireType: WireType.VARINT }]));
+
+    const services = await promise;
+
+    assert.equal(services.length, 1, "only the well-formed frame's service reaches the discovery");
+    assert.equal(services[0]!.handle, 1);
+    assert.equal(handle.warnLogs.length, 1);
+  });
+
+  test("a Done sentinel with no address field is dropped at warn and leaves the discovery in flight", async () => {
+
+    const handle = makeHost();
+    const api = new BluetoothProxyApi(handle.host);
+    const address = 0xe3n;
+    const promise = api.getServices(address);
+
+    api.acceptGetServicesResponse(encodeGetServicesResponse(address, [{ handle: 1, shortUuid: 0x1800 }]));
+
+    // A sentinel carrying only an unknown VARINT field decodes cleanly yet names no discovery, so it is dropped at warn and the accumulated service stays in flight
+    // until the well-formed sentinel resolves the discovery with it.
+    api.acceptGetServicesDoneResponse(encodeProtoFields([{ fieldNumber: 2, value: 5, wireType: WireType.VARINT }]));
+
+    assert.equal(handle.warnLogs.length, 1);
+    assert.equal(handle.warnLogs[0], "Received malformed BluetoothGATTGetServicesDoneResponse; dropping.");
+
+    api.acceptGetServicesDoneResponse(encodeProtoFields([{ fieldNumber: 1, value: address, wireType: WireType.VARINT }]));
+
+    const services = await promise;
+
+    assert.equal(services.length, 1);
+    assert.equal(services[0]!.handle, 1);
+  });
+
+  test("a Done sentinel whose trailing length-delimited field declares more bytes than remain is dropped at warn and leaves the discovery in flight", async () => {
+
+    const handle = makeHost();
+    const api = new BluetoothProxyApi(handle.host);
+    const address = 0xe4n;
+    const promise = api.getServices(address);
+    const sentinel = encodeProtoFields([{ fieldNumber: 1, value: address, wireType: WireType.VARINT }]);
+
+    // We append an unknown field 5 (tag 0x2a) that declares four bytes with one following to the well-formed sentinel. The address decodes, but a declared length past
+    // the end marks the frame as truncated, so it must not resolve the discovery: a service frame after it still accumulates, and the same sentinel without the
+    // trailing bytes then resolves the discovery with that service.
+    api.acceptGetServicesDoneResponse(Buffer.concat([ sentinel, Buffer.from([ 0x2a, 0x04, 0x01 ]) ]));
+
+    assert.equal(handle.warnLogs.length, 1);
+    assert.equal(handle.warnLogs[0], "Received malformed BluetoothGATTGetServicesDoneResponse; dropping.");
+
+    api.acceptGetServicesResponse(encodeGetServicesResponse(address, [{ handle: 1, shortUuid: 0x1800 }]));
+    api.acceptGetServicesDoneResponse(sentinel);
+
+    const services = await promise;
+
+    assert.equal(services.length, 1, "a truncated sentinel must not resolve the discovery ahead of its services");
+    assert.equal(services[0]!.handle, 1);
+  });
+
+  test("a Done sentinel carrying the address field twice resolves the discovery for the last address", async () => {
+
+    const handle = makeHost();
+    const api = new BluetoothProxyApi(handle.host);
+    const first = 0xe5n;
+    const last = 0xe6n;
+    const promise = api.getServices(last);
+
+    // A repeated scalar field resolves to its last occurrence, so the sentinel completes the discovery keyed by the second address rather than the first.
+    api.acceptGetServicesDoneResponse(encodeProtoFields([
+      { fieldNumber: 1, value: first, wireType: WireType.VARINT },
+      { fieldNumber: 1, value: last, wireType: WireType.VARINT }
+    ]));
+
+    assert.equal(handle.warnLogs.length, 0);
+    assert.deepEqual(await promise, [], "the sentinel must resolve the discovery for the last address it carries");
   });
 });
 
@@ -1549,6 +1661,70 @@ describe("BluetoothProxyApi.connectionsFree", () => {
     ]));
 
     assert.deepEqual(api.lastConnectionsFree(), { allocated: [], free: 1, limit: 3 });
+  });
+
+  test("a push whose trailing length-delimited field declares more bytes than remain throws from the field decode, keeps the cached push, and emits nothing", () => {
+
+    const handle = makeHost();
+    const api = new BluetoothProxyApi(handle.host);
+    const emitted: ConnectionsFreeData[] = [];
+    const frame = encodeProtoFields([
+      { fieldNumber: 1, value: 2, wireType: WireType.VARINT },
+      { fieldNumber: 2, value: 3, wireType: WireType.VARINT },
+      { fieldNumber: 3, value: 0x10n, wireType: WireType.VARINT }
+    ]);
+
+    api.acceptConnectionsFreeResponse(encodeProtoFields([
+      { fieldNumber: 1, value: 3, wireType: WireType.VARINT },
+      { fieldNumber: 2, value: 3, wireType: WireType.VARINT }
+    ]));
+    handle.bus.on("bluetoothConnectionsFree", (data): void => { emitted.push(data); });
+
+    // We append an unknown field 5 (tag 0x2a) that declares four bytes with one following to the well-formed frame. The field decode that reads free and limit walks
+    // the whole payload first, so the overrun throws the typed truncation error before the allocated walk runs, and the run-phase receiver drops the frame.
+    assert.throws(() => api.acceptConnectionsFreeResponse(Buffer.concat([ frame, Buffer.from([ 0x2a, 0x04, 0x01 ]) ])), TruncatedMessageError);
+    assert.equal(handle.warnLogs.length, 0);
+    assert.deepEqual(api.lastConnectionsFree(), { allocated: [], free: 3, limit: 3 });
+    assert.equal(emitted.length, 0);
+
+    api.acceptConnectionsFreeResponse(frame);
+
+    assert.deepEqual(emitted, [{ allocated: [0x10n], free: 2, limit: 3 }]);
+    assert.deepEqual(api.lastConnectionsFree(), { allocated: [0x10n], free: 2, limit: 3 });
+  });
+
+  test("a push whose allocated entry carries an unknown wire type is dropped at warn, keeps the cached push, and emits nothing", () => {
+
+    const handle = makeHost();
+    const api = new BluetoothProxyApi(handle.host);
+    const emitted: ConnectionsFreeData[] = [];
+    const frame = encodeProtoFields([
+      { fieldNumber: 1, value: 2, wireType: WireType.VARINT },
+      { fieldNumber: 2, value: 3, wireType: WireType.VARINT },
+      { fieldNumber: 3, value: 0x10n, wireType: WireType.VARINT }
+    ]);
+
+    api.acceptConnectionsFreeResponse(encodeProtoFields([
+      { fieldNumber: 1, value: 3, wireType: WireType.VARINT },
+      { fieldNumber: 2, value: 3, wireType: WireType.VARINT }
+    ]));
+    handle.bus.on("bluetoothConnectionsFree", (data): void => { emitted.push(data); });
+
+    // We append a field 3 tag carrying wire type 6 (tag 0x1e) to the well-formed frame. The field decode stops there with free and limit intact, but the allocated walk
+    // cannot read past a wire type it does not know, so the frame is dropped whole rather than emitted with a list that may be short. The same frame without the tag
+    // then emits normally.
+    api.acceptConnectionsFreeResponse(Buffer.concat([ frame, Buffer.from([0x1e]) ]));
+
+    assert.equal(handle.warnLogs.length, 1);
+    assert.equal(handle.warnLogs[0], "Received malformed BluetoothConnectionsFreeResponse; dropping.");
+    assert.deepEqual(api.lastConnectionsFree(), { allocated: [], free: 3, limit: 3 });
+    assert.equal(emitted.length, 0);
+
+    api.acceptConnectionsFreeResponse(frame);
+
+    assert.deepEqual(emitted, [{ allocated: [0x10n], free: 2, limit: 3 }]);
+    assert.deepEqual(api.lastConnectionsFree(), { allocated: [0x10n], free: 2, limit: 3 });
+    assert.equal(handle.warnLogs.length, 1);
   });
 
   test("reissueOnReconnect re-sends SUBSCRIBE only when a consumer is alive", () => {

@@ -208,7 +208,7 @@ export class SerialProxyApi implements SubscriptionLifecycle {
    */
   public clearConnectionState(): void {
 
-    const reason = new DOMException("Serial proxy reset: client reconnected before the prior request completed.", "AbortError");
+    const reason = new DOMException("Serial proxy reset: connection torn down before the prior request completed.", "AbortError");
 
     this.flushCorrelator.rejectAll(reason);
     this.modemPinsCorrelator.rejectAll(reason);

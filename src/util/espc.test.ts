@@ -2802,6 +2802,23 @@ describe("buildControlCommand - schema-exhaustive control coverage", () => {
     assert.throws(() => buildControlCommand(entityRecord("datetime", "clock"), ["not-a-date"], EMPTY_OPTIONS), /epoch seconds or an ISO/);
   });
 
+  test("datetime: an epoch outside the uint32 domain the encoder enforces is a usage error quoting the token as typed", () => {
+
+    // The integer and timestamp forms reach the range check along different paths, so each form is probed just past both ends of the domain and on both ends inside it.
+    for(const token of [ "-1", "4294967296", "1969-12-31T23:59:59Z", "2106-02-07T06:28:16Z" ]) {
+
+      assert.throws(() => buildControlCommand(entityRecord("datetime", "clock"), [token], EMPTY_OPTIONS), (err: unknown): boolean => {
+
+        return (err instanceof CliError) && (err.message === "datetime epoch must be between 0 and 4294967295. Received: '" + token + "'.");
+      }, "datetime must refuse the out-of-domain token '" + token + "' with the range message");
+    }
+
+    assert.deepEqual(buildControlCommand(entityRecord("datetime", "clock"), ["0"], EMPTY_OPTIONS).options, { epochSeconds: 0 });
+    assert.deepEqual(buildControlCommand(entityRecord("datetime", "clock"), ["4294967295"], EMPTY_OPTIONS).options, { epochSeconds: 4294967295 });
+    assert.deepEqual(buildControlCommand(entityRecord("datetime", "clock"), ["1970-01-01T00:00:00Z"], EMPTY_OPTIONS).options, { epochSeconds: 0 });
+    assert.deepEqual(buildControlCommand(entityRecord("datetime", "clock"), ["2106-02-07T06:28:15Z"], EMPTY_OPTIONS).options, { epochSeconds: 4294967295 });
+  });
+
   test("time: HH:MM and HH:MM:SS", () => {
 
     assert.deepEqual(buildControlCommand(entityRecord("time", "wake"), ["18:30"], EMPTY_OPTIONS).options, { hour: 18, minute: 30, second: 0 });
@@ -2820,6 +2837,46 @@ describe("buildControlCommand - schema-exhaustive control coverage", () => {
     assert.throws(() => buildControlCommand(entityRecord("time", "wake"), ["24:00"], EMPTY_OPTIONS), /time hour must be between 0 and 23\./);
     assert.throws(() => buildControlCommand(entityRecord("time", "wake"), ["18:60"], EMPTY_OPTIONS), /time minute must be between 0 and 59\./);
     assert.throws(() => buildControlCommand(entityRecord("time", "wake"), ["18:30:60"], EMPTY_OPTIONS), /time second must be between 0 and 59\./);
+  });
+
+  test("date: the day is bounded by the length of the parsed month, leap years included", () => {
+
+    const outOfMonth = [
+
+      [ "2026-02-31", "date day must be between 1 and 28. Received: '31'." ],
+      [ "2027-02-29", "date day must be between 1 and 28. Received: '29'." ],
+      [ "0100-02-29", "date day must be between 1 and 28. Received: '29'." ],
+      [ "2026-04-31", "date day must be between 1 and 30. Received: '31'." ]
+    ] as const;
+
+    for(const [ token, message ] of outOfMonth) {
+
+      assert.throws(() => buildControlCommand(entityRecord("date", "alarm"), [token], EMPTY_OPTIONS), (err: unknown): boolean => {
+
+        return (err instanceof CliError) && (err.message === message);
+      }, "date must refuse the out-of-month token '" + token + "' with the range message");
+    }
+
+    assert.deepEqual(buildControlCommand(entityRecord("date", "alarm"), ["2028-02-29"], EMPTY_OPTIONS).options, { day: 29, month: 2, year: 2028 });
+    assert.deepEqual(buildControlCommand(entityRecord("date", "alarm"), ["2026-12-31"], EMPTY_OPTIONS).options, { day: 31, month: 12, year: 2026 });
+
+    // Year 0 is a leap year in the proleptic Gregorian calendar where 1900 is not, so its leap day parsing proves a year below 100 is sized by its own calendar rather
+    // than remapped onto the 1900s. Year 96 follows the plain four-year rule, and year 100 above is a century year that is not a leap year.
+    assert.deepEqual(buildControlCommand(entityRecord("date", "alarm"), ["0000-02-29"], EMPTY_OPTIONS).options, { day: 29, month: 2, year: 0 });
+    assert.deepEqual(buildControlCommand(entityRecord("date", "alarm"), ["0096-02-29"], EMPTY_OPTIONS).options, { day: 29, month: 2, year: 96 });
+  });
+
+  test("date: a token with several bad components reports the leftmost, parsing year, then month, then day", () => {
+
+    // The day's bound comes from the parsed year and month, so they parse first and a bad month or year is reported ahead of a bad day.
+    assert.throws(() => buildControlCommand(entityRecord("date", "alarm"), ["2026-13-32"], EMPTY_OPTIONS), (err: unknown): boolean => {
+
+      return (err instanceof CliError) && (err.message === "date month must be between 1 and 12. Received: '13'.");
+    });
+    assert.throws(() => buildControlCommand(entityRecord("date", "alarm"), ["10000-01-32"], EMPTY_OPTIONS), (err: unknown): boolean => {
+
+      return (err instanceof CliError) && (err.message === "date year must be between 0 and 9999. Received: '10000'.");
+    });
   });
 
   test("update: check and install verbs (install aliases the protocol's update command)", () => {
