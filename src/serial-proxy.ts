@@ -426,7 +426,8 @@ export class SerialProxyApi implements SubscriptionLifecycle {
    *
    * @param instance - Zero-based instance index.
    * @param options - Optional backpressure policy and cancellation signal forwarded to the underlying `bus.stream("serialData", options)`.
-   * @returns An `AsyncIterable<SerialDataChunk>` that yields chunks until the consumer aborts, the connection drops, or the stream completes.
+   * @returns An `AsyncIterable<SerialDataChunk>` that yields chunks until the consumer aborts, returns, or throws, or the underlying EventBus stream ends. A reconnect
+   * does not end it: the subscriber survives in the ledger and {@link reissueOnReconnect} re-arms the wire-side subscription on the new connection.
    *
    */
   public data(instance: number, options?: StreamOptions): AsyncIterable<SerialDataChunk> {

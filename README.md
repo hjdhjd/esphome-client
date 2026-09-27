@@ -21,13 +21,13 @@
 - [Why v2](#why-v2)
 - [Install](#install)
 - [Quick start](#quick-start)
-- [Common patterns](#common-patterns) — task-oriented entry points
-- [Core model](#core-model) — entities, commands, telemetry, errors
-- [Runtime](#runtime) — lifecycle, health, auto-reconnect, latest-state cache, capabilities, logs
-- [Sub-APIs](#sub-apis) — camera, voice, serial, Bluetooth, Z-Wave, Home Assistant, user-services
-- [CLI](#cli) — `espc` interactive tool
-- [Testing](#testing) — `MockClient`, `MockTransport`, factory helpers
-- [Schema extensions](#schema-extensions) — `aliasOf`, `extending`
+- [Common patterns](#common-patterns) - task-oriented entry points
+- [Core model](#core-model) - entities, commands, telemetry, errors
+- [Runtime](#runtime) - lifecycle, health, auto-reconnect, latest-state cache, capabilities, logs
+- [Sub-APIs](#sub-apis) - camera, voice, serial, Bluetooth, Z-Wave, Home Assistant, user-services
+- [CLI](#cli) - `espc` interactive tool
+- [Testing](#testing) - `MockClient`, `MockTransport`, factory helpers
+- [Schema extensions](#schema-extensions) - `aliasOf`, `extending`
 - [Protocol reference](#protocol-reference)
 - [Versioning and license](#versioning-and-license)
 
@@ -86,19 +86,19 @@ console.info("Lock command settled:", lockState);
 
 The factory resolves once the handshake, device-info exchange, and entity discovery have completed; the `await using` binding ensures the graceful `DISCONNECT_REQUEST` round-trip runs at scope exit.
 
-The `lockSub` listener is illustrative — `commandAndAwait` pre-subscribes internally, so the awaited round-trip works without it. The callback rail is shown so an unrelated consumer's pattern (observing lock state independently of command-and-await) is visible in the same snippet.
+The `lockSub` listener is illustrative...`commandAndAwait` pre-subscribes internally, so the awaited round-trip works without it. The callback rail is shown so an unrelated consumer's pattern (observing lock state independently of command-and-await) is visible in the same snippet.
 
 ## Common patterns
 
 A few task-oriented entry points into the rest of the doc:
 
-- **Monitor every state change** — the [Telemetry](#telemetry) rails (`client.on`, `client.stream`, `client.telemetry()`).
-- **Send a command and confirm it landed** — [`client.commandAndAwait`](#commands).
-- **Read latest known state without subscribing** — the [Latest-state cache](#latest-state-cache) (`client.latest`, `client.snapshot`).
-- **Re-run setup work each time the connection comes up** — [`withReconnect`](#auto-reconnect).
-- **Probe a feature before using it** — [`client.capabilities()`](#capabilities).
-- **Wait until a known set of entities has reported state, then construct** — compose `client.on("telemetry")`, `client.snapshot()`, `client.entitiesByDevice()`, and `AbortSignal.any`. v2 deliberately omits a built-in `waitForInitialState` helper because the right completion predicate is consumer-specific (some entity types are stateless, some legitimately suppress a first state response under specific configurations).
-- **Test consumer code against the client** — the [Testing](#testing) subpath (`MockClient` + factory helpers).
+- **Monitor every state change** - the [Telemetry](#telemetry) rails (`client.on`, `client.stream`, `client.telemetry()`).
+- **Send a command and confirm it landed** - [`client.commandAndAwait`](#commands).
+- **Read latest known state without subscribing** - the [Latest-state cache](#latest-state-cache) (`client.latest`, `client.snapshot`).
+- **Re-run setup work each time the connection comes up** - [`withReconnect`](#auto-reconnect).
+- **Probe a feature before using it** - [`client.capabilities()`](#capabilities).
+- **Wait until a known set of entities has reported state, then construct** - compose `client.on("telemetry")`, `client.snapshot()`, `client.entitiesByDevice()`, and `AbortSignal.any`. v2 deliberately omits a built-in `waitForInitialState` helper because the right completion predicate is consumer-specific (some entity types are stateless, some legitimately suppress a first state response under specific configurations).
+- **Test consumer code against the client** - the [Testing](#testing) subpath (`MockClient` + factory helpers).
 
 ## Core model
 

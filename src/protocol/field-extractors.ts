@@ -4,8 +4,8 @@
  */
 
 /**
- * Pure helpers that pluck typed values out of the `Record<number, FieldValue[]>` shape returned by {@link decodeProtobuf}. Extracted from the host class so receive
- * handlers in `voice-assistant.ts` and `home-assistant.ts` can decode payloads without reaching back into the host.
+ * Pure helpers that pluck typed values out of the `Record<number, FieldValue[]>` shape returned by {@link decodeProtobuf}. They depend on the codec alone, never on the
+ * client host, so the receive handlers in `voice-assistant.ts` and `home-assistant.ts` decode their payloads without a host reference.
  *
  * Every helper is pure: same fields plus same field number always produce the same output. None of them mutate the input.
  *

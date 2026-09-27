@@ -14,8 +14,8 @@
  * Devices that opt into `USE_API_USER_DEFINED_ACTION_RESPONSES` emit an `EXECUTE_SERVICE_RESPONSE` correlated via `callId`; consumers receive these via the host's
  * `serviceCallResult` event. Older firmware treats `executeService` as fire-and-forget and never produces the response message.
  *
- * The class is a thin sub-API namespace - it carries no internal state and delegates every operation to the host interface, which supplies the service registry,
- * the encoder, the frame-send hook, and the logger; the api class supplies the consumer-facing method names and JSDoc.
+ * The class is a thin sub-API namespace - it carries no internal state, encodes outbound requests with the protocol codec it imports directly, and delegates the rest
+ * to the host interface, which supplies the service registry, the frame-send hook, and the logger; the class supplies the consumer-facing method names and JSDoc.
  *
  * @module user-services
  */

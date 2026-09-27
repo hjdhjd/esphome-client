@@ -105,7 +105,8 @@ refcounted-subscription pattern keyed by instance.
 
 `AsyncIterable`\<[`SerialDataChunk`](../interfaces/SerialDataChunk.md)\>
 
-An `AsyncIterable<SerialDataChunk>` that yields chunks until the consumer aborts, the connection drops, or the stream completes.
+An `AsyncIterable<SerialDataChunk>` that yields chunks until the consumer aborts, returns, or throws, or the underlying EventBus stream ends. A reconnect
+does not end it: the subscriber survives in the ledger and [reissueOnReconnect](#reissueonreconnect) re-arms the wire-side subscription on the new connection.
 
 #### Remarks
 

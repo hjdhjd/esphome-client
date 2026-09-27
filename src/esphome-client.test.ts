@@ -2315,9 +2315,8 @@ describe("EspHomeClient.disconnect / disconnectAsync / dispose", () => {
 
   test("stray DISCONNECT_RESPONSE arriving after disconnectAsync settles still routes through teardown", async () => {
 
-    // Regression test for the Correlator refactor: when a DISCONNECT_RESPONSE arrives after the graceful timeout already fell through, the response handler must
-    // still tear the connection down. The Correlator returns `false` from `resolve` on a stray response; the host's `acknowledgeDisconnectResponse` branches on the
-    // boolean to call `disconnectInternal` in that case.
+    // A DISCONNECT_RESPONSE that arrives after the graceful timeout already fell through still tears the connection down. The Correlator returns `false` from
+    // `resolve` on a stray response; the host's `acknowledgeDisconnectResponse` branches on the boolean to call `disconnectInternal` in that case.
     const transport = new MockTransport();
     const client = new EspHomeClient({ host: "test.local", logger: quietLogger(), reconnect: false, transportFactory: (): MockTransport => transport });
 

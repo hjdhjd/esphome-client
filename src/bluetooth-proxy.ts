@@ -616,7 +616,8 @@ export class BluetoothProxyApi implements SubscriptionLifecycle {
    * {@includeCode ./examples/showcase.ts#bluetooth-advertisements}
    *
    * @param options - Optional backpressure policy and cancellation signal forwarded to the underlying `bus.stream("bluetoothAdvertisement", options)`.
-   * @returns An `AsyncIterable<BluetoothLERawAdvertisement>` that yields ads until the consumer aborts, the connection drops, or the stream completes.
+   * @returns An `AsyncIterable<BluetoothLERawAdvertisement>` that yields ads until the consumer aborts, returns, or throws, or the underlying EventBus stream ends. A
+   * reconnect does not end it: the subscriber survives in the ledger and {@link reissueOnReconnect} re-arms the wire-side subscription on the new connection.
    *
    */
   public advertisements(options?: StreamOptions): AsyncIterable<BluetoothLERawAdvertisement> {

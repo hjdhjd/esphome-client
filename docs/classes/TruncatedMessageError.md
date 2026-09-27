@@ -11,8 +11,9 @@ tag claims more bytes than the buffer holds.
 
 ## Remarks
 
-Raised by `decodeProtobuf` when a FIXED32, FIXED64, or LENGTH_DELIMITED read would overrun the remaining buffer, so the decoder
-surfaces one typed error for the truncation condition instead of silently clamping (FIXED32 / LENGTH_DELIMITED) or throwing an untyped `RangeError` (FIXED64).
+Raised by `decodeProtobuf` when a FIXED32, FIXED64, or LENGTH_DELIMITED read would overrun the remaining buffer, and by `readLengthDelimited`, the
+length-delimited reader the codec shares with the hand-written payload decoders, when a declared body would. Either way the decoder surfaces one typed error for the
+truncation condition instead of silently clamping (FIXED32 / LENGTH_DELIMITED) or throwing an untyped `RangeError` (FIXED64).
 Like every [DecodingError](DecodingError.md), it is contained: the run-phase receiver catches it and drops the single malformed frame rather than tearing down the connection.
 The need-more-bytes signal the transport relies on for frame-boundary detection lives in `readVarint` / `tryDrainPlaintextFrame`, not here, so this typed error does
 not perturb framing.

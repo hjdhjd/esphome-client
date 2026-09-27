@@ -12,8 +12,8 @@
  * retention rather than transient allocations between collections. The bench prints `deltaHeapBytes` as `final - initial` alongside the documented ~5 MiB target
  * above; it performs no baseline comparison and gates nothing, so the output is for manual, out-of-band inspection.
  */
-import { MessageType } from "../src/protocol/index.ts";
 import { startDriver, tryGc, yieldTick } from "./_runtime.ts";
+import { MessageType } from "../src/protocol/index.ts";
 import { switchStateResponsePayload } from "../test/simulator/scenarios/index.ts";
 
 const SAMPLE_INTERVAL_MS = 5000;

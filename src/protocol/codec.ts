@@ -343,8 +343,9 @@ export function readVarint(buffer: Buffer, offset: number): [ number, number ] {
  * length prefix.
  *
  * @remarks `subarray` clamps an end past the buffer to the buffer's length, so a caller that sliced the declared length itself would read a short body and advance its
- * cursor past the end. This reader refuses the overrun with the same typed truncation error {@link decodeProtobuf} raises, so the hand-written decoders that walk a
- * payload field by field fail closed exactly as the codec does.
+ * cursor past the end. This reader refuses the overrun with the typed truncation error rather than clamping. {@link decodeProtobuf} reads every length-delimited field
+ * through this function, and the hand-written decoders that walk a payload field by field call it directly, so the codec and the walkers share one bounds check and
+ * fail closed the same way.
  *
  * @internal
  */

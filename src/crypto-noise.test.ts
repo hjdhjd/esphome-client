@@ -897,7 +897,7 @@ describe("Known-Answer Tests (reference vectors)", () => {
 
   // KAT-1 asserts the CipherState nonce construction against an explicitly-written literal nonce. Every other CipherState test in this file is a symmetric round-trip
   // (encrypt then decrypt with the same code), so a wrong nonce byte-layout - wrong endianness, or the counter at offset 0 instead of offset 4 - would round-trip
-  // perfectly because both directions would share the mistake. updateNonce() builds the 12-byte nonce as [00 00 00 00][LE64(n)] (src/crypto-noise.ts:261-262); this KAT
+  // perfectly because both directions would share the mistake. updateNonce() builds the 12-byte nonce as [00 00 00 00][LE64(n)]; this KAT
   // drives the private counter to n=5 and asserts our output equals the same plaintext encrypted under the literal nonce [0,0,0,0, 5,0,0,0,0,0,0,0]. A non-zero counter
   // is used deliberately so the LE64 advance is exercised, not just the all-zero n=0 case. The key, ad, and plaintext are arbitrary fixed test constants.
   const kat1Key = Buffer.from("2b7e151628aed2a6abf7158809cf4f3c2b7e151628aed2a6abf7158809cf4f3c", "hex");
@@ -917,9 +917,9 @@ describe("Known-Answer Tests (reference vectors)", () => {
 
   test("KAT-1: EncryptWithAd at counter n=5 matches the explicit-literal-nonce reference", () => {
 
-    // We set the private nonce counter to 5 via the same cast the NONCE_EXHAUSTED test uses (the counter is declared bare `private n;` at src/crypto-noise.ts:193, its
-    // type inferred bigint from `this.n = 0n;` at :204). If the production nonce layout were wrong - big-endian, or the counter at offset 0 - the constructed nonce would
-    // diverge from kat1LiteralNonce and this byte-equality would fail.
+    // We set the private nonce counter to 5 via the same cast the NONCE_EXHAUSTED test uses (the counter is declared bare `private n;` on CipherState, its type
+    // inferred bigint from the constructor's `this.n = 0n;` assignment). If the production nonce layout were wrong - big-endian, or the counter at offset 0 - the
+    // constructed nonce would diverge from kat1LiteralNonce and this byte-equality would fail.
     const enc = new CipherState();
 
     enc.InitializeKey(Buffer.from(kat1Key));
@@ -940,7 +940,7 @@ describe("Known-Answer Tests (reference vectors)", () => {
 
   // KAT-2 externally asserts the responder read-path handshake composition end to end. The vector comes from haskell-cryptography/cacophony `vectors/cacophony.txt`,
   // entry `Noise_NNpsk0_25519_ChaChaPoly_SHA256` - an independent Haskell Noise implementation. Its first message is `init_ephemeral_pub (32) || ChaChaPoly ciphertext +
-  // Poly1305 tag (32)`. In NNpsk0 the message-1 read order is psk-then-e (the pattern is [["psk","e"],["e","ee"]] at src/crypto-noise.ts:73-77), so no `ee` DH happens
+  // Poly1305 tag (32)`. In NNpsk0 the message-1 read order is psk-then-e (the pattern is [["psk","e"],["e","ee"]] in NNPSK0_PATTERN), so no `ee` DH happens
   // until message 2 and msg1 authenticates from public values alone. Our `responder.readMessage(msg1)` therefore reconstructs the matching symmetric state and recovers
   // the payload IFF our entire read-path composition (protocol-name SHA-256, prologue MixHash, MixKeyAndHash(psk) with its HKDF-3 split + h-mix, MixHash + MixKey(e) with
   // HKDF-2, DecryptAndHash with AAD=h and nonce 0) matches cacophony's. The decrypt of cacophony's externally-computed ciphertext also transitively confirms our

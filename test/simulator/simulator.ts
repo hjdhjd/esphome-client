@@ -16,7 +16,7 @@
  * @module test/simulator
  */
 import { Buffer } from "node:buffer";
-import { type MockTransport } from "../../src/testing/index.ts";
+import type { MockTransport } from "../../src/testing/index.ts";
 import type { ReplaySummary } from "../../src/util/capture.ts";
 
 /**

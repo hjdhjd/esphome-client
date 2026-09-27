@@ -12,8 +12,8 @@
  * summary line (rounded median fps, the conservative p10 floor, the per-run durations, and the median / stddev); it performs no baseline comparison and gates nothing,
  * so the output is for manual, out-of-band inspection. Reporting the median rather than a single sample simply keeps the printed number stable across contended runs.
  */
-import { MessageType } from "../src/protocol/index.ts";
 import { startDriver, summarize, tryGc, yieldTick } from "./_runtime.ts";
+import { MessageType } from "../src/protocol/index.ts";
 import { switchStateResponsePayload } from "../test/simulator/scenarios/index.ts";
 
 const FRAMES_PER_RUN = 100000;

@@ -76,7 +76,8 @@ The view releases its subscriber once, on whichever ends it first: the signal ab
 
 `AsyncIterable`\<[`BluetoothLERawAdvertisement`](../interfaces/BluetoothLERawAdvertisement.md)\>
 
-An `AsyncIterable<BluetoothLERawAdvertisement>` that yields ads until the consumer aborts, the connection drops, or the stream completes.
+An `AsyncIterable<BluetoothLERawAdvertisement>` that yields ads until the consumer aborts, returns, or throws, or the underlying EventBus stream ends. A
+reconnect does not end it: the subscriber survives in the ledger and [reissueOnReconnect](#reissueonreconnect) re-arms the wire-side subscription on the new connection.
 
 #### Remarks
 

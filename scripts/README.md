@@ -2,7 +2,7 @@
 
 Build-time and CI utilities. Two file extensions coexist by deliberate choice:
 
-## `.ts` — when typed imports matter
+## `.ts` - when typed imports matter
 
 Use TypeScript (`.ts`) for scripts that import from the project's source tree (e.g. `import { ENTITY_SCHEMAS } from "../src/schemas/entity-schemas.ts"`). The
 TypeScript compiler validates the import contract; refactors in `src/` break the script surface at typecheck time rather than at runtime.
@@ -12,10 +12,10 @@ source directly without a build step, and because relative imports across the co
 
 Current consumers:
 
-- `lint-proto-sync.ts` — imports `ENTITY_SCHEMAS` to diff against `api.proto`.
-- `lint-types-test-files.ts` — imports the classifier helper from `src/internal/`.
+- `lint-proto-sync.ts` - imports `ENTITY_SCHEMAS` to diff against `api.proto`.
+- `lint-types-test-files.ts` - imports the classifier helper from `src/internal/`.
 
-## `.mjs` — when typed imports don't matter
+## `.mjs` - when typed imports don't matter
 
 Use plain ESM JavaScript (`.mjs`) for scripts that operate on configuration files, do filesystem walks, or hold only string/number constants. No TypeScript types
 to enforce; the strip-types runtime requirement isn't worth carrying.
@@ -24,10 +24,10 @@ Invocation pattern: `node scripts/<name>.mjs`. No flags.
 
 Current consumers:
 
-- `test-file-patterns.mjs` — exports `ESLINT_LOOSE_PATTERNS` and `BUILD_EXCLUDED_PATTERNS` constants (consumed by `eslint.config.mjs` and the cross-config check).
-- `check-test-file-globs.mjs` — reads `tsconfig.build.json` as JSON and compares against the SSOT.
-- `check-example-references.mjs` — validates the JSDoc `@includeCode` showcase-region references against `src/examples/showcase.ts`.
-- `check-proto-drift.mjs` — fetches upstream `api.proto` and diffs.
+- `test-file-patterns.mjs` - exports `ESLINT_LOOSE_PATTERNS` and `BUILD_EXCLUDED_PATTERNS` constants (consumed by `eslint.config.mjs` and the cross-config check).
+- `check-test-file-globs.mjs` - reads `tsconfig.build.json` as JSON and compares against the SSOT.
+- `check-example-references.mjs` - validates the JSDoc `@includeCode` showcase-region references against `src/examples/showcase.ts`.
+- `check-proto-drift.mjs` - fetches upstream `api.proto` and diffs.
 - `check-pack-integrity.mjs` - reads the would-be tarball's file list and the shipped maps, and checks that they agree on which sources ship.
 
 ## Decision rule

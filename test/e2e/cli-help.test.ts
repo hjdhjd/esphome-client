@@ -7,12 +7,12 @@
  */
 import { describe, test } from "node:test";
 import { dirname, join } from "node:path";
+import { existsSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { Buffer } from "node:buffer";
 import type { Nullable } from "../../src/types.ts";
-import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));

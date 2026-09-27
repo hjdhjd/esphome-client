@@ -28,9 +28,9 @@
  *
  * Run via `npm run lint:types-test-files`. Exit code 0 on clean, 1 on any violation.
  */
-import { classifyAssertionsInFile } from "../src/internal/types-test-classifier.ts";
 import { dirname, relative, resolve } from "node:path";
 import { readFile, readdir } from "node:fs/promises";
+import { classifyAssertionsInFile } from "../src/internal/types-test-classifier.ts";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
 

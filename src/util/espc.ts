@@ -703,7 +703,7 @@ export interface ControlClient {
 /**
  * The CLI's client dependency contract: the broader sibling of {@link ControlClient}, adding the read-surface the non-control commands consume. Both the real
  * {@link EspHomeClient} and the {@link MockClient} satisfy it; src/util/espc.types.ts asserts that with a compile-time drift-guard so
- * a method the CLI needs can never silently leave either. Extracted `run*` command-logic functions take this interface (not the concrete client) so they are
+ * a method the CLI needs can never silently leave either. The `run*` read-command policies take this interface (not the concrete client) so they are
  * unit-testable against MockClient, exactly as executeControl/handleInteractiveCommand take ControlClient.
  *
  * @internal
@@ -899,9 +899,9 @@ export function formatDeviceInfo(info: DeviceInfo): string {
 }
 
 /**
- * Read-command policy for 'info': read the cached device-info record and render it (or warn when absent). Extracted from {@link handleInfo} so it is unit-testable
- * against {@link CliClient} (the MockClient satisfies it), mirroring how {@link executeControl} takes {@link ControlClient}. The handler owns client construction and
- * disposal; this function never disposes the client.
+ * Read-command policy for 'info': read the cached device-info record and render it (or warn when absent). Isolated from {@link handleInfo}'s connection lifecycle so
+ * it is unit-testable against {@link CliClient} (the MockClient satisfies it) with no live connection required, mirroring how {@link executeControl} takes
+ * {@link ControlClient}. The handler owns client construction and disposal; this function never disposes the client.
  *
  * @internal
  */
@@ -1097,8 +1097,8 @@ export function formatCapabilities(caps: ClientCapabilities): { kind: "info" | "
 }
 
 /**
- * Read-command policy for 'capabilities': render the structured capability record, routing each line to the right Printer channel. Extracted from
- * {@link handleCapabilities} so it is unit-testable against {@link CliClient}.
+ * Read-command policy for 'capabilities': render the structured capability record, routing each line to the right Printer channel. Kept separate from
+ * {@link handleCapabilities}'s connection lifecycle so it is unit-testable against {@link CliClient} with no live connection required.
  *
  * @internal
  */
@@ -1232,9 +1232,10 @@ export async function awaitQuietPeriod(subscribe: (onEvent: () => void) => Dispo
 }
 
 /**
- * Read-command policy for 'snapshot': settle the latest-state cache (fixed window or adaptive quiet period), then render it as JSON. Extracted from
- * {@link handleSnapshot} so it is unit-testable against {@link CliClient}. The `--wait` PARSE stays in the handler (it is a pre-connect fail-fast); the resolved
- * `fixedWaitMs` is passed in. The options-object param carries two heterogeneous args, matching the house options-object rule and the {@link executeControl} precedent.
+ * Read-command policy for 'snapshot': settle the latest-state cache (fixed window or adaptive quiet period), then render it as JSON. Kept separate from
+ * {@link handleSnapshot}'s connection lifecycle so it is unit-testable against {@link CliClient} with no live connection required. The `--wait` parse stays in the
+ * handler (it is a pre-connect fail-fast); the resolved `fixedWaitMs` is passed in. The options-object param carries heterogeneous args, matching the house
+ * options-object rule and the {@link executeControl} precedent.
  *
  * @internal
  */
@@ -1305,8 +1306,8 @@ export function formatSubDeviceList(subDevices: readonly { id: number; name?: st
 }
 
 /**
- * Read-command policy for 'devices': render the sub-device listing with per-device entity counts, routing each line to the right Printer channel. Extracted from
- * {@link handleDevices} so it is unit-testable against {@link CliClient}.
+ * Read-command policy for 'devices': render the sub-device listing with per-device entity counts, routing each line to the right Printer channel. Kept separate from
+ * {@link handleDevices}'s connection lifecycle so it is unit-testable against {@link CliClient} with no live connection required.
  *
  * @internal
  */
@@ -1427,8 +1428,9 @@ export function formatEntityList(entities: readonly EntityWithId[], typeFilter: 
 }
 
 /**
- * Read-command policy for 'list': print the discovered-entities banner and one line per entity (optionally type-filtered). Extracted from {@link handleList} so it is
- * unit-testable against {@link CliClient}. The `typeFilter` param replaces the handler's `commandOptions.type ?? null`, which the handler passes in.
+ * Read-command policy for 'list': print the discovered-entities banner and one line per entity (optionally type-filtered). Kept separate from {@link handleList}'s
+ * connection lifecycle so it is unit-testable against {@link CliClient} with no live connection required. The handler resolves `typeFilter` from its `--type` option
+ * (null when absent) and passes it in, so the policy stays a pure render step with no option handling of its own.
  *
  * @internal
  */

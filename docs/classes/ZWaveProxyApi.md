@@ -142,7 +142,8 @@ export async function zwaveBytePipeExample(client: EspHomeClient): Promise<void>
 
 `AsyncIterable`\<`Buffer`\<`ArrayBufferLike`\>\>
 
-An `AsyncIterable<Buffer>` that yields frames until the consumer aborts, the connection drops, or the stream completes.
+An `AsyncIterable<Buffer>` that yields frames until the consumer aborts, returns, or throws, or the underlying EventBus stream ends. A reconnect does not
+end it: the subscriber survives in the ledger and [reissueOnReconnect](#reissueonreconnect) re-arms the wire-side subscription on the new connection.
 
 ***
 

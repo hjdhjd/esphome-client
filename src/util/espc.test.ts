@@ -2545,9 +2545,8 @@ describe("runInteractiveControl - interactive control dispatch (every entity-typ
   });
 });
 
-// 4 + 8. runInfo - the extracted 'info' read-command policy, exercised against MockClient. This is the read-handler coverage that did not exist before the policy was
-// split out of handleInfo: the function reads the cached device-info record off the injected CliClient and routes the formatted record (or the absent-info warning) to
-// the Printer, with no client construction in the loop.
+// 4 + 8. runInfo - the 'info' read-command policy, exercised against MockClient: the function reads the cached device-info record off the injected CliClient and
+// routes the formatted record (or the absent-info warning) to the Printer, with no client construction in the loop.
 describe("runInfo - 'info' read-command policy", () => {
 
   test("renders the formatted device-info record to stdout when device info is present", () => {
@@ -2576,7 +2575,7 @@ describe("runInfo - 'info' read-command policy", () => {
   });
 });
 
-// 4 + 8. runCapabilities - the extracted 'capabilities' read-command policy. Reads the structured capability record off the injected CliClient and renders each
+// 4 + 8. runCapabilities - the 'capabilities' read-command policy. Reads the structured capability record off the injected CliClient and renders each
 // formatter line to the Printer, routing info-kind section headers and data-kind detail rows to stdout (both Printer channels for these kinds are stdout).
 describe("runCapabilities - 'capabilities' read-command policy", () => {
 
@@ -2615,7 +2614,7 @@ describe("runCapabilities - 'capabilities' read-command policy", () => {
   });
 });
 
-// 4 + 7. runList - the extracted 'list' read-command policy. Prints the discovered-entities banner and one line per entity read off the injected CliClient, honoring an
+// 4 + 7. runList - the 'list' read-command policy. Prints the discovered-entities banner and one line per entity read off the injected CliClient, honoring an
 // optional type filter passed through from the handler.
 describe("runList - 'list' read-command policy", () => {
 
@@ -2652,7 +2651,7 @@ describe("runList - 'list' read-command policy", () => {
   });
 });
 
-// 4 + 7. runDevices - the extracted 'devices' read-command policy. Renders the sub-device listing read off the injected CliClient, computing the per-device entity count
+// 4 + 7. runDevices - the 'devices' read-command policy. Renders the sub-device listing read off the injected CliClient, computing the per-device entity count
 // via client.entitiesByDevice, and routes each line to the Printer. Covers both the multi-device and the single-device (no sub-devices) branches.
 describe("runDevices - 'devices' read-command policy", () => {
 
@@ -2693,7 +2692,7 @@ describe("runDevices - 'devices' read-command policy", () => {
   });
 });
 
-// 5 + 8. runSnapshot - the extracted 'snapshot' read-command policy. Settles the latest-state cache (fixed window or adaptive quiet period via client.on("telemetry")),
+// 5 + 8. runSnapshot - the 'snapshot' read-command policy. Settles the latest-state cache (fixed window or adaptive quiet period via client.on("telemetry")),
 // then renders it as JSON. The fixed-window path uses a deterministic short wait; the adaptive path drives the mock's telemetry emit so awaitQuietPeriod settles quickly.
 describe("runSnapshot - 'snapshot' read-command policy", () => {
 

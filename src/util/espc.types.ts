@@ -4,7 +4,7 @@
  */
 
 /**
- * Compile-time drift-guard for the CLI's client dependency contract. {@link CliClient} is the segregated interface the extracted CLI command-logic functions
+ * Compile-time drift-guard for the CLI's client dependency contract. {@link CliClient} is the segregated interface the CLI's `run*` read-command policies
  * consume; this file asserts that BOTH the real {@link EspHomeClient} and the {@link MockClient} structurally satisfy it, so a
  * method the CLI needs can never silently leave the real client (breaking the binary) or the mock (silently weakening the unit tests). A divergence in either is a
  * typecheck error here.

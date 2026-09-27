@@ -15,8 +15,8 @@
  * The bench measures throughput collapse rather than direct GC events because throughput is straightforward to observe in-process, whereas direct GC-event
  * counting requires `--trace-gc` log parsing.
  */
-import { MessageType } from "../src/protocol/index.ts";
 import { startDriver, tryGc, yieldTick } from "./_runtime.ts";
+import { MessageType } from "../src/protocol/index.ts";
 import { switchStateResponsePayload } from "../test/simulator/scenarios/index.ts";
 
 const MEASURED_DURATION_MS = 5000;

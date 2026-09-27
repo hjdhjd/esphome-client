@@ -8,9 +8,9 @@
  * it through replayCapture - which feeds the frames through a MockTransport into a real EspHomeClient and reports what the host observed. This exercises the full
  * decode-and-drive path (handshake, discovery, state) with no live device, which is exactly what a real-device capture replays through.
  */
+import { describe, test } from "node:test";
 import { encodeCaptureFrames, replayCapture, replayCaptureFrames } from "../../src/util/capture.ts";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { describe, test } from "node:test";
 import { ALL_SCENARIOS } from "../simulator/scenarios/index.ts";
 import type { InboundMessage } from "../../src/transport.ts";
 import { MessageType } from "../../src/protocol/index.ts";
