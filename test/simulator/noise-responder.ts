@@ -181,8 +181,8 @@ export function createNoiseResponder(options: NoiseResponderOptions): NoiseRespo
   const responder = createESPHomeHandshake({ psk, role: "responder" });
 
   // The server hello body: the chosen-proto byte, followed by the null-terminated node name and MAC address when the test asks for them.
-  const serverHelloBody = (serverHello === undefined) ? Buffer.from([ NOISE_PROTO_ID ]) :
-    Buffer.concat([ Buffer.from([ NOISE_PROTO_ID ]), Buffer.from(serverHello.name + "\x00" + serverHello.mac + "\x00", "utf8") ]);
+  const serverHelloBody = (serverHello === undefined) ? Buffer.from([NOISE_PROTO_ID]) :
+    Buffer.concat([ Buffer.from([NOISE_PROTO_ID]), Buffer.from(serverHello.name + "\x00" + serverHello.mac + "\x00", "utf8") ]);
 
   // Tracks whether the one-shot ciphertext corruption has been applied, so only the first matching frame is tampered.
   let corrupted = false;
@@ -296,7 +296,7 @@ export function createNoiseResponder(options: NoiseResponderOptions): NoiseRespo
     }
 
     // Emit the server-handshake reply: a `0x00` SUCCESS header then msg2. The client strips the one header byte then `readMessage(msg2)` and installs the cipher.
-    pushSoon(buildNoiseWireFrame(Buffer.concat([ Buffer.from([ NOISE_SUCCESS_HEADER ]), msg2 ])));
+    pushSoon(buildNoiseWireFrame(Buffer.concat([ Buffer.from([NOISE_SUCCESS_HEADER]), msg2 ])));
 
     // Narrow the post-split ciphers (typed `CipherState | undefined`) before any data frame is encrypted.
     if(!responder.sendCipher || !responder.receiveCipher) {

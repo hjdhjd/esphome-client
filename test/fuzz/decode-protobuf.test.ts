@@ -166,7 +166,6 @@ describe("decodeProtobuf fuzz harness", () => {
   test("returns or throws cleanly on random inputs (never crashes, never hangs)", () => {
 
     const rng = mulberry32(0x42);
-    let validResults = 0;
     let typedErrors = 0;
     let unexpectedThrows = 0;
 
@@ -176,14 +175,8 @@ describe("decodeProtobuf fuzz harness", () => {
 
       try {
 
-        const result = decodeProtobuf(input, { maxFieldsPerMessage: 1024 });
-
-        // Smoke-check that a result (an object) was returned. This only confirms objecthood, not the full Record<number, FieldValue[]> shape.
-        if(typeof result === "object") {
-
-          validResults++;
-        }
-
+        // A decode that returns is an accepted outcome, so only a throw needs classifying.
+        decodeProtobuf(input, { maxFieldsPerMessage: 1024 });
       } catch(err) {
 
         // Any typed DecodingError subclass is the documented contract - MalformedVarintError, MessageTooManyFieldsError, TruncatedMessageError, and any future one. We
@@ -213,16 +206,10 @@ describe("decodeProtobuf fuzz harness", () => {
     }
 
     // Sanity check: at least some inputs must produce typed errors. We enforce only the typed-error half here - the adversarial and varint-shaped buckets should
-    // generate malformed input, so 0 typed errors signals a fixture or distribution problem, not a passing fuzz run. (validResults is counted above but not asserted.)
+    // generate malformed input, so 0 typed errors signals a fixture or distribution problem, not a passing fuzz run.
     if(typedErrors === 0) {
 
       throw new Error("Fuzz run produced 0 typed errors; the adversarial+varint-shaped buckets should generate at least some malformed input");
     }
   });
 });
-
-// `DecodingError` is the documented base class for every typed throw, and the catch block above value-references it directly via `err instanceof DecodingError` - it
-// checks the base class, not the individual subclasses. That `instanceof` already keeps the import live in the graph, so this anchor is a redundant explicit reference.
-const _decodingErrorAnchor: typeof DecodingError | undefined = undefined;
-
-void _decodingErrorAnchor;

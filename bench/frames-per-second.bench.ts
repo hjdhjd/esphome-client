@@ -28,11 +28,15 @@ interface RunResult {
   framesObserved: number;
 }
 
+// Every await inside a loop below is sequential by design, because each yield lets the receiver's pump drain before the next batch and each run has to finish
+// before the next one starts, or the runs would contend and skew the timing.
+/* eslint-disable no-await-in-loop */
 const runOnce = async (): Promise<RunResult> => {
 
   const { client, transport } = await startDriver();
 
   let framesObserved = 0;
+
   using sub = client.on("switch", (): void => { framesObserved += 1; });
 
   const start = performance.now();
@@ -81,6 +85,7 @@ for(let i = 0; i < MEASURED_RUNS; i++) {
   framesObserved = result.framesObserved;
   tryGc();
 }
+/* eslint-enable no-await-in-loop */
 
 const stats = summarize(durations);
 const fpsMedian = (FRAMES_PER_RUN / stats.median) * 1000;

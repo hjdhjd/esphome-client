@@ -19,7 +19,13 @@ describe("capture-replay end-to-end", () => {
   // Shared helpers for the scenario-replay tests below: yieldTick yields the event loop so the inbound bytes queued by driveScenario flush before openEspHomeClient
   // runs, and silentLogger discards all log output so the test report stays clean.
   const yieldTick = async (): Promise<void> => { await new Promise<void>((resolve): void => { setImmediate(resolve); }); };
-  const silentLogger = { debug: (): void => { /* discard */ }, error: (): void => { /* discard */ }, info: (): void => { /* discard */ }, warn: (): void => { /* discard */ } };
+  const silentLogger = {
+
+    debug: (): void => { /* discard */ },
+    error: (): void => { /* discard */ },
+    info: (): void => { /* discard */ },
+    warn: (): void => { /* discard */ }
+  };
 
   test("basic-discovery scenario drives the host through connect + initial state", async () => {
 

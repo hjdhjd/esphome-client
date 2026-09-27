@@ -4,9 +4,9 @@
  */
 
 /*
- * Drives a fully-instantiated `EspHomeClient` through `MockTransport` for 15 seconds of sustained `SwitchStateResponse` traffic, sampling V8 heap usage (`heapUsed`) every
- * five seconds. Target: heap delta <=5 MiB end-to-end. Detects accidental retention of inbound buffers, listener leaks, unbounded queue growth, and sub-API caches
- * that grow with traffic instead of with cardinality.
+ * Drives a fully-instantiated `EspHomeClient` through `MockTransport` for 15 seconds of sustained `SwitchStateResponse` traffic, sampling V8 heap usage (`heapUsed`)
+ * every five seconds. Target: heap delta <=5 MiB end-to-end. Detects accidental retention of inbound buffers, listener leaks, unbounded queue growth, and sub-API
+ * caches that grow with traffic instead of with cardinality.
  *
  * Stability infrastructure: a one-second warmup window amortizes JIT, then `tryGc()` runs at every sample point so the captured `heapUsed` reflects steady-state
  * retention rather than transient allocations between collections. The bench prints `deltaHeapBytes` as `final - initial` alongside the documented ~5 MiB target
@@ -42,7 +42,12 @@ const captureSample = (atMs: number): HeapSample => {
 const { client, transport } = await startDriver();
 
 let framesObserved = 0;
+
 using sub = client.on("switch", (): void => { framesObserved += 1; });
+
+// Every await inside a loop below is sequential by design, because each yield lets the receiver's pump drain the frames pushed so far and each heap sample is taken
+// only once the pump has caught up.
+/* eslint-disable no-await-in-loop */
 
 // Warmup window: discarded; amortizes JIT.
 const warmupStart = performance.now();
@@ -96,6 +101,7 @@ for(let i = 1; i <= SAMPLE_COUNT; i++) {
 
   captures.push(captureSample(Math.round(performance.now() - startedAt)));
 }
+/* eslint-enable no-await-in-loop */
 
 sub[Symbol.dispose]();
 client[Symbol.dispose]();

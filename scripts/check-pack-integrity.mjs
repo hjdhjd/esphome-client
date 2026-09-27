@@ -45,7 +45,7 @@ function packedPaths() {
 
   try {
 
-    const [ report ] = JSON.parse(raw);
+    const [report] = JSON.parse(raw);
 
     return report.files.map((entry) => entry.path);
   } catch(error) {

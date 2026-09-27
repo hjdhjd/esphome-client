@@ -49,7 +49,7 @@ describe("CLI help-path coverage (subprocess invocation against dist/util/espc-b
 
   test("--help renders without error", () => {
 
-    const { status, stdout } = runCli([ "--help" ]);
+    const { status, stdout } = runCli(["--help"]);
 
     assert.equal(status, 0, "--help must exit 0");
     assert.match(stdout, /espc - ESPHome Client CLI Utility/, "help banner present");
@@ -59,7 +59,7 @@ describe("CLI help-path coverage (subprocess invocation against dist/util/espc-b
 
   test("--help lists every CLI command", () => {
 
-    const { stdout } = runCli([ "--help" ]);
+    const { stdout } = runCli(["--help"]);
 
     for(const cmd of [ "capabilities", "control", "devices", "info", "interactive", "list", "monitor", "record", "replay", "snapshot", "watch" ]) {
 
@@ -77,7 +77,7 @@ describe("CLI help-path coverage (subprocess invocation against dist/util/espc-b
 
   test("unknown command exits non-zero with a helpful message", () => {
 
-    const { status, stderr } = runCli([ "nonsensecommand" ]);
+    const { status, stderr } = runCli(["nonsensecommand"]);
 
     assert.notEqual(status, 0, "unknown command must exit non-zero");
     assert.match(stderr, /Unknown command/, "stderr must mention the unknown command");
@@ -85,7 +85,7 @@ describe("CLI help-path coverage (subprocess invocation against dist/util/espc-b
 
   test("info command without --host fails with a clear --host error", () => {
 
-    const { status, stderr } = runCli([ "info" ]);
+    const { status, stderr } = runCli(["info"]);
 
     assert.notEqual(status, 0);
     assert.match(stderr, /--host/, "missing --host must be surfaced");
@@ -112,7 +112,7 @@ describe("CLI help-path coverage (subprocess invocation against dist/util/espc-b
 
   test("record command without --host fails clearly", () => {
 
-    const { status, stderr } = runCli([ "record" ]);
+    const { status, stderr } = runCli(["record"]);
 
     assert.notEqual(status, 0);
     assert.match(stderr, /--host option is required|record requires/i);
@@ -176,7 +176,7 @@ describe("CLI help-path coverage (subprocess invocation against dist/util/espc-b
   test("--help short flag aliases work (-h is sugar for --host, -i for --interactive, -v for --verbose, -p for --port, -k for --psk)", () => {
 
     // We render --help and assert the help text documents every short-flag alias (-h, -i, -v, -p, -k) alongside its long form, so the aliases stay discoverable.
-    const { status, stdout } = runCli([ "--help" ]);
+    const { status, stdout } = runCli(["--help"]);
 
     assert.equal(status, 0);
     assert.match(stdout, /-h, --host/);
@@ -203,8 +203,8 @@ describe("CLI bin entry is invocable through a symlink (npm bin / npx / npm link
 
       symlinkSync(CLI_PATH, linkPath);
 
-      const direct = runCli([ "--help" ]);
-      const viaLink = runCli([ "--help" ], linkPath);
+      const direct = runCli(["--help"]);
+      const viaLink = runCli(["--help"], linkPath);
 
       assert.equal(viaLink.status, 0, "invocation through symlink must exit 0 (regression guard against argv[1]-vs-import.meta.url symlink mismatch)");
       assert.equal(viaLink.stdout, direct.stdout, "symlink invocation must produce byte-identical output to direct invocation");

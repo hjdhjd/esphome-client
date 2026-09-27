@@ -61,7 +61,7 @@ export const yieldTick = async (): Promise<void> => { await new Promise<void>((r
  *
  * @param samples - The samples to summarize.
  */
-export function summarize(samples: ReadonlyArray<number>): RunStats {
+export function summarize(samples: readonly number[]): RunStats {
 
   if(samples.length === 0) {
 

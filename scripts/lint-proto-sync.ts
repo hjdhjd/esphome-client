@@ -195,7 +195,7 @@ function collectWireFieldNumbers(roleSchema: Record<string, unknown>): Set<numbe
 
     for(const spec of Object.values(record as Record<string, { fieldNumber?: number }>)) {
 
-      if((typeof spec?.fieldNumber === "number") && (spec.fieldNumber > 0)) {
+      if((typeof spec.fieldNumber === "number") && (spec.fieldNumber > 0)) {
 
         numbers.add(spec.fieldNumber);
       }
@@ -209,12 +209,12 @@ function collectWireFieldNumbers(roleSchema: Record<string, unknown>): Set<numbe
 
     for(const spec of Object.values(hasPattern as Record<string, { hasFieldNumber?: number; valueFieldNumber?: number }>)) {
 
-      if((typeof spec?.hasFieldNumber === "number") && (spec.hasFieldNumber > 0)) {
+      if((typeof spec.hasFieldNumber === "number") && (spec.hasFieldNumber > 0)) {
 
         numbers.add(spec.hasFieldNumber);
       }
 
-      if((typeof spec?.valueFieldNumber === "number") && (spec.valueFieldNumber > 0)) {
+      if((typeof spec.valueFieldNumber === "number") && (spec.valueFieldNumber > 0)) {
 
         numbers.add(spec.valueFieldNumber);
       }
@@ -293,8 +293,9 @@ function compareAndReport(protoMessages: Map<number, ProtoMessage>, schemaRecord
 
     if(!proto) {
 
-      errors.push("Schema references message id " + record.messageId + " (role: " + record.role + ") but no matching `option (id) = " + record.messageId +
-        "` was found in api.proto.");
+      errors.push("Schema references message id " + String(record.messageId) + " (role: " + record.role + ") but no matching `option (id) = " +
+        String(record.messageId) + "` was found in api.proto.");
+
       continue;
     }
 
@@ -302,8 +303,8 @@ function compareAndReport(protoMessages: Map<number, ProtoMessage>, schemaRecord
 
       if(!proto.fields.has(fieldNumber)) {
 
-        errors.push("Schema role " + record.role + " for message " + proto.name + " (id " + record.messageId + ") references field number " + fieldNumber +
-          " which does not exist in api.proto.");
+        errors.push("Schema role " + record.role + " for message " + proto.name + " (id " + String(record.messageId) + ") references field number " +
+          String(fieldNumber) + " which does not exist in api.proto.");
       }
     }
 
@@ -316,8 +317,8 @@ function compareAndReport(protoMessages: Map<number, ProtoMessage>, schemaRecord
 
     if(missing.length > 0) {
 
-      warnings.push("Schema role " + record.role + " for message " + proto.name + " (id " + record.messageId + ") declares " + schemaFieldCount + " of " +
-        liveProtoFieldCount + " non-deprecated proto fields. Unmapped field numbers: " + missing.sort((a, b) => a - b).join(", ") + ".");
+      warnings.push("Schema role " + record.role + " for message " + proto.name + " (id " + String(record.messageId) + ") declares " + String(schemaFieldCount) +
+        " of " + String(liveProtoFieldCount) + " non-deprecated proto fields. Unmapped field numbers: " + missing.sort((a, b) => a - b).join(", ") + ".");
     }
   }
 
@@ -332,7 +333,7 @@ async function main(): Promise<void> {
 
   if(warnings.length > 0) {
 
-    console.log("[lint:proto] " + warnings.length + " warning(s):");
+    console.log("[lint:proto] " + String(warnings.length) + " warning(s):");
 
     for(const w of warnings) {
 
@@ -342,7 +343,7 @@ async function main(): Promise<void> {
 
   if(errors.length > 0) {
 
-    console.error("[lint:proto] " + errors.length + " error(s):");
+    console.error("[lint:proto] " + String(errors.length) + " error(s):");
 
     for(const e of errors) {
 
@@ -352,7 +353,7 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  console.log("[lint:proto] " + schemaRecords.length + " schema role(s) checked across " + protoMessages.size + " proto message(s). No errors.");
+  console.log("[lint:proto] " + String(schemaRecords.length) + " schema role(s) checked across " + String(protoMessages.size) + " proto message(s). No errors.");
 }
 
 await main();

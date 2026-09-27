@@ -17,16 +17,15 @@
 import { ConnectionClosedByPeerError, EncryptionKeyInvalidError, EspHomeError, PermanentError } from "../../src/errors.ts";
 import { EspHomeClient, openEspHomeClient } from "../../src/esphome-client.ts";
 import type { EspHomeLogging, NoiseServerHello } from "../../src/types.ts";
+import type { InboundMessage, TransportLike } from "../../src/transport.ts";
 import { describe, test } from "node:test";
 import { Buffer } from "node:buffer";
 import type { EspHomeClientOptions } from "../../src/esphome-client.ts";
-import type { InboundMessage } from "../../src/transport.ts";
 import { MessageType } from "../../src/protocol/index.ts";
 import type { NoiseResponder } from "../simulator/noise-responder.ts";
 import type { Scenario } from "../simulator/simulator.ts";
 import type { Socket } from "node:net";
 import { Transport } from "../../src/transport.ts";
-import type { TransportLike } from "../../src/transport.ts";
 import assert from "node:assert/strict";
 import { basicDiscovery } from "../simulator/scenarios/index.ts";
 import { createNoiseResponder } from "../simulator/noise-responder.ts";
@@ -39,7 +38,13 @@ describe("encrypted session end-to-end - real NNpsk0 cipher", () => {
   const PSK_BASE64 = PSK_BYTES.toString("base64");
 
   // Discardable logger - no console noise during the test run.
-  const silentLogger: EspHomeLogging = { debug: (): void => { /* discard */ }, error: (): void => { /* discard */ }, info: (): void => { /* discard */ }, warn: (): void => { /* discard */ } };
+  const silentLogger: EspHomeLogging = {
+
+    debug: (): void => { /* discard */ },
+    error: (): void => { /* discard */ },
+    info: (): void => { /* discard */ },
+    warn: (): void => { /* discard */ }
+  };
 
   // Yield a macrotask so the transport's connect listener is attached before we fire the responder's connect event. `setImmediate` runs after the microtask queue
   // drains, so the synchronous-then-microtask-hop chain inside `openEspHomeClient` -> `connect` -> `Transport.open` has registered `socket.once("connect", ...)` by then.
@@ -47,17 +52,19 @@ describe("encrypted session end-to-end - real NNpsk0 cipher", () => {
 
   // The untriggered inbound frames the in-flight connect consumes, in order: HELLO_RESPONSE (hello phase), DEVICE_INFO_RESPONSE + LIST_ENTITIES_SWITCH_RESPONSE +
   // LIST_ENTITIES_DONE_RESPONSE (setup/discovery phase), then SWITCH_STATE_RESPONSE (run phase, consumed after connect resolves). Mirrors the e2e replay/capture filter.
-  const scenarioFrames = (scenario: Scenario): InboundMessage[] => scenario.inbound.filter((frame) => frame.trigger === undefined).map((frame) => ({ payload: frame.payload, type: frame.type }));
+  const scenarioFrames = (scenario: Scenario): InboundMessage[] => scenario.inbound
+    .filter((frame) => frame.trigger === undefined)
+    .map((frame) => ({ payload: frame.payload, type: frame.type }));
 
   // Build a fresh responder PSK buffer per call so no two responders share a mutable key.
   const responderPsk = (): Buffer => Buffer.from(PSK_BYTES);
 
   // Drive a single encrypted connect: kick off the open, fire the responder's connect, and await the client. `transportFactory` returns a REAL Transport over the
-  // responder's mock socket, so a real cipher pair is installed - the only test seam is the injected socket. We count factory invocations to prove no plaintext fallback
-  // (a fallback constructs a second transport). `maxConstructionRetries: 0` keeps the attempt single-shot so a corrupted-frame run rejects promptly instead of retrying.
-  // The key defaults to the shared PSK string; a test passes a resolver to drive the same session through the resolver form.
+  // responder's mock socket, so a real cipher pair is installed - the only test boundary is the injected socket. We count factory invocations to prove no plaintext
+  // fallback (a fallback constructs a second transport). `maxConstructionRetries: 0` keeps the attempt single-shot so a corrupted-frame run rejects promptly instead of
+  // retrying. The key defaults to the shared PSK string; a test passes a resolver to drive the same session through the resolver form.
   const driveEncryptedConnect = async (responder: NoiseResponder, psk: EspHomeClientOptions["psk"] = PSK_BASE64):
-    Promise<{ client: EspHomeClient; transportConstructions: number }> => {
+  Promise<{ client: EspHomeClient; transportConstructions: number }> => {
 
     let transportConstructions = 0;
 
@@ -73,7 +80,7 @@ describe("encrypted session end-to-end - real NNpsk0 cipher", () => {
 
         transportConstructions++;
 
-        // The factory returns a REAL Transport over the responder's mock socket - the only test seam. The mock conforms structurally to the methods the transport
+        // The factory returns a REAL Transport over the responder's mock socket - the only test boundary. The mock conforms structurally to the methods the transport
         // invokes; the `as unknown as Socket` cast mirrors the transport unit tests' `socketFactory` shape.
         return Transport.open({ ...options, socketFactory: (): Socket => responder.socket as unknown as Socket });
       }
@@ -195,7 +202,8 @@ describe("encrypted session end-to-end - real NNpsk0 cipher", () => {
       const { count, openPromise } = driveBadKeyConnect(responder);
 
       // Guard the open promise's eventual rejection so firing the responder connect cannot surface an unhandled rejection between the tick and the assertion.
-      const settled = openPromise.then((client): { client?: EspHomeClient; err?: unknown } => ({ client }), (err: unknown): { client?: EspHomeClient; err?: unknown } => ({ err }));
+      const settled = openPromise.then((client): { client?: EspHomeClient; err?: unknown } => ({ client }),
+        (err: unknown): { client?: EspHomeClient; err?: unknown } => ({ err }));
 
       await yieldTick();
       responder.start();
@@ -203,7 +211,8 @@ describe("encrypted session end-to-end - real NNpsk0 cipher", () => {
       const outcome = await settled;
 
       assert.equal(outcome.client, undefined, "a bad-key encrypted connect must NOT resolve to a connected client");
-      assert.ok(outcome.err instanceof EncryptionKeyInvalidError, "a header=0 undecryptable msg2 must reject with EncryptionKeyInvalidError, got: " + String(outcome.err));
+      assert.ok(outcome.err instanceof EncryptionKeyInvalidError,
+        "a header=0 undecryptable msg2 must reject with EncryptionKeyInvalidError, got: " + String(outcome.err));
       assert.ok(outcome.err instanceof PermanentError, "the bad-key rejection must be a PermanentError so the default reconnect predicate gives up");
       assert.equal(count(), 1, "no plaintext fallback - a bad-key handshake must construct exactly one transport");
     });

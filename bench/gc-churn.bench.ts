@@ -31,11 +31,15 @@ interface WindowResult {
   frames: number;
 }
 
+// Every await inside a loop below is sequential by design, because each yield lets the receiver's pump drain the frames pushed so far and the window's frame count
+// is read only once the pump has caught up.
+/* eslint-disable no-await-in-loop */
 const runWindow = async (durationMs: number): Promise<WindowResult> => {
 
   const { client, transport } = await startDriver();
 
   let framesObserved = 0;
+
   using sub = client.on("switch", (): void => { framesObserved += 1; });
 
   const start = performance.now();
@@ -66,6 +70,7 @@ const runWindow = async (durationMs: number): Promise<WindowResult> => {
 
   return { durationMs: elapsedMs, frames: framesObserved };
 };
+/* eslint-enable no-await-in-loop */
 
 // Warmup window: discarded; amortizes JIT.
 await runWindow(WARMUP_DURATION_MS);

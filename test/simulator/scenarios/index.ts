@@ -8,9 +8,8 @@
  * synthesized via the library's own encoder; the rest are stubs awaiting real-device captures (gated on hardware).
  */
 import type { InboundFrame, Scenario } from "../simulator.ts";
+import { MessageType, WireType } from "../../../src/protocol/index.ts";
 import { Buffer } from "node:buffer";
-import { MessageType } from "../../../src/protocol/index.ts";
-import { WireType } from "../../../src/protocol/index.ts";
 import { encodeProtoFields } from "../../../src/protocol/codec.ts";
 
 // Helpers for synthesizing wire-shaped payloads. Mirrors the library's encoders so the simulator stays in lockstep with what the host expects.
@@ -153,6 +152,6 @@ export const disconnectRequest: Scenario = empty("disconnect-request");
 
 // The canonical scenario registry. Every scenario constant defined above must be added here, since consumers that iterate scenarios exhaustively (the e2e
 // replay and capture-corpus tests) rely on this array as their sole enumeration source.
-export const ALL_SCENARIOS: ReadonlyArray<Scenario> = [
+export const ALL_SCENARIOS: readonly Scenario[] = [
   basicDiscovery, v114Discovery, encryptedHandshake, fallback, pingFlood, multiDevice, slowDiscovery, disconnectRequest
 ];

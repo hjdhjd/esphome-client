@@ -44,25 +44,22 @@ const srcRoot = resolve(repoRoot, "src");
 async function findTypesTestFiles(dir: string): Promise<string[]> {
 
   const entries = await readdir(dir, { withFileTypes: true });
-  const files: string[] = [];
 
-  for(const entry of entries) {
+  // The subdirectories are walked concurrently, and `Promise.all` keeps each entry's matches at that entry's position, so the flattened list comes out in the
+  // same directory order a one-at-a-time walk produces.
+  const matches = await Promise.all(entries.map(async (entry): Promise<string[]> => {
 
     const full = resolve(dir, entry.name);
 
     if(entry.isDirectory()) {
 
-      const nested = await findTypesTestFiles(full);
-
-      files.push(...nested);
-
-    } else if(entry.isFile() && entry.name.endsWith(".types.test.ts")) {
-
-      files.push(full);
+      return findTypesTestFiles(full);
     }
-  }
 
-  return files;
+    return (entry.isFile() && entry.name.endsWith(".types.test.ts")) ? [full] : [];
+  }));
+
+  return matches.flat();
 }
 
 interface FileResult {
@@ -90,7 +87,7 @@ async function main(): Promise<void> {
 
   if(violations.length > 0) {
 
-    console.error("[lint:types-test-files] " + violations.length + " file(s) violate the mixed-extension contract:");
+    console.error("[lint:types-test-files] " + String(violations.length) + " file(s) violate the mixed-extension contract:");
 
     for(const v of violations) {
 
@@ -101,7 +98,7 @@ async function main(): Promise<void> {
         console.error("  - " + rel + " has zero `assert.*` calls. Rename to `*.types.ts` and convert any type-level assertions to sentinel form.");
       } else {
 
-        console.error("  - " + rel + " has " + v.total + " `assert.*` call(s), all with literal-only arguments (placeholders like `assert.ok(true)`). Either " +
+        console.error("  - " + rel + " has " + String(v.total) + " `assert.*` call(s), all with literal-only arguments (placeholders like `assert.ok(true)`). Either " +
           "add a meaningful runtime assertion or rename to `*.types.ts`.");
       }
     }
@@ -112,8 +109,8 @@ async function main(): Promise<void> {
   const totalAssertions = results.reduce((sum, r) => sum + r.total, 0);
   const totalMeaningful = results.reduce((sum, r) => sum + r.meaningful, 0);
 
-  console.log("[lint:types-test-files] " + files.length + " file(s) checked. " + totalMeaningful + " meaningful / " + totalAssertions + " total `assert.*` calls. " +
-    "No violations.");
+  console.log("[lint:types-test-files] " + String(files.length) + " file(s) checked. " + String(totalMeaningful) + " meaningful / " + String(totalAssertions) +
+    " total `assert.*` calls. No violations.");
 }
 
 await main();

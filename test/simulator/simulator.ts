@@ -15,7 +15,7 @@
  *
  * @module test/simulator
  */
-import { Buffer } from "node:buffer";
+import type { Buffer } from "node:buffer";
 import type { MockTransport } from "../../src/testing/index.ts";
 import type { ReplaySummary } from "../../src/util/capture.ts";
 
@@ -59,12 +59,12 @@ export interface Scenario {
   /**
    * Inbound frames to push, in order.
    */
-  inbound: ReadonlyArray<InboundFrame>;
+  inbound: readonly InboundFrame[];
 
   /**
    * Outbound message types the host is expected to send (in any order; the test asserts against the captured outbound list).
    */
-  expectedOutbound: ReadonlyArray<number>;
+  expectedOutbound: readonly number[];
 
   /**
    * What a replay of this scenario should observe when driven through the capture pipeline. Optional: only the self-checking scenarios declare it; the stubs omit it.

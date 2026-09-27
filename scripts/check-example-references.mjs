@@ -12,8 +12,8 @@
  * TypeDoc's build-docs step inlines the referenced region and errors when a region is missing; this script is the fast dedicated pre-check that enforces the same
  * contract as `@includeCode` references are added across the public surface.
  */
-import { readdirSync, readFileSync, statSync } from "node:fs";
-import { join, dirname } from "node:path";
+import { dirname, join } from "node:path";
+import { readFileSync, readdirSync, statSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -50,7 +50,7 @@ function walk(dir, out = []) {
 }
 
 // Collect every `// #region <slug>` slug from the showcase file.
-let availableRegions = new Set();
+const availableRegions = new Set();
 
 try {
 

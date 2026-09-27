@@ -61,7 +61,7 @@
     "build": "npm run clean && tsc -p tsconfig.build.json && node -e \"require('node:fs').chmodSync('dist/util/espc-bin.js',0o755)\"",
     "build-docs": "node -e \"for(const p of ['docs/classes', 'docs/functions', 'docs/interfaces', 'docs/type-aliases', 'docs/variables', 'docs/README.md'])require('node:fs').rmSync(p,{force:true,recursive:true})\" && npx typedoc",
     "clean": "node -e \"require('node:fs').rmSync('dist',{force:true,recursive:true})\"",
-    "lint": "eslint --max-warnings=${ESLINT_MAX_WARNINGS:-\"0\"} eslint.config.mjs \"src/**/*.ts\"",
+    "lint": "eslint --max-warnings=${ESLINT_MAX_WARNINGS:-\"0\"} eslint.config.mjs bench scripts src test",
     "lint:pack": "node scripts/check-pack-integrity.mjs",
     "lint:proto": "node scripts/lint-proto-sync.ts",
     "lint:test-file-globs": "node scripts/check-test-file-globs.mjs",

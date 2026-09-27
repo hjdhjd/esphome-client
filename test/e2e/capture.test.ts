@@ -23,7 +23,9 @@ describe("capture replay - end-to-end drive from synthesized fixtures", () => {
 
   // The untriggered inbound frames are the full plaintext stream the host consumes during a connect - handshake, discovery, and the trailing switch state. This is the
   // exact frame-build the replay tests share, so we single-source it here rather than repeating the filter/map at every call site.
-  const scenarioFrames = (scenario: Scenario): InboundMessage[] => scenario.inbound.filter((frame) => frame.trigger === undefined).map((frame) => ({ payload: frame.payload, type: frame.type }));
+  const scenarioFrames = (scenario: Scenario): InboundMessage[] => scenario.inbound
+    .filter((frame) => frame.trigger === undefined)
+    .map((frame) => ({ payload: frame.payload, type: frame.type }));
 
   test("a basic-discovery capture replays to device info, the discovered entity, and the state event", async () => {
 
