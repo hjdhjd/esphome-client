@@ -296,8 +296,6 @@ export interface CorrelatorAwaitOptions {
 
 /**
  * Internal pending-entry shape. Wraps the `Promise.withResolvers` settlers so resolve/reject paths can detach the abort listener before settling.
- *
- * @internal
  */
 interface PendingEntry<T> {
 

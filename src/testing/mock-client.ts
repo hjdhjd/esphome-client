@@ -234,7 +234,7 @@ export class MockClient {
    *
    * @param id - The branded entity id; its type must be command-and-awaitable (sensors, buttons, cameras, and IR/RF are excluded at compile time).
    * @param options - The command options.
-   * @param awaitOptions - Optional acceptance predicate, cancellation signal, and timeout override (default 2000 ms).
+   * @param awaitOptions - Optional acceptance predicate, cancellation signal, and timeout override (the default {@link CommandAndAwaitOptions.timeoutMs} states).
    *
    * @throws {NotConnectedError} with code `NOT_CONNECTED` when the mock is not connected. Nothing is recorded.
    * @throws {ConfigurationError} with code `MALFORMED_ENTITY_ID` when `id` is not a valid `${type}-${objectId}` brand.

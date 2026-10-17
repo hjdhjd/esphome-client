@@ -5,29 +5,10 @@
 import { describe, test } from "node:test";
 import { ConnectionError } from "./errors.ts";
 import { Correlator } from "./correlator.ts";
-import type { TestContext } from "node:test";
 import assert from "node:assert/strict";
+import { captureTimeoutSignals } from "./timeout-signals.helpers.ts";
 import { setTimeout as delay } from "node:timers/promises";
 import { getEventListeners } from "node:events";
-
-// Capture every signal `AbortSignal.timeout` builds during the test, delegating to the platform so each captured signal fires as a real one would. The test's mock
-// context restores the platform method when the test ends.
-function captureTimeoutSignals(t: TestContext): AbortSignal[] {
-
-  const captured: AbortSignal[] = [];
-  const platformTimeout = AbortSignal.timeout.bind(AbortSignal);
-
-  t.mock.method(AbortSignal, "timeout", (milliseconds: number): AbortSignal => {
-
-    const signal = platformTimeout(milliseconds);
-
-    captured.push(signal);
-
-    return signal;
-  });
-
-  return captured;
-}
 
 describe("Correlator - basic correlation", () => {
 

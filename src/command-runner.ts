@@ -52,7 +52,7 @@ import { InfraredCapabilityFlags } from "./api-constants.ts";
  * Default timeout (in milliseconds) {@link runCommandAndAwait} applies when the caller does not supply `awaitOptions.timeoutMs`. Sized at 2000ms - long enough that
  * a healthy device responds well within the window, short enough that a hung device does not stall consumer code by more than the typical request latency budget.
  */
-export const DEFAULT_COMMAND_AWAIT_TIMEOUT_MS = 2000;
+const DEFAULT_COMMAND_AWAIT_TIMEOUT_MS = 2000;
 
 /**
  * The entity types whose command is a raw-timings transmit. Their consumer entry point is {@link EspHomeClient.transmitRawTimings}, which refuses an entity whose
@@ -80,8 +80,8 @@ export type NonAwaitableEntityType = "binary_sensor" | "button" | "camera" | "se
 export type CommandAndAwaitable = Exclude<EntityType, NonAwaitableEntityType>;
 
 /**
- * Per-call options for {@link EspHomeClient.commandAndAwait}. All fields are optional; defaults: 2000ms timeout, no caller signal, predicate accepts any state event
- * for the entity.
+ * Per-call options for {@link EspHomeClient.commandAndAwait}. All fields are optional; defaults: the timeout {@link CommandAndAwaitOptions.timeoutMs} states, no caller
+ * signal, predicate accepts any state event for the entity.
  *
  * @typeParam T - Entity type tag carried by the branded id.
  */
@@ -184,13 +184,12 @@ export interface CommandHost {
 /**
  * Extract the entity type prefix from a branded entity id. Returns `null` when the id is malformed (no `-` separator or the dash is at index 0). The runtime extraction
  * trusts the brand at the type level - by the time a malformed id reaches here, the caller has unsafe-cast across the brand boundary. The testing
- * `MockClient.commandAndAwait` reads the prefix through this function as well, so the mock treats exactly the ids the client treats as malformed.
+ * `MockClient.commandAndAwait` reaches this function through {@link runCommandAndAwait}, which is why the mock treats exactly the ids the client treats as malformed.
  *
  * @param id - The branded entity id.
  * @returns The entity-type string slice or `null` when the id is malformed.
- * @internal
  */
-export function entityTypeFromId(id: EntityId): Nullable<string> {
+function entityTypeFromId(id: EntityId): Nullable<string> {
 
   const dash = id.indexOf("-");
 
@@ -228,13 +227,12 @@ export function assertTransmitter(entity: BaseEntity, id: EntityId): void {
 }
 
 /**
- * The one place an encode refusal becomes a {@link ConfigurationError} code: {@link runCommandAndAwait} and the testing `MockClient.commandAndAwait` reject a
- * refused command with the code its reason maps to. The map is exhaustive over {@link EncodeFailureReason}, so a new refusal reason fails the typecheck here until it
- * is given a code. A missing key maps to `UNKNOWN_ENTITY_ID` because an entity with no registered key is an unknown entity id.
- *
- * @internal
+ * The one place an encode refusal becomes a {@link ConfigurationError} code: {@link runCommandAndAwait} rejects a refused command with the code its reason maps to,
+ * and the testing `MockClient.commandAndAwait` reaches this map through that runner, which is why the mock rejects with the same codes. The map is exhaustive over
+ * {@link EncodeFailureReason}, so a new refusal reason fails the typecheck here until it is given a code. A missing key maps to `UNKNOWN_ENTITY_ID` because an entity
+ * with no registered key is an unknown entity id.
  */
-export const ENCODE_REFUSAL_CODES = {
+const ENCODE_REFUSAL_CODES = {
 
   "command_unsupported": "COMMAND_UNSUPPORTED",
   "enum_value_unknown": "ENUM_VALUE_UNKNOWN",

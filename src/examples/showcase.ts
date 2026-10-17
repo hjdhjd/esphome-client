@@ -597,7 +597,7 @@ export async function connectThenConstructExample(
 
 /**
  * Send a typed command to a light entity and await the matching state-event response. `command<T>` is the canonical entry point; `commandAndAwait<T>` adds a default
- * 2000ms deadline and reuses the entity-id brand to narrow the options shape.
+ * deadline and reuses the entity-id brand to narrow the options shape.
  */
 // #region command-and-await
 export async function commandAndAwaitExample(client: EspHomeClient): Promise<void> {
@@ -1315,7 +1315,7 @@ export async function commandErrorHandlingExample(client: EspHomeClient, lightId
 
     if((error instanceof DOMException) && (error.name === "TimeoutError")) {
 
-      // The 2000ms default deadline elapsed before the light confirmed the command.
+      // The default deadline elapsed before the light confirmed the command.
       return;
     }
 

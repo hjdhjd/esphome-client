@@ -5,8 +5,8 @@
 import type { ClientMetrics, Nullable } from "./types.ts";
 import type { CommandAndAwaitable, CommandHost } from "./command-runner.ts";
 import { ConfigurationError, NotConnectedError } from "./errors.ts";
-import { DEFAULT_COMMAND_AWAIT_TIMEOUT_MS, runCommand, runCommandAndAwait } from "./command-runner.ts";
 import { describe, test } from "node:test";
+import { runCommand, runCommandAndAwait } from "./command-runner.ts";
 import type { Buffer } from "node:buffer";
 import type { ClientEventsMap } from "./esphome-client.ts";
 import type { ConnectionScope } from "./connection-scope.ts";
@@ -140,11 +140,6 @@ describe("command-runner - module exports", () => {
   test("runCommandAndAwait is an exported function", () => {
 
     assert.equal(typeof runCommandAndAwait, "function");
-  });
-
-  test("DEFAULT_COMMAND_AWAIT_TIMEOUT_MS is 2000ms", () => {
-
-    assert.equal(DEFAULT_COMMAND_AWAIT_TIMEOUT_MS, 2000);
   });
 });
 
@@ -709,21 +704,26 @@ describe("runCommandAndAwait - abort + timeout boundaries", () => {
     );
   });
 
-  test("the default timeout is active even when no caller signal is supplied", async () => {
+  test("a command await issued with no timeoutMs asks the platform for a timeout of the documented default", async (t) => {
 
+    // A mock with no implementation passes each call through to the platform, so the await builds its real timeout while the mock records the milliseconds asked for.
+    const timeout = t.mock.method(AbortSignal, "timeout");
     const bus = new EventBus<ClientEventsMap>();
-    const bundle = mockHost({ bus, keyForId: (): number => 1 });
-    const start = Date.now();
+    const bundle = mockHost({
 
-    await assert.rejects(
-      runCommandAndAwait(bundle.host, entityId("switch", "x"), { state: true }, { timeoutMs: 30 }),
-      Error
-    );
+      bus,
+      keyForId: (): number => 1,
+      send: (): void => {
 
-    const elapsed = Date.now() - start;
+        bus.emit("switch", { entity: "x", key: 1, state: true, type: "switch" });
+      }
+    });
 
-    // Sanity: the rejection happened within a generous wall-clock budget around the configured 30ms.
-    assert.ok(elapsed < 1000, "timeout fired in <1s");
+    await runCommandAndAwait(bundle.host, entityId("switch", "x"), { state: true });
+
+    // The expected value is the literal the timeoutMs field documents rather than the runner's constant, because a value read from the constant would agree with any
+    // default the runner held.
+    assert.deepEqual(timeout.mock.calls.map((call) => call.arguments[0]), [2000], "the await asks the platform for one timeout of the documented default");
   });
 });
 

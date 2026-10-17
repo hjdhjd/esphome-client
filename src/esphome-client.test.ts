@@ -37,6 +37,7 @@ import type { Socket } from "node:net";
 import type { TestContext } from "node:test";
 import { WireType } from "./protocol/wire-types.ts";
 import assert from "node:assert/strict";
+import { captureTimeoutSignals } from "./timeout-signals.helpers.ts";
 import { connectionUptimeMs } from "./health.ts";
 import { defaultShouldRetry } from "./reconnect.ts";
 import { setTimeout as delay } from "node:timers/promises";
@@ -356,25 +357,6 @@ function reconnectAttemptsSink(counter: { reconnectAttempts: number }): ClientMe
 function connectController(client: EspHomeClient): Nullable<AbortController> {
 
   return (client as unknown as { connectController: Nullable<AbortController> }).connectController;
-}
-
-// Capture every signal `AbortSignal.timeout` builds during the test, delegating to the platform so each captured signal fires as a real one would. The test's mock
-// context restores the platform method when the test ends.
-function captureTimeoutSignals(t: TestContext): AbortSignal[] {
-
-  const captured: AbortSignal[] = [];
-  const platformTimeout = AbortSignal.timeout.bind(AbortSignal);
-
-  t.mock.method(AbortSignal, "timeout", (milliseconds: number): AbortSignal => {
-
-    const signal = platformTimeout(milliseconds);
-
-    captured.push(signal);
-
-    return signal;
-  });
-
-  return captured;
 }
 
 // Discovery-burst fixtures.
@@ -7087,4 +7069,3 @@ describe("EspHomeClient clock option - live heartbeat stall / RTT / timeout inte
     }
   });
 });
-

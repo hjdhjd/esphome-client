@@ -6,27 +6,8 @@ import { ConnectionLostError, NotConnectedError } from "./errors.ts";
 import { composeRequestSignal, connectionLostError, requireConnection } from "./connection-scope.ts";
 import { describe, test } from "node:test";
 import { getEventListeners, once } from "node:events";
-import type { TestContext } from "node:test";
 import assert from "node:assert/strict";
-
-// Capture every signal `AbortSignal.timeout` builds during the test, delegating to the platform so each captured signal fires as a real one would. The test's mock
-// context restores the platform method when the test ends.
-function captureTimeoutSignals(t: TestContext): AbortSignal[] {
-
-  const captured: AbortSignal[] = [];
-  const platformTimeout = AbortSignal.timeout.bind(AbortSignal);
-
-  t.mock.method(AbortSignal, "timeout", (milliseconds: number): AbortSignal => {
-
-    const signal = platformTimeout(milliseconds);
-
-    captured.push(signal);
-
-    return signal;
-  });
-
-  return captured;
-}
+import { captureTimeoutSignals } from "./timeout-signals.helpers.ts";
 
 describe("composeRequestSignal", () => {
 

@@ -293,4 +293,3 @@ export function extending(base: keyof typeof ENTITY_SCHEMAS, additions: SchemaEx
     }
   };
 }
-

@@ -20,9 +20,9 @@ import type { ConnectionScope } from "./connection-scope.ts";
 import { EventBus } from "./event-bus.ts";
 import { MessageType } from "./protocol/message-types.ts";
 import type { Nullable } from "./types.ts";
-import type { TestContext } from "node:test";
 import { WireType } from "./protocol/wire-types.ts";
 import assert from "node:assert/strict";
+import { captureTimeoutSignals } from "./timeout-signals.helpers.ts";
 import { connectionLostError } from "./connection-scope.ts";
 import { runReissuableSubscriptionContract } from "./reissuable-subscription-contract.helpers.ts";
 
@@ -80,25 +80,6 @@ function makeHost(): HostHandle {
     setDeviceInfo: (proxies?: readonly SerialProxyInfo[]): void => { serialProxies = proxies; },
     warnLogs
   };
-}
-
-// Capture every signal `AbortSignal.timeout` builds during the test, delegating to the platform so each captured signal fires as a real one would. The test's mock
-// context restores the platform method when the test ends.
-function captureTimeoutSignals(t: TestContext): AbortSignal[] {
-
-  const captured: AbortSignal[] = [];
-  const platformTimeout = AbortSignal.timeout.bind(AbortSignal);
-
-  t.mock.method(AbortSignal, "timeout", (milliseconds: number): AbortSignal => {
-
-    const signal = platformTimeout(milliseconds);
-
-    captured.push(signal);
-
-    return signal;
-  });
-
-  return captured;
 }
 
 function decodeFields(payload: Buffer): Record<number, FieldValue[]> {

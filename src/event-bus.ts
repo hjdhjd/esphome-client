@@ -490,8 +490,6 @@ interface ResolvedStreamOptions<In, Out> {
 /**
  * AsyncIterableIterator implementation backing {@link EventBus.stream}. Owns a per-stream queue with the configured high-water mark and backpressure policy; attaches
  * one listener to the parent emitter for the lifetime of the iteration.
- *
- * @internal
  */
 class BackpressureStream<In, Out> implements AsyncIterableIterator<Out> {
 

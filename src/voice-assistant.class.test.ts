@@ -12,10 +12,10 @@ import { EspHomeClient } from "./esphome-client.ts";
 import { EventBus } from "./event-bus.ts";
 import { MessageType } from "./protocol/message-types.ts";
 import type { Nullable } from "./types.ts";
-import type { TestContext } from "node:test";
 import { VoiceAssistantApi } from "./voice-assistant.ts";
 import type { VoiceAssistantHost } from "./voice-assistant.ts";
 import assert from "node:assert/strict";
+import { captureTimeoutSignals } from "./timeout-signals.helpers.ts";
 import { connectionLostError } from "./connection-scope.ts";
 import { decodeProtobuf } from "./protocol/codec.ts";
 import { inspect } from "node:util";
@@ -43,25 +43,6 @@ function makeHost(): VoiceAssistantHost & { bus: EventBus<ClientEventsMap>; sent
     sent,
     setConnection: (controller: Nullable<AbortController>): void => { connection = controller; }
   };
-}
-
-// Capture every signal `AbortSignal.timeout` builds during the test, delegating to the platform so each captured signal fires as a real one would. The test's mock
-// context restores the platform method when the test ends.
-function captureTimeoutSignals(t: TestContext): AbortSignal[] {
-
-  const captured: AbortSignal[] = [];
-  const platformTimeout = AbortSignal.timeout.bind(AbortSignal);
-
-  t.mock.method(AbortSignal, "timeout", (milliseconds: number): AbortSignal => {
-
-    const signal = platformTimeout(milliseconds);
-
-    captured.push(signal);
-
-    return signal;
-  });
-
-  return captured;
 }
 
 describe("VoiceAssistantApi.subscribe / unsubscribe / isSubscribed", () => {

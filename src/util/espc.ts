@@ -81,8 +81,6 @@ type LightCommandOptions = Mutable<CommandFor<typeof ENTITY_SCHEMAS["light"]>>;
  * Strict base-10 integer regex used by {@link tryParseIntStrict} and {@link parseIntOption}. Accepts an optional leading sign followed by one or more decimal digits and
  * nothing else - "123abc", "0x1a", " 42 ", and "" all fail. The regex is the validation gate because `parseInt(value, 10)` alone silently accepts trailing garbage
  * ("123abc" -> 123), which is exactly the surprise we are closing in the CLI input layer.
- *
- * @internal
  */
 const STRICT_INT_PATTERN = /^-?\d+$/;
 
@@ -135,7 +133,6 @@ interface AssertInRangeInput {
  *
  * @param input - The {@link AssertInRangeInput} bag.
  * @throws {@link CliError} when `parsed` lies outside `range`.
- * @internal
  */
 function assertInRange(input: AssertInRangeInput): void {
 
@@ -188,8 +185,6 @@ const UINT32_DOMAIN = { max: UINT32_MAX, min: 0 };
  * Strict decimal-number regex used by {@link parseFloatOption}. Accepts an optional leading sign, then either a digit run with an optional fractional part or a
  * bare fractional value (".5"), and nothing else - "1.2.3", "1abc", "1e3", and "" all fail. We reject exponent notation deliberately: device command values are
  * concrete magnitudes (temperatures, volumes, positions) where scientific notation in a CLI argument is far more likely a typo than an intentional input.
- *
- * @internal
  */
 const STRICT_FLOAT_PATTERN = /^-?(\d+(\.\d+)?|\.\d+)$/;
 
@@ -223,7 +218,6 @@ export function parseFloatOption(value: string, label: string): number {
  * @param max - The inclusive upper bound of the input scale (the value that maps to 1.0).
  * @returns The value as a 0.0-1.0 fraction.
  * @throws {@link CliError} when `value` is not a decimal in the inclusive range `[0, max]`.
- * @internal
  */
 function normalizeToWireUnit(value: string, label: string, max: number): number {
 
@@ -333,7 +327,6 @@ export function parseJsonOption(value: string, source: string): unknown {
  * @param value - The raw `--psk` string from the parsed argv, or `undefined` when the flag is absent.
  * @returns The value unchanged.
  * @throws {@link CliError} when `value` is a non-empty string that does not decode to a key of the required length.
- * @internal
  */
 function parsePskOption(value: string | undefined): string | undefined {
 
@@ -1652,8 +1645,6 @@ export interface ResolvedControlCommand {
 /**
  * Empty command-flag set the interactive REPL passes to {@link buildControlCommand}. The REPL parses positional arguments only, so every flag is absent; the builders
  * that read flags (light, siren) simply see no overrides.
- *
- * @internal
  */
 const EMPTY_COMMAND_OPTIONS: CommandOptions = {
 
@@ -1691,8 +1682,6 @@ const MEDIA_PLAYER_COMMAND_BY_NAME: ReadonlyMap<string, number> = new Map(Object
 
 /**
  * Parse an on/off token into a boolean, throwing a typed {@link CliError} that names the entity-type label on anything else. Accepts case-insensitive "on"/"off".
- *
- * @internal
  */
 function parseOnOff(value: string | undefined, label: string): boolean {
 
@@ -1718,8 +1707,6 @@ function parseOnOff(value: string | undefined, label: string): boolean {
 /**
  * Validate that a token is a member of a schema-derived enum vocabulary, returning the lowercased member name narrowed to the vocabulary's literal type. Throws a
  * {@link CliError} listing the accepted values otherwise. The accepted set comes straight from the schema's `enumMappings`, so the CLI's vocabulary tracks the protocol.
- *
- * @internal
  */
 function parseEnumArg<K extends string>(value: string | undefined, vocabulary: ReadonlySet<K>, label: string): K {
 
@@ -1735,8 +1722,6 @@ function parseEnumArg<K extends string>(value: string | undefined, vocabulary: R
 
 /**
  * Require a positional argument at `index`, throwing a {@link CliError} carrying `message` when it is absent.
- *
- * @internal
  */
 function requireArg(args: readonly string[], index: number, message: string): string {
 
@@ -1753,8 +1738,6 @@ function requireArg(args: readonly string[], index: number, message: string): st
 /**
  * Parse a `YYYY-MM-DD` token into the date command's component fields. Each component is validated as a strict integer within its calendar range, the day against the
  * length of the parsed month in the parsed year; a missing, malformed, or out-of-range component throws a {@link CliError} naming the offending part.
- *
- * @internal
  */
 function parseDateArg(value: string): { day: number; month: number; year: number } {
 
@@ -1784,8 +1767,6 @@ function parseDateArg(value: string): { day: number; month: number; year: number
 
 /**
  * Parse an `HH:MM` or `HH:MM:SS` token into the time command's component fields. Seconds default to zero when omitted. Each component is validated as a strict integer.
- *
- * @internal
  */
 function parseTimeArg(value: string): { hour: number; minute: number; second: number } {
 
@@ -1809,8 +1790,6 @@ function parseTimeArg(value: string): { hour: number; minute: number; second: nu
  * case the result is floored to whole seconds, and throws a {@link CliError} on anything else. Whichever form is given, the result is checked against the uint32 domain
  * the command encoder enforces for the fixed32 `epochSeconds` field, so an instant before 1970 or past the uint32 ceiling in 2106 is a usage error that quotes the
  * token as typed.
- *
- * @internal
  */
 function parseEpochArg(value: string): number {
 
@@ -1836,8 +1815,6 @@ function parseEpochArg(value: string): number {
 /**
  * Parse a comma-separated list of signed raw timings (microseconds) into a number array. Each token is validated as a strict integer so a malformed entry fails loudly
  * rather than silently encoding a zero. Used by both the infrared and radio-frequency transmit builders.
- *
- * @internal
  */
 function parseTimingsArg(value: string): number[] {
 
@@ -1847,8 +1824,6 @@ function parseTimingsArg(value: string): number[] {
 /**
  * Parse the shared transmit grammar for the infrared and radio-frequency entities, which reuse the same wire message: a required comma-separated raw-timings list,
  * followed by an optional carrier frequency and repeat count. Returned as a structural shape assignable to either entity's {@link CommandFor} command-options type.
- *
- * @internal
  */
 function parseTransmitArgs(args: readonly string[], label: string): { carrierFrequency?: number; repeatCount?: number; timings: number[] } {
 
@@ -2842,4 +2817,3 @@ export function showUsage(printer: Printer): void {
     }
   }
 }
-

@@ -3027,8 +3027,8 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
    * error, not a runtime hang.
    *
    * The stream subscription opens *before* the command is sent, so the device cannot win the race by responding before we listen. The await follows the caller's
-   * optional signal, the default 2000ms timeout, and the connection the command was issued on; whichever ends it first rejects the await with its own reason and tears
-   * down the subscription.
+   * optional signal, the default timeout {@link CommandAndAwaitOptions.timeoutMs} states, and the connection the command was issued on; whichever ends it first rejects
+   * the await with its own reason and tears down the subscription.
    *
    * Usage:
    *
@@ -3049,7 +3049,7 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
    * its wire type carries. Nothing is sent.
    * @throws {ConnectionLostError} when the connection the command was issued on is torn down before a matching state event arrives.
    * @throws The signal's reason, as it is, when `awaitOptions.signal` aborts, including when it was already aborted at call time, and nothing is sent then; and the
-   * timeout's `TimeoutError` when the deadline elapses (2000ms unless `awaitOptions.timeoutMs` overrides it).
+   * timeout's `TimeoutError` when the deadline elapses (the default {@link CommandAndAwaitOptions.timeoutMs} states, unless `awaitOptions.timeoutMs` overrides it).
    */
   public async commandAndAwait<T extends Exclude<ExtendedEntityType<Extras>, NonAwaitableEntityType>>(
     id: EntityId<T>,
@@ -3778,4 +3778,3 @@ export async function openEspHomeClient<Extras extends ExtraSchemaSet = {}>(opti
     throw (options.signal?.aborted && !(err instanceof PermanentError)) ? options.signal.reason : err;
   }
 }
-
