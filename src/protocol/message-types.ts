@@ -12,17 +12,17 @@
 /**
  * Identifiers for ESPHome API messages. Values match each message's `option (id) = N;` (message-type id) declared in the upstream `api.proto` specification.
  *
- * @remarks Implemented as an `as const` object plus a derived literal-union type, the modern replacement for `enum`, compatible with TypeScript's `erasableSyntaxOnly`
- * mode and with build pipelines that strip types at compile time. The forward map (name -> number) is the SSOT; the reverse map (number -> name) is derived from the
- * same object via {@link messageTypeName} so that adding a new entry extends both directions automatically with no parallel hand-maintained structure. Keys are
- * alphabetized to match house lint rules; the canonical protocol ordering by numeric id lives in `src/api.proto`.
+ * @remarks Tests import this table from `esphome-client/testing` to name the message a frame carries: the id they pass to `MockTransport.pushInbound`, and the `type`
+ * they read from a frame the mock transport captured. Keys are in alphabetical order rather than id order.
+ *
+ * `MessageType` is an `as const` object paired with a type of the same name: the object carries the named ids such as `MessageType.HELLO_RESPONSE`, and the type is the
+ * union of their numeric literals. We chose this form over an `enum` because it is plain JavaScript once its types are erased, so it compiles under TypeScript's
+ * `erasableSyntaxOnly` mode and runs unchanged through build pipelines that strip types rather than transform them.
  *
  * `CONNECT_REQUEST/RESPONSE` and `AUTHENTICATION_REQUEST/RESPONSE` deliberately share IDs 3 and 4. Ids 3 and 4 originally addressed `AuthenticationRequest`/
  * `AuthenticationResponse`, which upstream `api.proto` now marks deprecated - password authentication is no longer supported and the server does not process
  * those messages. This client always speaks to those ids through the `CONNECT_REQUEST`/`CONNECT_RESPONSE` alias in its legacy pre-1.11 handshake; the
  * `AUTHENTICATION_*` names are kept only so the deprecated ids remain discoverable by name, not because any call site branches between the two aliases.
- *
- * @internal
  */
 export const MessageType = {
 
@@ -177,9 +177,6 @@ export const MessageType = {
   ZWAVE_PROXY_REQUEST:                           129
 } as const;
 
-/**
- * @internal
- */
 export type MessageType = typeof MessageType[keyof typeof MessageType];
 
 // Reverse map (number -> name) derived from the same SSOT object. We compute it once at module init via Object.entries; adding a new entry to the forward map extends

@@ -3,13 +3,36 @@
  * index.test.ts: Structural tests for the public entry-point re-exports.
  */
 import * as publicApi from "./index.ts";
+import * as testingApi from "./testing/index.ts";
 import { describe, test } from "node:test";
+import { MessageType } from "./protocol/message-types.ts";
 import assert from "node:assert/strict";
 
-// Tests that the public entry point re-exports the named surface every downstream consumer relies on. If a re-export is silently dropped (e.g., a new module is
-// added but its exports never end up at the package root), one of these tests will fail before the breakage ships.
+// The package root's runtime exports are held to an exact list, so a dropped export and an internal one that leaks into the root both fail here before the change
+// ships. The remaining tests check the kind and shape of the exports consumers reach for most.
 
 describe("Public entry-point re-exports", () => {
+
+  test("exports exactly the public runtime surface", () => {
+
+    assert.deepEqual(Object.keys(publicApi).sort(), [
+
+      "AlarmControlPanelCommand", "AlarmControlPanelState", "AuthenticationError", "BackpressureError", "BluetoothScannerMode", "BluetoothScannerState",
+      "BufferOverflowError", "CameraStreamClosedError", "CipherState", "ClimateAction", "ClimateFanMode", "ClimateFeature", "ClimateMode", "ClimatePreset",
+      "ClimateSwingMode", "ColorMode", "ConfigurationError", "ConnectionClosedByPeerError", "ConnectionError", "ConnectionRefusedError", "ConnectionTimeoutError",
+      "CoverOperation", "DecodingError", "DecryptionFailedError", "ENTITY_SCHEMAS", "ESPHOME_NOISE_PROLOGUE", "EncodingError", "EncryptionKeyInvalidError",
+      "EncryptionKeyMissingError", "EncryptionRequiredError", "EntityCategory", "EspHomeClient", "EspHomeError", "FanDirection", "FrameTooLargeError", "HandshakeError",
+      "HandshakeState", "HealthState", "HeartbeatStalledError", "IncompatibleApiVersionError", "InfraredCapabilityFlags", "LockCommand", "LockState", "LogLevel",
+      "MalformedVarintError", "MediaPlayerCommand", "MediaPlayerFormatPurpose", "MediaPlayerState", "MessageTooManyFieldsError", "NOISE_DH_LEN", "NOISE_MAX_MESSAGE_LEN",
+      "NOISE_PSK_LEN", "NegotiationFailedError", "NoiseHandshakeError", "NoiseHandshakeTimeoutError", "NotConnectedError", "NumberMode", "PeerClosedDuringNoiseError",
+      "PermanentError", "PlaintextHandshakeError", "ProtocolError", "RadioFrequencyCapabilityFlags", "RadioFrequencyModulation", "SensorStateClass",
+      "SerialProxyLineStateFlags", "SerialProxyParity", "SerialProxyPortType", "SerialProxyRequestType", "SerialProxyStatus", "ServiceArgType", "TemperatureUnit",
+      "TextMode", "TruncatedMessageError", "UnknownEntityTypeError", "UnknownMessageTypeError", "UnsupportedCapabilityError", "UpdateCommand", "ValveOperation",
+      "VoiceAssistantEvent", "VoiceAssistantRequestFlag", "VoiceAssistantSubscribeFlag", "VoiceAssistantTimerEvent", "WaterHeaterMode", "WireType", "aliasOf",
+      "connectionUptimeMs", "createESPHomeHandshake", "createHandshake", "disconnectedCapabilities", "disconnectedHealth", "entityId", "extending", "isConnectionLive",
+      "isEntityId", "logLevelName", "openEspHomeClient", "parseEntityId", "withReconnect"
+    ]);
+  });
 
   test("exports the EspHomeClient class", () => {
 
@@ -60,27 +83,10 @@ describe("Public entry-point re-exports", () => {
     assert.equal(typeof publicApi.withReconnect, "function");
   });
 
-  test("exports the EventBus primitive", () => {
-
-    // EventBus is defined in event-bus.ts and is intentionally not re-exported at the package root; the camera/voice-assistant sub-APIs reference it via type-only
-    // imports. There is therefore nothing to assert about it on the public surface, so this stands as a no-op placeholder confirming the public API is an object.
-    assert.equal(typeof publicApi, "object");
-  });
-
   test("exports the schema-extension helpers", () => {
 
     assert.equal(typeof publicApi.aliasOf, "function");
     assert.equal(typeof publicApi.extending, "function");
-  });
-
-  test("exports the CameraApi class", () => {
-
-    assert.equal(typeof publicApi.CameraApi, "function");
-  });
-
-  test("exports the VoiceAssistantApi class", () => {
-
-    assert.equal(typeof publicApi.VoiceAssistantApi, "function");
   });
 
   test("exports the ENTITY_SCHEMAS registry", () => {
@@ -115,5 +121,14 @@ describe("Public entry-point - LogLevel and protocol constants", () => {
     assert.equal(typeof publicApi.VoiceAssistantRequestFlag, "object");
     assert.equal(typeof publicApi.VoiceAssistantEvent, "object");
     assert.equal(typeof publicApi.VoiceAssistantTimerEvent, "object");
+  });
+});
+
+describe("Testing entry-point exports", () => {
+
+  test("exports the protocol's MessageType table", () => {
+
+    assert.equal(testingApi.MessageType, MessageType);
+    assert.equal(testingApi.MessageType.HELLO_RESPONSE, MessageType.HELLO_RESPONSE);
   });
 });

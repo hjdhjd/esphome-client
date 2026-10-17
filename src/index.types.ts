@@ -9,6 +9,10 @@
  * generically or supplies those options must be able to import the types from the package root. Each assertion imports the name through the barrel and holds it
  * equal to its declaration: a dropped re-export fails to resolve at the import, and a re-export that reached a different declaration breaks the equality.
  *
+ * The barrel exports each sub-API class as a type only and withholds its host interface, and the camera sub-API holds both halves of that rule. The client's
+ * `camera` accessor must return an instance of the barrel's `CameraApi` type, so a consumer can type the instances the client hands out. The `CameraHost` import
+ * sits under a `@ts-expect-error` directive, so a barrel that exported the host interface would leave the directive unused, which is itself a compile error.
+ *
  * @remarks This file holds **type-level assertions only**. It lives at `.types.ts` (not `.types.test.ts`) and is validated by `tsc` via `tsconfig.json`, NOT by
  * `node --test`.
  *
@@ -17,10 +21,19 @@
 import type * as commandRunner from "./command-runner.ts";
 import type * as heartbeat from "./heartbeat.ts";
 import type * as transport from "./transport.ts";
-import type { Assert, Equal } from "./internal/type-assertions.ts";
+import type { Assert, Equal, Extends } from "./internal/type-assertions.ts";
 import type {
-  ClockFn, CommandAndAwaitOptions, CommandAndAwaitable, InboundMessage, NoiseCipherPair, NonAwaitableEntityType, TransmitEntityType, TransportLike, TransportOpenOptions
+  CameraApi, ClockFn, CommandAndAwaitOptions, CommandAndAwaitable, EspHomeClient, InboundMessage, NoiseCipherPair, NonAwaitableEntityType, TransmitEntityType,
+  TransportLike, TransportOpenOptions,
+  // @ts-expect-error - the package root withholds every sub-API's host interface, so a consumer cannot build the host a sub-API constructor takes.
+  CameraHost as _CameraHost
 } from "./index.ts";
+
+/**
+ * The client's `camera` accessor returns an instance of the barrel's {@link CameraApi} type, so a consumer types the sub-API instances the client hands out even
+ * though the barrel exports the class as a type only.
+ */
+type CameraAccessorReturnsCameraApi = Assert<Extends<ReturnType<EspHomeClient["camera"]>, CameraApi>>;
 
 /**
  * The barrel's {@link ClockFn} is the injectable clock the client's `clock` option names.
@@ -70,6 +83,7 @@ type TransportOpenOptionsResolves = Assert<Equal<TransportOpenOptions, transport
 // Every sentinel-assertion type alias is exported so the module carries its rules as a surface a reader can find.
 export type {
 
+  CameraAccessorReturnsCameraApi,
   ClockFnResolves,
   CommandAndAwaitOptionsResolves,
   CommandAndAwaitableResolves,
