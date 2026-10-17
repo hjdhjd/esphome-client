@@ -216,9 +216,11 @@ export interface WithReconnectOptions {
  * event (or immediately if the client is already connected when the helper starts), and re-fires on every subsequent `connect` after a `disconnect`. The body's
  * abort signal aborts the moment the matching `disconnect` arrives so re-entrant operations (`commandAndAwait`, `client.stream(...)` iterators) can wind down cleanly.
  *
- * Typical use: re-issue protocol-level operations whose lifetime is bound to a single connect (e.g. `client.voiceAssistant.subscribe()`, `subscribeToLogs`,
- * `client.camera(id).stream()`). The EventBus and its subscriptions, telemetry subscriptions included, survive reconnects and need no helper - the host preserves
- * them automatically. The latest-state cache does not: every connect clears it, and it is rebuilt one entity at a time from the new session's state events.
+ * Typical use: work bound to a single connection, such as a one-shot request whose answer can change between sessions or a command sequence that must restart
+ * from its first step after a reconnect. Sub-API subscriptions (the voice assistant, logs, Home Assistant, camera streams, and the Bluetooth, serial, and Z-Wave
+ * proxies) need no helper: the host reissues them after every reconnect, before the `connect` event that fires the body. The EventBus and its subscriptions,
+ * telemetry subscriptions included, survive reconnects and need no helper - the host preserves them automatically. The latest-state cache does not: every connect
+ * clears it, and it is rebuilt one entity at a time from the new session's state events.
  *
  * Usage:
  *

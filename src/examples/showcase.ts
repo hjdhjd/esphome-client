@@ -161,19 +161,22 @@ export async function disconnectAndCleanupExample(client: EspHomeClient): Promis
 /**
  * Run a body callback once per successful connect. The body's signal aborts on the next disconnect so re-entrant operations (`commandAndAwait`, streams) wind down
  * before the next connect attempt. The body's first parameter is the structural `WithReconnectClient` interface (health + lifecycle); to reach the full surface
- * (sub-APIs, command, telemetry stream), close over the outer `client` reference.
+ * (sub-APIs, command, telemetry stream), close over the outer `client` reference. Sub-API subscriptions are taken once, before the helper, because the host
+ * reissues them after every reconnect; the body keeps to work that belongs to one connection.
  */
 // #region with-reconnect
 export async function withReconnectExample(client: EspHomeClient): Promise<void> {
 
+  // The host reissues the voice-assistant subscription after every reconnect, so it is taken once, outside the helper.
+  client.voiceAssistant.subscribe();
+
   await withReconnect(client, async (_, signal) => {
 
-    client.voiceAssistant.subscribe();
+    // A device can come back from a reboot or a reflash with different wake words, so each connection asks it for a fresh configuration. The body's signal
+    // abandons the request if the connection drops first.
+    const configuration = await client.voiceAssistant.configuration({ refresh: true, signal });
 
-    for await (const audio of client.voiceAssistant.audio({ signal })) {
-
-      log.debug("Received a voice-assistant audio chunk.", audio);
-    }
+    log.info("The device reported its voice-assistant configuration for this connection.", configuration);
   }, { signal: AbortSignal.timeout(60000) });
 }
 // #endregion with-reconnect
@@ -315,7 +318,7 @@ export async function capabilityFeatureGatingExample(client: EspHomeClient): Pro
 
   const caps = client.capabilities();
 
-  // Feature: voice-assistant subscribe. The handshake sends SUBSCRIBE_VOICE_ASSISTANT_REQUEST; sending it to a device without VA support is a silent no-op on the
+  // Feature: voice-assistant subscribe. `subscribe()` sends SUBSCRIBE_VOICE_ASSISTANT_REQUEST; sending it to a device without VA support is a silent no-op on the
   // wire but a confusing dead path for the consumer. Gate it.
   if(caps.voiceAssistant.supported) {
 
@@ -1283,18 +1286,22 @@ export async function commandErrorHandlingExample(client: EspHomeClient, lightId
 // #endregion command-error-handling
 
 /**
- * The {@link PermanentError} marker classifies errors that auto-reconnect should not retry. The library currently throws these PermanentError subclasses:
- * {@link EncryptionKeyMissingError}, {@link EncryptionKeyInvalidError}, {@link EncryptionRequiredError}, and {@link NegotiationFailedError}. Two further subclasses
- * are part of the public hierarchy without a current throw site: {@link AuthenticationError} is available to consumer-supplied wrappers that authenticate
+ * The {@link PermanentError} marker classifies errors that auto-reconnect should not retry. The library throws these PermanentError subclasses:
+ * {@link EncryptionKeyMissingError}, {@link EncryptionKeyInvalidError}, {@link EncryptionRequiredError}, and {@link NegotiationFailedError}. The public hierarchy
+ * also includes subclasses the library itself never throws: {@link AuthenticationError} is available to consumer-supplied wrappers that authenticate
  * against a custom transport, and {@link IncompatibleApiVersionError} is retained for backward compatibility with consumers that narrowed on it before
- * {@link NegotiationFailedError} existed. Consumer-supplied retry logic should mirror the same split: stop on permanent, back off on transient.
+ * {@link NegotiationFailedError} existed. Consumer-supplied retry logic should mirror the same split: stop on permanent, back off on transient. When its attempts
+ * run out, the example rejects with the last transient error, so the caller sees the cause of the final failure. On success it returns the connected client,
+ * which the caller then owns and closes when it is done.
  */
 // #region permanent-vs-transient
-export async function permanentVsTransientExample(): Promise<void> {
+export async function permanentVsTransientExample(): Promise<EspHomeClient> {
 
+  const maxAttempts = 10;
   let attempts = 0;
+  let lastError: unknown;
 
-  while(attempts < 10) {
+  while(attempts < maxAttempts) {
 
     try {
 
@@ -1304,7 +1311,7 @@ export async function permanentVsTransientExample(): Promise<void> {
 
       log.info("The device accepted the connection.", client.isEncrypted);
 
-      return;
+      return client;
 
     } catch(error) {
 
@@ -1314,13 +1321,21 @@ export async function permanentVsTransientExample(): Promise<void> {
         throw error;
       }
 
+      lastError = error;
       attempts++;
 
-      // The retry loop is intentionally sequential because each attempt must observe the result of the previous one before deciding whether to back off.
-      // eslint-disable-next-line no-await-in-loop
-      await delay(500 * (2 ** attempts));
+      // The final attempt skips the backoff, because no attempt follows it to wait for.
+      if(attempts < maxAttempts) {
+
+        // The retry loop is intentionally sequential because each attempt must observe the result of the previous one before deciding whether to back off.
+        // eslint-disable-next-line no-await-in-loop
+        await delay(500 * (2 ** attempts));
+      }
     }
   }
+
+  // Every attempt failed transiently, so the last failure propagates and the caller sees its real cause.
+  throw lastError;
 }
 // #endregion permanent-vs-transient
 
@@ -1420,7 +1435,8 @@ export async function voiceAssistantStreamingExample(client: EspHomeClient, gene
 
 /**
  * Trigger a TTS announcement. The await resolves with the success flag from the device's `voiceAssistantAnnounceFinished` response; the default 5000ms timeout is
- * configurable via `awaitOptions.timeoutMs`. Pre-subscribes to the matching response event before issuing the wire request so a fast device cannot beat the listener.
+ * configurable via `awaitOptions.timeoutMs`. One announcement can be in flight at a time; a second call made while one is pending throws `ConnectionError` with
+ * code `ANNOUNCE_IN_FLIGHT`.
  */
 // #region voice-assistant-announce
 export async function voiceAssistantAnnounceExample(client: EspHomeClient): Promise<void> {
@@ -1545,14 +1561,15 @@ export async function cameraStreamExample(client: EspHomeClient): Promise<void> 
 
 /**
  * Subscribe to inbound Home Assistant action calls. The device fires `homeassistantService` events whenever its YAML configuration triggers a `homeassistant.action`
- * or `homeassistant.service` block. The subscription is connection-scoped; re-call after every reconnect.
+ * or `homeassistant.service` block. The client reissues the subscription after every reconnect, so a consumer subscribes once. The caller disposes the returned
+ * handle to stop listening.
  */
 // #region home-assistant-services
-export function homeAssistantServicesExample(client: EspHomeClient): void {
+export function homeAssistantServicesExample(client: EspHomeClient): Disposable {
 
   client.homeAssistant.subscribeServices();
 
-  using sub = client.on("homeassistantService", (event) => {
+  return client.on("homeassistantService", (event) => {
 
     log.info("The device called a Home Assistant action.", event.service, event.data, event.dataTemplate, event.variables, event.isEvent);
   });
@@ -1561,15 +1578,15 @@ export function homeAssistantServicesExample(client: EspHomeClient): void {
 
 /**
  * Bridge ESPHome's Home-Assistant-state-import requests. The device fires `homeassistantStateRequest` when it wants the current value of a Home Assistant entity
- * (typically a sensor or template the YAML imports). The consumer answers via `client.homeAssistant.sendState`. The subscription is connection-scoped;
- * re-issue on every reconnect (typically inside a `withReconnect` body or a lifecycle-stream `connect` handler).
+ * (typically a sensor or template the YAML imports). The consumer answers via `client.homeAssistant.sendState`. The client reissues the subscription after
+ * every reconnect, so a consumer subscribes once. The caller disposes the returned handle to stop listening.
  */
 // #region home-assistant-state-bridge
-export function homeAssistantStateBridgeExample(client: EspHomeClient, lookup: (entity: string, attribute: string) => string): void {
+export function homeAssistantStateBridgeExample(client: EspHomeClient, lookup: (entity: string, attribute: string) => string): Disposable {
 
   client.homeAssistant.subscribeStates();
 
-  using sub = client.on("homeassistantStateRequest", (request) => {
+  return client.on("homeassistantStateRequest", (request) => {
 
     const value = lookup(request.entityId, request.attribute);
 
