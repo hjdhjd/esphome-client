@@ -1770,8 +1770,8 @@ describe("EspHomeClient.connect - error and abort paths", () => {
 
   test("connect with PSK falls back to plaintext when the peer closed the socket during the noise handshake", async () => {
 
-    // PEER_CLOSED_NOISE is one of the two genuine no-encryption signals carried by PeerClosedDuringNoiseError. The gate falls back: a second (plaintext) transport is
-    // constructed and the connect succeeds unencrypted. This asserts the OTHER PeerClosedDuringNoiseError code than the plaintext-indicator test below.
+    // PEER_CLOSED_NOISE is a genuine no-encryption signal carried by PeerClosedDuringNoiseError. The gate falls back: a second (plaintext) transport is constructed and
+    // the connect succeeds unencrypted. This asserts the OTHER PeerClosedDuringNoiseError code than the plaintext-indicator test below.
     const transports: MockTransport[] = [];
     const transportFactory = (): MockTransport => {
 

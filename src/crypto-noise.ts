@@ -284,7 +284,7 @@ export class CipherState {
 
     if(plaintext.length + AUTH_TAG_LEN > NOISE_MAX_MESSAGE_LEN) {
 
-      throw new NoiseHandshakeError("Message too long", "MSG_TOO_LONG");
+      throw new NoiseHandshakeError("Encrypted noise message would exceed the 65535-byte message limit.", "MSG_TOO_LONG");
     }
 
     const cipher = createCipheriv(CIPHER_ALGO, this.k, this.updateNonce(), { authTagLength: AUTH_TAG_LEN });

@@ -111,8 +111,8 @@ export class HandshakeError extends ConnectionError {}
  * - `NOT_INITIALIZED` - Reserved for future use; no current throw site constructs this code. Kept in the union for forward compatibility.
  * - `PEER_CLOSED_NOISE` - The peer ended the TCP connection, whether as a close, a reset or a failed write, during the noise handshake before it had sent any Noise frame
  *   (`transport.ts`); an ending after the device has spoken Noise is an ordinary {@link ConnectionClosedByPeerError}. Carried by {@link PeerClosedDuringNoiseError}.
- * - `PEER_PLAINTEXT_DURING_NOISE` - The peer responded with the plaintext indicator byte (0x00) during the noise handshake (`transport.ts`). Triggers fallback to
- *   plaintext when the consumer has not insisted on encryption. Carried by {@link PeerClosedDuringNoiseError}.
+ * - `PEER_PLAINTEXT_DURING_NOISE` - The peer responded with the plaintext indicator byte (0x00) during the noise handshake (`transport.ts`). Triggers the fallback to
+ *   plaintext. Carried by {@link PeerClosedDuringNoiseError}.
  * - `SERVER_NAME_MISMATCH` - The device's noise-handshake server hello announced a server name other than the one the client's `serverName` option expects
  *   (`lifecycle/handshake.ts`). The check runs before any key is in use.
  * - `TRUNCATED_E` - The ephemeral public key segment in an inbound handshake message was shorter than 32 bytes (`crypto-noise.ts`, `lifecycle/handshake.ts`).

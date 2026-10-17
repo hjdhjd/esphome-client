@@ -647,10 +647,10 @@ interface AttachedSession {
  *
  * ## Connection lifecycle
  *
- * `connect()` runs the linear handshake: TCP connect, `HelloRequest`/`HelloResponse`, optional Noise NNpsk0 handshake (with plaintext fallback when the peer closes
- * mid-noise or returns a plaintext frame), `ConnectRequest`/`ConnectResponse`, `DeviceInfoRequest`, `ListEntitiesRequest`, `SubscribeStatesRequest`. Failures surface
- * as typed errors from {@link EspHomeError} subclasses. Auto-reconnect is on by default with `PermanentError`-filtered retry; pass `reconnect: false` to opt out. Lazy
- * heartbeat (30s idle / 60s stall) is on by default; pass `keepAlive: false` to opt out. Live state is observable via {@link EspHomeClient.health},
+ * `connect()` runs the linear handshake: TCP connect, `HelloRequest`/`HelloResponse`, optional Noise NNpsk0 handshake (with plaintext fallback when the peer ends the
+ * connection mid-noise or returns a plaintext frame), `ConnectRequest`/`ConnectResponse`, `DeviceInfoRequest`, `ListEntitiesRequest`, `SubscribeStatesRequest`. Failures
+ * surface as typed errors from {@link EspHomeError} subclasses. Auto-reconnect is on by default with `PermanentError`-filtered retry; pass `reconnect: false` to opt out.
+ * Lazy heartbeat (30s idle / 60s stall) is on by default; pass `keepAlive: false` to opt out. Live state is observable via {@link EspHomeClient.health},
  * {@link EspHomeClient.onHealthChange}, {@link EspHomeClient.healthStream}, and the typed {@link EspHomeClient.lifecycle} stream.
  *
  * ## Entity model
@@ -1319,10 +1319,10 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
           } catch(err) {
 
             // We fall back to plaintext ONLY on the genuine no-encryption signal: the peer demonstrably does not speak the encrypted protocol because it responded in
-            // plaintext (PEER_PLAINTEXT_DURING_NOISE) or ended the connection during the noise exchange (PEER_CLOSED_NOISE). Both are carried by
-            // {@link PeerClosedDuringNoiseError}, so the single instanceof check covers exactly those two wire-level triggers with no code keying. Everything else - a
-            // bad key (EncryptionKeyInvalidError), a garbled/truncated reply, a server-name mismatch, AND a noise timeout/abort - is NOT evidence the device wants
-            // plaintext, so it fails closed and re-throws.
+            // plaintext (PEER_PLAINTEXT_DURING_NOISE) or ended the connection during the noise exchange (PEER_CLOSED_NOISE). Each is carried by
+            // {@link PeerClosedDuringNoiseError}, so the single instanceof check covers exactly the wire-level no-encryption signals with no code keying. Everything
+            // else - a bad key (EncryptionKeyInvalidError), a garbled/truncated reply, a server-name mismatch, AND a noise timeout/abort - is NOT evidence the device
+            // wants plaintext, so it fails closed and re-throws.
             if(!(err instanceof PeerClosedDuringNoiseError)) {
 
               throw err;
@@ -2779,9 +2779,12 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
       return;
     }
 
-    // Fire-and-forget; a send-related socket fault surfaces on the transport's iterator and is routed via the receiver's terminal-completion hook into the disconnect
-    // path (which schedules auto-reconnect). The local catch sees every failed write, and its error is the one the transport has already ended itself with, so
-    // logging at debug suffices because the iterator-driven teardown is the authoritative recovery.
+    // Fire-and-forget. A send rejects in one of two ways. A failed write, or a send on a transport that has already ended, rejects with the error that ended the
+    // transport (or with its own write failure when a dispose landed under a write still in flight). A fault's ending surfaces on the iterator and is routed
+    // through the receiver's terminal-completion hook into the disconnect path, which schedules auto-reconnect, and a dispose is that path already running, so
+    // the teardown is the authoritative recovery whichever way the transport ended. A send refused before any bytes are written (a payload over the Noise message
+    // limit, an exhausted send nonce, a wrong transport phase) rejects alone and leaves the transport up, dropping that one message, because the connection is
+    // healthy and nothing at this level can recover a message that cannot be framed. Either way the local catch only logs at debug.
     void session.transport.send(type, payload).catch((err: unknown) => {
 
       this.log.debug("frameAndSend failed for " + messageTypeName(type) + ": " + (err instanceof Error ? err.message : String(err)));

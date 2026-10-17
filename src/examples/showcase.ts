@@ -1140,7 +1140,7 @@ export async function errorClassEnumerationExample(): Promise<void> {
     // (PEER_CLOSED_NOISE / PEER_PLAINTEXT_DURING_NOISE) does not collapse into the parent branch.
     if(error instanceof PeerClosedDuringNoiseError) {
 
-      // Peer closed mid-handshake or sent a plaintext indicator byte.
+      // Peer ended the connection mid-handshake or sent a plaintext indicator byte.
       log.error("The peer abandoned the noise handshake.", error.code);
 
       return;
