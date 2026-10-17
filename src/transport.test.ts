@@ -813,6 +813,10 @@ describe("Transport.send - noise-data framing", () => {
       return true;
     });
 
+    // A send the guard refuses leaves the transport up and sending: the socket stays open, and the next send on the same transport resolves.
+    assert.equal(mock.destroyed, false);
+    await transport.send(MessageType.PING_REQUEST, Buffer.alloc(0));
+
     transport[Symbol.dispose]();
   });
 });
@@ -2312,6 +2316,154 @@ describe("Transport - peer-close handling", () => {
     });
   });
 
+  test("translates a socket error during noise-handshake before any Noise frame into PeerClosedDuringNoiseError PEER_CLOSED_NOISE with the error as cause", async () => {
+
+    const mock = new MockSocket();
+    const transport = await openTransport(mock);
+
+    transport.enterNoiseHandshake();
+
+    const promise = transport.nextNoiseHandshakeFrame();
+    const cause: NodeJS.ErrnoException = Object.assign(new Error("ECONNRESET"), { code: "ECONNRESET" });
+
+    mock.simulateError(cause);
+
+    await assert.rejects(promise, (err) => {
+
+      assert.ok(err instanceof PeerClosedDuringNoiseError);
+      assert.equal(err.code, "PEER_CLOSED_NOISE");
+      assert.equal(err.cause, cause);
+      assert.equal(err.cause.code, "ECONNRESET");
+
+      return true;
+    });
+  });
+
+  test("translates a socket error during noise-handshake after a Noise frame into ConnectionClosedByPeerError ECONNRESET as the device has spoken Noise", async () => {
+
+    const mock = new MockSocket();
+    const transport = await openTransport(mock);
+
+    transport.enterNoiseHandshake();
+    mock.pushData(NOISE_HANDSHAKE_FRAME_DEAD_BEEF);
+
+    const frame = await transport.nextNoiseHandshakeFrame();
+
+    assert.equal(frame.compare(Buffer.from([ 0xDE, 0xAD, 0xBE, 0xEF ])), 0);
+
+    const promise = transport.nextNoiseHandshakeFrame();
+    const cause: NodeJS.ErrnoException = Object.assign(new Error("ECONNRESET"), { code: "ECONNRESET" });
+
+    mock.simulateError(cause);
+
+    await assert.rejects(promise, (err) => {
+
+      assert.ok(err instanceof ConnectionClosedByPeerError);
+      assert.ok(!(err instanceof PeerClosedDuringNoiseError));
+      assert.equal(err.code, "ECONNRESET");
+
+      return true;
+    });
+  });
+
+  test("translates a failed write during noise-handshake before any Noise frame into PeerClosedDuringNoiseError PEER_CLOSED_NOISE with the error as cause", async () => {
+
+    const mock = new MockSocket();
+    const transport = await openTransport(mock);
+
+    transport.enterNoiseHandshake();
+
+    const cause: NodeJS.ErrnoException = Object.assign(new Error("EPIPE"), { code: "EPIPE" });
+
+    mock.failNextWrite(cause);
+
+    const promise = transport.nextNoiseHandshakeFrame();
+    let writeError: unknown = null;
+
+    await assert.rejects(transport.sendNoiseHandshakeFrame(Buffer.alloc(0)), (err) => {
+
+      assert.ok(err instanceof PeerClosedDuringNoiseError);
+      assert.equal(err.code, "PEER_CLOSED_NOISE");
+      assert.equal(err.cause, cause);
+      assert.equal(err.cause.code, "EPIPE");
+      writeError = err;
+
+      return true;
+    });
+
+    await assert.rejects(promise, (err) => err === writeError);
+  });
+
+  test("translates a failed write during noise-handshake after a Noise frame into ConnectionError SOCKET_WRITE_FAILED as the device has spoken Noise", async () => {
+
+    const mock = new MockSocket();
+    const transport = await openTransport(mock);
+
+    transport.enterNoiseHandshake();
+    mock.pushData(NOISE_HANDSHAKE_FRAME_DEAD_BEEF);
+
+    const frame = await transport.nextNoiseHandshakeFrame();
+
+    assert.equal(frame.compare(Buffer.from([ 0xDE, 0xAD, 0xBE, 0xEF ])), 0);
+
+    const cause: NodeJS.ErrnoException = Object.assign(new Error("EPIPE"), { code: "EPIPE" });
+
+    mock.failNextWrite(cause);
+
+    await assert.rejects(transport.sendNoiseHandshakeFrame(Buffer.alloc(0)), (err) => {
+
+      assert.ok(err instanceof ConnectionError);
+      assert.ok(!(err instanceof PeerClosedDuringNoiseError));
+      assert.equal(err.code, "SOCKET_WRITE_FAILED");
+      assert.equal(err.cause, cause);
+
+      return true;
+    });
+  });
+
+  test("a write that fails after an earlier fault ended the transport rejects with that fault", async (t) => {
+
+    const mock = new MockSocket();
+    const transport = await openTransport(mock);
+
+    transport.enterNoiseHandshake();
+
+    let failWrite: ((err?: Error) => void) | undefined;
+
+    // The replacement write keeps its callback rather than invoking it, so the handshake write is still in flight when the reset below ends the transport, and the
+    // write fails only when the row invokes that callback afterwards.
+    const write = t.mock.method(mock, "write", (_data: Buffer | string, callback?: (err?: Error) => void): boolean => {
+
+      failWrite = callback;
+
+      return true;
+    });
+
+    const promise = transport.nextNoiseHandshakeFrame();
+    const send = transport.sendNoiseHandshakeFrame(Buffer.alloc(0));
+    const reset: NodeJS.ErrnoException = Object.assign(new Error("ECONNRESET"), { code: "ECONNRESET" });
+    const writeFailure: NodeJS.ErrnoException = Object.assign(new Error("EPIPE"), { code: "EPIPE" });
+    let sendError: unknown = null;
+
+    assert.equal(write.mock.callCount(), 1);
+    assert.ok(failWrite);
+
+    mock.simulateError(reset);
+    failWrite(writeFailure);
+
+    await assert.rejects(send, (err) => {
+
+      assert.ok(err instanceof PeerClosedDuringNoiseError);
+      assert.equal(err.cause, reset);
+      assert.notEqual(err.cause, writeFailure);
+      sendError = err;
+
+      return true;
+    });
+
+    await assert.rejects(promise, (err) => err === sendError);
+  });
+
   test("translates peer-close during noise-data into ConnectionClosedByPeerError PEER_CLOSED on the iterator", async () => {
 
     const mock = new MockSocket();
@@ -2349,6 +2501,7 @@ describe("Transport - peer-close handling", () => {
 
       assert.ok(err instanceof ConnectionClosedByPeerError);
       assert.equal(err.code, "ECONNRESET");
+      assert.equal(err.cause, cause);
 
       return true;
     });

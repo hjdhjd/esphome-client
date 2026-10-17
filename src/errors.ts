@@ -109,8 +109,8 @@ export class HandshakeError extends ConnectionError {}
  * - `NONCE_EXHAUSTED` - The ChaCha20-Poly1305 nonce reached the reserved maximum 2^64 - 1 (`crypto-noise.ts`). Per Noise §5.1 that nonce is reserved for rekey and must
  *   never encrypt or decrypt a transport message; physically unreachable in practice (it would require 2^64 messages on one connection).
  * - `NOT_INITIALIZED` - Reserved for future use; no current throw site constructs this code. Kept in the union for forward compatibility.
- * - `PEER_CLOSED_NOISE` - The peer closed the TCP socket during the noise handshake before it had sent any Noise frame (`transport.ts`); a close after the device has
- *   spoken Noise is an ordinary {@link ConnectionClosedByPeerError}. Carried by {@link PeerClosedDuringNoiseError}.
+ * - `PEER_CLOSED_NOISE` - The peer ended the TCP connection, whether as a close, a reset or a failed write, during the noise handshake before it had sent any Noise frame
+ *   (`transport.ts`); an ending after the device has spoken Noise is an ordinary {@link ConnectionClosedByPeerError}. Carried by {@link PeerClosedDuringNoiseError}.
  * - `PEER_PLAINTEXT_DURING_NOISE` - The peer responded with the plaintext indicator byte (0x00) during the noise handshake (`transport.ts`). Triggers fallback to
  *   plaintext when the consumer has not insisted on encryption. Carried by {@link PeerClosedDuringNoiseError}.
  * - `SERVER_NAME_MISMATCH` - The device's noise-handshake server hello announced a server name other than the one the client's `serverName` option expects
@@ -149,8 +149,8 @@ export class NoiseHandshakeError extends HandshakeError {
 }
 
 /**
- * Peer (the device) closed the socket during the noise handshake before sending a Noise frame (`PEER_CLOSED_NOISE`), or answered the handshake with the plaintext
- * indicator byte (`PEER_PLAINTEXT_DURING_NOISE`). Triggers fallback to plaintext when applicable.
+ * Peer (the device) ended the connection, whether as a close, a reset or a failed write, during the noise handshake before sending a Noise frame (`PEER_CLOSED_NOISE`),
+ * or answered the handshake with the plaintext indicator byte (`PEER_PLAINTEXT_DURING_NOISE`). Triggers fallback to plaintext when applicable.
  */
 export class PeerClosedDuringNoiseError extends NoiseHandshakeError {}
 

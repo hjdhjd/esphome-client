@@ -347,8 +347,8 @@ export class Transport implements TransportLike {
 
   /**
    * Whether the device has sent a Noise handshake frame on this transport. The plaintext fallback follows only a device that has not spoken the encrypted protocol, and
-   * a device that has sent a Noise frame has, so a close during the handshake counts as the fallback's error only while this is unset. A transport serves one connect
-   * attempt and the fallback opens a new one, so nothing resets it.
+   * a device that has sent a Noise frame has, so the peer ending the connection during the handshake counts as the fallback's error only while this is unset. A transport
+   * serves one connect attempt and the fallback opens a new one, so nothing resets it.
    */
   private receivedNoiseFrame = false;
 
@@ -450,7 +450,8 @@ export class Transport implements TransportLike {
 
   /**
    * Send a raw noise handshake frame (no encryption). Valid only during the `noise-handshake` phase. A failed socket write ends the transport and rejects exactly as it
-   * does for {@link Transport.send}.
+   * does for {@link Transport.send}, except that a write failing before the device has sent any Noise frame rejects with the {@link PeerClosedDuringNoiseError} the
+   * plaintext fallback keys on, as a close or a reset in that state does.
    *
    * @param frame - The handshake frame bytes (e.g., the noise client's `writeMessage()` output, or the empty initial frame).
    */
@@ -757,11 +758,13 @@ export class Transport implements TransportLike {
 
     socket.once("error", (err: NodeJS.ErrnoException) => {
 
-      this.options.log.debug("Transport socket error: " + (err.code ?? err.message) + ".");
+      const message = "Transport socket error: " + (err.code ?? err.message) + ".";
+
+      this.options.log.debug(message);
 
       const cause = err;
 
-      this.fail(new ConnectionClosedByPeerError("Transport socket error: " + (err.code ?? err.message) + ".", err.code ?? "ESOCKET", { cause }));
+      this.fail(this.noiseFallbackError(cause) ?? new ConnectionClosedByPeerError(message, err.code ?? "ESOCKET", { cause }));
     });
 
     socket.once("close", () => {
@@ -769,18 +772,29 @@ export class Transport implements TransportLike {
       // If we've already terminated for a more specific reason, keep that. Otherwise surface a generic peer-closed.
       if(!this.terminated) {
 
-        // A peer close during the noise handshake from a device that has not sent a Noise frame means it does not speak the encrypted protocol, so translate it for the
-        // connect path to fall back without inspecting socket internals. A device that has sent a Noise frame speaks the protocol, so its close is an ordinary one.
-        if((this.phase === Phase.NOISE_HANDSHAKE) && !this.receivedNoiseFrame) {
-
-          this.fail(new PeerClosedDuringNoiseError("Peer closed the socket during the noise handshake.", "PEER_CLOSED_NOISE"));
-
-          return;
-        }
-
-        this.fail(new ConnectionClosedByPeerError("Peer closed the socket.", "PEER_CLOSED"));
+        this.fail(this.noiseFallbackError() ?? new ConnectionClosedByPeerError("Peer closed the socket.", "PEER_CLOSED"));
       }
     });
+  }
+
+  /**
+   * Answer whether the peer ending the connection is the plaintext fallback's error, classified by the protocol state alone. A device that ends the connection during the
+   * noise handshake before it has sent any Noise frame does not speak the encrypted protocol, so the ending is translated into a {@link PeerClosedDuringNoiseError} for
+   * the connect path to fall back without inspecting socket internals. A device that has sent a Noise frame speaks the protocol, so its ending is an ordinary one.
+   * Whether the connection ended in a clean close, a reset or a failed write says nothing about which protocol the device speaks, so every path that sees the connection
+   * end asks here and raises its own ordinary error only when the answer is `undefined`, and the same state raises the same error whichever way the connection ended.
+   *
+   * @param cause - The socket error that ended the connection, when one did. The returned error carries a `cause` only when it is given one.
+   * @returns The {@link PeerClosedDuringNoiseError} coded `PEER_CLOSED_NOISE` during the noise handshake before the device has sent any Noise frame, else `undefined`.
+   */
+  private noiseFallbackError(cause?: Error): PeerClosedDuringNoiseError | undefined {
+
+    if((this.phase === Phase.NOISE_HANDSHAKE) && !this.receivedNoiseFrame) {
+
+      return new PeerClosedDuringNoiseError("Peer ended the connection during the noise handshake.", "PEER_CLOSED_NOISE", (cause === undefined) ? undefined : { cause });
+    }
+
+    return undefined;
   }
 
   /**
@@ -1291,8 +1305,9 @@ export class Transport implements TransportLike {
 
   /**
    * Write raw bytes to the socket. Resolves once the socket's `write` callback fires. A callback error ends the transport through {@link Transport.fail} with a
-   * {@link ConnectionError} coded `SOCKET_WRITE_FAILED` that carries the socket's error as its cause, and the write rejects with that same error. When an earlier fault
-   * has already ended the transport, the write rejects with that fault's error instead.
+   * {@link ConnectionError} coded `SOCKET_WRITE_FAILED` that carries the socket's error as its cause, and the write rejects with that same error, except that a write
+   * failing during the noise handshake before the device has sent any Noise frame rejects with the {@link PeerClosedDuringNoiseError} the plaintext fallback keys on, as
+   * a close or a reset in that state does. When an earlier fault has already ended the transport, the write rejects with that fault's error instead.
    */
   private async writeToSocket(bytes: Buffer): Promise<void> {
 
@@ -1313,9 +1328,11 @@ export class Transport implements TransportLike {
 
           // A failed write ends the transport here rather than waiting for a socket `error` event, because the socket contract does not promise one follows a failed
           // write...without this, the parked awaiters and the message iterator would never learn of the fault. A write that fails after an earlier fault reuses that
-          // fault's error, so the send, every observer, and every concurrent in-flight write report one cause, and the second fail() is a no-op behind its guard.
-          const error = this.terminationError ?? new ConnectionError("Transport socket write failed: " + (err.code ?? err.message) + ".", "SOCKET_WRITE_FAILED",
-            { cause: err });
+          // fault's error, so the send, every observer, and every concurrent in-flight write report one cause, and the second fail() is a no-op behind its guard. A write
+          // that fails while the device has not spoken Noise during the handshake is the peer ending the connection in that state, so it takes the fallback's error as a
+          // close or a reset does.
+          const error = this.terminationError ?? this.noiseFallbackError(err) ??
+            new ConnectionError("Transport socket write failed: " + (err.code ?? err.message) + ".", "SOCKET_WRITE_FAILED", { cause: err });
 
           this.fail(error);
           reject(error);

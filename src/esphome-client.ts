@@ -911,8 +911,8 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
    * the handshake are not missed.
    *
    * @remarks Every option is optional except `host`. When `psk` is supplied, as a key or as a {@link PskResolver}, the client attempts the Noise NNpsk0 handshake first
-   * and falls back to plaintext ONLY when the device demonstrably does not speak encryption - it responded in plaintext or closed the socket during the noise exchange.
-   * The key is checked where the handshake uses it, not at construction: a bad encryption key (a key that does not decode to 32 bytes, a rejected PSK, or a
+   * and falls back to plaintext ONLY when the device demonstrably does not speak encryption - it responded in plaintext or ended the connection during the noise
+   * exchange. The key is checked where the handshake uses it, not at construction: a bad encryption key (a key that does not decode to 32 bytes, a rejected PSK, or a
    * malformed/low-order peer key) fails closed with a permanent {@link EncryptionKeyInvalidError}, and a resolver that returns no key fails closed with a permanent
    * {@link EncryptionKeyMissingError}, rather than silently downgrading to plaintext. The full options surface (transport injection, metrics sink, keep-alive,
    * reconnect, frame/buffer/field caps, handshake and connect timeouts) is documented on {@link EspHomeClientOptions}; consult that type rather than this docstring for
@@ -923,7 +923,6 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
    * {@includeCode ./examples/showcase.ts#manual-construction}
    *
    * @param options - Configuration options. See {@link EspHomeClientOptions} for the full surface.
-   *
    */
   constructor(options: EspHomeClientOptions<Extras>) {
 
@@ -1320,9 +1319,10 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
           } catch(err) {
 
             // We fall back to plaintext ONLY on the genuine no-encryption signal: the peer demonstrably does not speak the encrypted protocol because it responded in
-            // plaintext (PEER_PLAINTEXT_DURING_NOISE) or closed during the noise exchange (PEER_CLOSED_NOISE). Both are carried by {@link PeerClosedDuringNoiseError}, so
-            // the single instanceof check covers exactly those two wire-level triggers with no code keying. Everything else - a bad key (EncryptionKeyInvalidError), a
-            // garbled/truncated reply, a server-name mismatch, AND a noise timeout/abort - is NOT evidence the device wants plaintext, so it fails closed and re-throws.
+            // plaintext (PEER_PLAINTEXT_DURING_NOISE) or ended the connection during the noise exchange (PEER_CLOSED_NOISE). Both are carried by
+            // {@link PeerClosedDuringNoiseError}, so the single instanceof check covers exactly those two wire-level triggers with no code keying. Everything else - a
+            // bad key (EncryptionKeyInvalidError), a garbled/truncated reply, a server-name mismatch, AND a noise timeout/abort - is NOT evidence the device wants
+            // plaintext, so it fails closed and re-throws.
             if(!(err instanceof PeerClosedDuringNoiseError)) {
 
               throw err;
