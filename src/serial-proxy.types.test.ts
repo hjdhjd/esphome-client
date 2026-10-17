@@ -45,8 +45,9 @@ describe("SerialProxyApi - public-surface narrowing", () => {
     const client = new EspHomeClient({ host: "localhost" });
     const result: Promise<number> = client.serial.getModemPins(0, { timeoutMs: 1 });
 
-    // Catch the eventual rejection so the unhandled-rejection guard does not fire; type assertion above is the contract under test.
-    result.catch((): void => { /* expected timeout */ });
+    // Catch the rejection so the unhandled-rejection guard does not fire; type assertion above is the contract under test. A client that never connected refuses
+    // the call with NotConnectedError.
+    result.catch((): void => { /* expected not-connected rejection */ });
 
     client.disconnect();
   });
@@ -56,7 +57,7 @@ describe("SerialProxyApi - public-surface narrowing", () => {
     const client = new EspHomeClient({ host: "localhost" });
     const result: Promise<SerialProxyFlushResult> = client.serial.flush(0, { timeoutMs: 1 });
 
-    result.catch((): void => { /* expected timeout */ });
+    result.catch((): void => { /* expected not-connected rejection */ });
 
     client.disconnect();
   });

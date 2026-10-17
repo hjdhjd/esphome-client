@@ -95,14 +95,14 @@ export const STATE_MESSAGE_TYPES: ReadonlySet<number> = new Set<number>([
 export interface RunPhaseHost {
 
   /**
-   * Acknowledge an inbound `DISCONNECT_REQUEST` from the device. The host sends `DISCONNECT_RESPONSE` and runs `disconnectInternal("device disconnected", undefined)`
-   * to fan out the disconnect event and tear down. Bundles the two coordination steps into one method so the handler stays a one-line delegate.
+   * Acknowledge an inbound `DISCONNECT_REQUEST` from the device. The host sends `DISCONNECT_RESPONSE` and runs its disconnect path with the legacy reason
+   * "device disconnected" to fan out the disconnect event and tear down. Bundles the coordination steps into one method so the handler stays a one-line delegate.
    */
   acknowledgeDisconnectRequest(): void;
 
   /**
    * Acknowledge an inbound `DISCONNECT_RESPONSE` from the device. The host resolves any pending graceful-disconnect awaiter (set by
-   * {@link EspHomeClient.disconnectAsync}); when no awaiter is pending the host falls back to `disconnectInternal(undefined, undefined)` so a stray
+   * {@link EspHomeClient.disconnectAsync}); when no awaiter is pending the host falls back to its disconnect path with no legacy reason, so a stray
    * `DISCONNECT_RESPONSE` still tears down the connection cleanly.
    */
   acknowledgeDisconnectResponse(): void;
@@ -446,7 +446,7 @@ export function handleDisconnectRequest(host: RunPhaseHost): void {
 
 /**
  * Handle inbound `DISCONNECT_RESPONSE` from the device. Delegates to {@link RunPhaseHost.acknowledgeDisconnectResponse}, which resolves any pending graceful-disconnect
- * awaiter set by {@link EspHomeClient.disconnectAsync} and falls back to `disconnectInternal(undefined, undefined)` when no awaiter is pending - a
+ * awaiter set by {@link EspHomeClient.disconnectAsync} and falls back to the host's disconnect path with no legacy reason when no awaiter is pending - a
  * stray response after the graceful timeout already fired still tears the connection down cleanly.
  *
  * @param host - The run-phase host interface.

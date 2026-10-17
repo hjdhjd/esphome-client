@@ -5,8 +5,8 @@
 import type { ApiMajorRange, ClientApiVersion } from "./handshake.ts";
 import type { ClientMetrics, EspHomeLogging, NoiseServerHello, PskResolver } from "../types.ts";
 import {
-  EncryptionKeyInvalidError, EncryptionKeyMissingError, EncryptionRequiredError, NegotiationFailedError,
-  NoiseHandshakeError, NoiseHandshakeTimeoutError, PermanentError, PlaintextHandshakeError, ProtocolError
+  EncryptionKeyInvalidError, EncryptionKeyMissingError, EncryptionRequiredError, NegotiationFailedError, NoiseHandshakeError, PermanentError, PlaintextHandshakeError,
+  ProtocolError
 } from "../errors.ts";
 import { MessageType, WireType } from "../protocol/index.ts";
 import { applyHelloResponse, authenticateIfNeeded, parseServerHello, performDiscovery, performNoiseHandshake, performPlaintextHandshake } from "./handshake.ts";
@@ -534,15 +534,15 @@ describe("performNoiseHandshake - readMessage failure re-tagging", () => {
 
 describe("performNoiseHandshake - abort handling", () => {
 
-  test("translates AbortSignal.timeout into NoiseHandshakeTimeoutError", async () => {
+  test("rethrows the timeout signal's own TimeoutError unchanged", async () => {
 
+    // The server hello never arrives, so the handshake parks until the signal's timeout fires; the rejection must be that signal's reason itself, not a relabelled
+    // library error.
     const transport = new MockTransport();
-    const ac = new AbortController();
-    const promise = startNoise({ signal: ac.signal, transport });
+    const signal = AbortSignal.timeout(10);
+    const promise = startNoise({ signal, transport });
 
-    setImmediate(() => ac.abort());
-
-    await assert.rejects(promise, { code: "HANDSHAKE_TIMEOUT", constructor: NoiseHandshakeTimeoutError });
+    await assert.rejects(promise, (err: unknown): boolean => err === signal.reason);
   });
 });
 

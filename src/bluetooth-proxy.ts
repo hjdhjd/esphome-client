@@ -7,8 +7,8 @@
  * Bluetooth-proxy sub-API.
  *
  * @remarks Lazy-instantiated single-instance namespace exposed via `client.bluetooth`. Composes with the host via the narrow {@link BluetoothProxyHost} interface -
- * no reach into host private fields, only the bus, the logger, a synchronous frame-send hook, and an accessor for the latest {@link DeviceInfo} (to surface
- * the BLE-proxy capability flags advertised by the device).
+ * no reach into host private fields, only the bus, the logger, a synchronous frame-send hook, the connection scope each GATT request reads before it sends, and an
+ * accessor for the latest {@link DeviceInfo} (to surface the BLE-proxy capability flags advertised by the device).
  *
  * Two related surfaces live in this module:
  *
@@ -34,10 +34,12 @@ import type { FieldValue, ProtoField } from "./protocol/index.ts";
 import {
   MessageType, WireType, decodeProtobuf, encodeProtoFields, extractNumberField, readLengthDelimited, readVarint, readVarintBigInt, zigzagDecode
 } from "./protocol/index.ts";
+import { composeRequestSignal, requireConnection } from "./connection-scope.ts";
 import { BluetoothDeviceRequestType } from "./api-constants.ts";
 import { Buffer } from "node:buffer";
 import type { ClientEventsMap } from "./esphome-client.ts";
 import { ConnectionError } from "./errors.ts";
+import type { ConnectionScope } from "./connection-scope.ts";
 import { Correlator } from "./correlator.ts";
 import type { SubscriptionLifecycle } from "./reissuable-subscription.ts";
 
@@ -223,15 +225,18 @@ export interface ConnectionParams {
 }
 
 /**
- * Narrow interface the host implements for the Bluetooth-proxy sub-API. Mirrors {@link VoiceAssistantHost} and
- * {@link SerialProxyHost} in shape: a bus, a logger, a frame-send hook, plus a read-through accessor for the latest decoded {@link
- * DeviceInfo} so the {@link BluetoothProxyApi.available} getter can consult the BLE-proxy feature flags without reaching into host private fields.
+ * Narrow interface the host implements for the Bluetooth-proxy sub-API. Mirrors {@link SerialProxyHost} in shape: a bus, a logger, a frame-send hook, and the
+ * connection scope, plus a read-through accessor for the latest decoded {@link DeviceInfo} so the {@link BluetoothProxyApi.available} getter can consult the
+ * BLE-proxy feature flags without reaching into host private fields.
  *
  * @internal
  */
 export interface BluetoothProxyHost {
 
   readonly bus: EventBus<ClientEventsMap>;
+
+  /** The connection a request issued at this moment would travel on, as {@link ConnectionScope} documents. */
+  connectionScope(): ConnectionScope;
 
   /**
    * Read-through accessor for the latest decoded device-info. Used by {@link BluetoothProxyApi.available} to gate consumer code on `bluetoothProxyFeatureFlags`.
@@ -393,7 +398,8 @@ export class BluetoothProxyApi implements SubscriptionLifecycle {
   private readonly connectionsFreeSubscription: ReissuableSubscription<number, boolean, boolean>;
 
   /**
-   * Constructs the sub-API. The host argument carries the bus, logger, send hook, and device-info accessor; the sub-API does not store or read other host state.
+   * Constructs the sub-API. The host argument carries the bus, logger, send hook, connection scope, and device-info accessor; the sub-API does not store or read other
+   * host state.
    *
    * @param host - The host interface.
    * @internal
@@ -475,17 +481,17 @@ export class BluetoothProxyApi implements SubscriptionLifecycle {
   }
 
   /**
-   * Reset ONLY connection-scoped state. Called by the host at disconnect and again at connect-top. Rejects every pending GATT Correlator with an `AbortError`
-   * (in-flight request/response state cannot outlive the connection it was issued on), clears the connection-scoped caches and accumulators (scanner-state,
-   * connections-free, connection-state, inflight-services), and clears each subscription's connection-scoped wire cache (the device starts every fresh connection with no
-   * subscription). The consumer
-   * subscriber ledgers are PRESERVED: iterators alive across the reconnect cycle stay live, and the host's {@link reissueOnReconnect} call after the new connection is up
-   * re-issues SUBSCRIBE (advertisement, connections-free) and NOTIFY(enable=1) (notify) for the surviving consumers.
+   * Reset ONLY connection-scoped state. Called by the host at disconnect and again at connect-top. Clears the connection-scoped caches and accumulators (scanner-state,
+   * connections-free, connection-state, inflight-services) and each subscription's connection-scoped wire cache (the device starts every fresh connection with no
+   * subscription), and ends no wait. The consumer subscriber ledgers are PRESERVED: iterators alive across the reconnect cycle stay live, and the host's
+   * {@link reissueOnReconnect} call after the new connection is up re-issues SUBSCRIBE (advertisement, connections-free) and NOTIFY(enable=1) (notify) for the surviving
+   * consumers.
    *
    * Notes for callers:
    *
-   * - In-flight `connect`, `disconnect`, `pair`, `unpair`, `clearCache`, `read`, `write`, `setNotify`, `getServices`, `setConnectionParams` awaits all reject with
-   *   `DOMException("AbortError")` so callers see a uniform abort signal regardless of which Correlator was holding them.
+   * - Every pending GATT wait (`connect`, `disconnect`, `pair`, `unpair`, `clearCache`, `getServices`, the reads, the writes that await a response, `setNotify`,
+   *   `setConnectionParams`) composes the connection it was issued on, so the teardown that ends that connection rejects each one with its
+   *   {@link ConnectionLostError} before this reset runs, whichever Correlator was holding it.
    * - `connectionStateCache` is cleared so {@link isConnected} reports `false` for every previously-connected address. Consumers that want to reconnect must
    *   call {@link connect} again; we do NOT auto-reconnect peripherals across a host-level reconnect because the consumer's intent for each address is application-level
    *   policy, not library-level policy.
@@ -493,20 +499,6 @@ export class BluetoothProxyApi implements SubscriptionLifecycle {
   public clearConnectionState(): void {
 
     this.cachedScannerState = null;
-
-    const abortReason = new DOMException("Bluetooth-proxy sub-API was reset; pending GATT awaits are aborted.", "AbortError");
-
-    this.readCorrelator.rejectAll(abortReason);
-    this.writeCorrelator.rejectAll(abortReason);
-    this.notifySetupCorrelator.rejectAll(abortReason);
-    this.connectCorrelator.rejectAll(abortReason);
-    this.disconnectCorrelator.rejectAll(abortReason);
-    this.pairCorrelator.rejectAll(abortReason);
-    this.unpairCorrelator.rejectAll(abortReason);
-    this.clearCacheCorrelator.rejectAll(abortReason);
-    this.setConnectionParamsCorrelator.rejectAll(abortReason);
-    this.serviceDiscoveryCorrelator.rejectAll(abortReason);
-
     this.connectionStateCache.clear();
     this.inflightServices.clear();
     this.cachedConnectionsFree = null;
@@ -682,10 +674,17 @@ export class BluetoothProxyApi implements SubscriptionLifecycle {
    *
    * @throws {@link ConnectionError} with code `"GATT_CONNECT_FAILED"` when the device reports `connected=false` with a nonzero `error` field.
    * @throws {@link ConnectionError} with code `"GATT_CONNECT_IN_FLIGHT"` when another connect for the same address is already pending.
-   *
+   * @throws {@link NotConnectedError} with code `"CONNECT_IN_PROGRESS"` when the call is issued while a manual connect has not yet settled or the automatic reconnect is
+   * active, and with code `"NOT_CONNECTED"` when it is issued with no connection otherwise. Nothing is sent.
+   * @throws {@link ConnectionLostError} when the connection the request was issued on is torn down before the device replies.
+   * @throws The signal's reason, as it is, when `options.signal` aborts, including when it was already aborted at call time, in which case nothing is sent, and the
+   * timeout's `TimeoutError` when the device does not reply within `options.timeoutMs`.
    */
   public async connect(address: bigint, options?: { addressType?: number; signal?: AbortSignal; timeoutMs?: number; useCache?: boolean }): Promise<ConnectionStateData> {
 
+    options?.signal?.throwIfAborted();
+
+    const connection = requireConnection(this.host.connectionScope(), "bluetooth.connect()");
     const key = address.toString();
 
     if(this.connectCorrelator.pending(key)) {
@@ -697,9 +696,11 @@ export class BluetoothProxyApi implements SubscriptionLifecycle {
       BluetoothDeviceRequestType.CONNECT_V3_WITH_CACHE :
       BluetoothDeviceRequestType.CONNECT_V3_WITHOUT_CACHE;
 
+    using request = composeRequestSignal(connection, { signal: options?.signal });
+
     this.sendDeviceRequest(address, requestType, options?.addressType);
 
-    return this.connectCorrelator.await(key, this.awaitOptions(options?.signal, options?.timeoutMs ?? DEFAULT_LIFECYCLE_TIMEOUT_MS));
+    return await this.connectCorrelator.await(key, this.awaitOptions(request.signal, options?.timeoutMs ?? DEFAULT_LIFECYCLE_TIMEOUT_MS));
   }
 
   /**
@@ -713,10 +714,17 @@ export class BluetoothProxyApi implements SubscriptionLifecycle {
    * @param options - Optional cancellation signal and timeout.
    *
    * @throws {@link ConnectionError} with code `"GATT_DISCONNECT_IN_FLIGHT"` when another disconnect for the same address is already pending.
-   *
+   * @throws {@link NotConnectedError} with code `"CONNECT_IN_PROGRESS"` when the call is issued while a manual connect has not yet settled or the automatic reconnect is
+   * active, and with code `"NOT_CONNECTED"` when it is issued with no connection otherwise. Nothing is sent.
+   * @throws {@link ConnectionLostError} when the connection the request was issued on is torn down before the device replies.
+   * @throws The signal's reason, as it is, when `options.signal` aborts, including when it was already aborted at call time, in which case nothing is sent, and the
+   * timeout's `TimeoutError` when the device does not reply within `options.timeoutMs`.
    */
   public async disconnect(address: bigint, options?: { signal?: AbortSignal; timeoutMs?: number }): Promise<void> {
 
+    options?.signal?.throwIfAborted();
+
+    const connection = requireConnection(this.host.connectionScope(), "bluetooth.disconnect()");
     const key = address.toString();
 
     if(this.disconnectCorrelator.pending(key)) {
@@ -724,9 +732,11 @@ export class BluetoothProxyApi implements SubscriptionLifecycle {
       throw new ConnectionError("disconnect is already in flight for address " + key + ".", "GATT_DISCONNECT_IN_FLIGHT");
     }
 
+    using request = composeRequestSignal(connection, { signal: options?.signal });
+
     this.sendDeviceRequest(address, BluetoothDeviceRequestType.DISCONNECT);
 
-    return this.disconnectCorrelator.await(key, this.awaitOptions(options?.signal, options?.timeoutMs ?? DEFAULT_LIFECYCLE_TIMEOUT_MS));
+    await this.disconnectCorrelator.await(key, this.awaitOptions(request.signal, options?.timeoutMs ?? DEFAULT_LIFECYCLE_TIMEOUT_MS));
   }
 
   /**
@@ -741,10 +751,17 @@ export class BluetoothProxyApi implements SubscriptionLifecycle {
    *
    * @throws {@link ConnectionError} with code `"GATT_PAIR_FAILED"` when the device reports `paired=false` or a nonzero `error` field.
    * @throws {@link ConnectionError} with code `"GATT_PAIR_IN_FLIGHT"` when another pair for the same address is already pending.
-   *
+   * @throws {@link NotConnectedError} with code `"CONNECT_IN_PROGRESS"` when the call is issued while a manual connect has not yet settled or the automatic reconnect is
+   * active, and with code `"NOT_CONNECTED"` when it is issued with no connection otherwise. Nothing is sent.
+   * @throws {@link ConnectionLostError} when the connection the request was issued on is torn down before the device replies.
+   * @throws The signal's reason, as it is, when `options.signal` aborts, including when it was already aborted at call time, in which case nothing is sent, and the
+   * timeout's `TimeoutError` when the device does not reply within `options.timeoutMs`.
    */
   public async pair(address: bigint, options?: { signal?: AbortSignal; timeoutMs?: number }): Promise<void> {
 
+    options?.signal?.throwIfAborted();
+
+    const connection = requireConnection(this.host.connectionScope(), "bluetooth.pair()");
     const key = address.toString();
 
     if(this.pairCorrelator.pending(key)) {
@@ -752,9 +769,11 @@ export class BluetoothProxyApi implements SubscriptionLifecycle {
       throw new ConnectionError("pair is already in flight for address " + key + ".", "GATT_PAIR_IN_FLIGHT");
     }
 
+    using request = composeRequestSignal(connection, { signal: options?.signal });
+
     this.sendDeviceRequest(address, BluetoothDeviceRequestType.PAIR);
 
-    return this.pairCorrelator.await(key, this.awaitOptions(options?.signal, options?.timeoutMs ?? DEFAULT_LIFECYCLE_TIMEOUT_MS));
+    await this.pairCorrelator.await(key, this.awaitOptions(request.signal, options?.timeoutMs ?? DEFAULT_LIFECYCLE_TIMEOUT_MS));
   }
 
   /**
@@ -769,10 +788,17 @@ export class BluetoothProxyApi implements SubscriptionLifecycle {
    *
    * @throws {@link ConnectionError} with code `"GATT_UNPAIR_FAILED"` when the device reports `success=false` or a nonzero `error` field.
    * @throws {@link ConnectionError} with code `"GATT_UNPAIR_IN_FLIGHT"` when another unpair for the same address is already pending.
-   *
+   * @throws {@link NotConnectedError} with code `"CONNECT_IN_PROGRESS"` when the call is issued while a manual connect has not yet settled or the automatic reconnect is
+   * active, and with code `"NOT_CONNECTED"` when it is issued with no connection otherwise. Nothing is sent.
+   * @throws {@link ConnectionLostError} when the connection the request was issued on is torn down before the device replies.
+   * @throws The signal's reason, as it is, when `options.signal` aborts, including when it was already aborted at call time, in which case nothing is sent, and the
+   * timeout's `TimeoutError` when the device does not reply within `options.timeoutMs`.
    */
   public async unpair(address: bigint, options?: { signal?: AbortSignal; timeoutMs?: number }): Promise<void> {
 
+    options?.signal?.throwIfAborted();
+
+    const connection = requireConnection(this.host.connectionScope(), "bluetooth.unpair()");
     const key = address.toString();
 
     if(this.unpairCorrelator.pending(key)) {
@@ -780,9 +806,11 @@ export class BluetoothProxyApi implements SubscriptionLifecycle {
       throw new ConnectionError("unpair is already in flight for address " + key + ".", "GATT_UNPAIR_IN_FLIGHT");
     }
 
+    using request = composeRequestSignal(connection, { signal: options?.signal });
+
     this.sendDeviceRequest(address, BluetoothDeviceRequestType.UNPAIR);
 
-    return this.unpairCorrelator.await(key, this.awaitOptions(options?.signal, options?.timeoutMs ?? DEFAULT_LIFECYCLE_TIMEOUT_MS));
+    await this.unpairCorrelator.await(key, this.awaitOptions(request.signal, options?.timeoutMs ?? DEFAULT_LIFECYCLE_TIMEOUT_MS));
   }
 
   /**
@@ -794,9 +822,17 @@ export class BluetoothProxyApi implements SubscriptionLifecycle {
    *
    * @throws {@link ConnectionError} with code `"GATT_CLEAR_CACHE_FAILED"` when the device reports `success=false` or a nonzero `error` field.
    * @throws {@link ConnectionError} with code `"GATT_CLEAR_CACHE_IN_FLIGHT"` when another clearCache for the same address is already pending.
+   * @throws {@link NotConnectedError} with code `"CONNECT_IN_PROGRESS"` when the call is issued while a manual connect has not yet settled or the automatic reconnect is
+   * active, and with code `"NOT_CONNECTED"` when it is issued with no connection otherwise. Nothing is sent.
+   * @throws {@link ConnectionLostError} when the connection the request was issued on is torn down before the device replies.
+   * @throws The signal's reason, as it is, when `options.signal` aborts, including when it was already aborted at call time, in which case nothing is sent, and the
+   * timeout's `TimeoutError` when the device does not reply within `options.timeoutMs`.
    */
   public async clearCache(address: bigint, options?: { signal?: AbortSignal; timeoutMs?: number }): Promise<void> {
 
+    options?.signal?.throwIfAborted();
+
+    const connection = requireConnection(this.host.connectionScope(), "bluetooth.clearCache()");
     const key = address.toString();
 
     if(this.clearCacheCorrelator.pending(key)) {
@@ -804,9 +840,11 @@ export class BluetoothProxyApi implements SubscriptionLifecycle {
       throw new ConnectionError("clearCache is already in flight for address " + key + ".", "GATT_CLEAR_CACHE_IN_FLIGHT");
     }
 
+    using request = composeRequestSignal(connection, { signal: options?.signal });
+
     this.sendDeviceRequest(address, BluetoothDeviceRequestType.CLEAR_CACHE);
 
-    return this.clearCacheCorrelator.await(key, this.awaitOptions(options?.signal, options?.timeoutMs ?? DEFAULT_LIFECYCLE_TIMEOUT_MS));
+    await this.clearCacheCorrelator.await(key, this.awaitOptions(request.signal, options?.timeoutMs ?? DEFAULT_LIFECYCLE_TIMEOUT_MS));
   }
 
   /**
@@ -822,16 +860,25 @@ export class BluetoothProxyApi implements SubscriptionLifecycle {
    * @returns The full service list as an array, preserving wire-order.
    *
    * @throws {@link ConnectionError} with code `"GATT_GET_SERVICES_IN_FLIGHT"` when another getServices for the same address is already pending.
-   *
+   * @throws {@link NotConnectedError} with code `"CONNECT_IN_PROGRESS"` when the call is issued while a manual connect has not yet settled or the automatic reconnect is
+   * active, and with code `"NOT_CONNECTED"` when it is issued with no connection otherwise. Nothing is sent.
+   * @throws {@link ConnectionLostError} when the connection the request was issued on is torn down before the device replies.
+   * @throws The signal's reason, as it is, when `options.signal` aborts, including when it was already aborted at call time, in which case nothing is sent, and the
+   * timeout's `TimeoutError` when the device does not reply within `options.timeoutMs`.
    */
   public async getServices(address: bigint, options?: { signal?: AbortSignal; timeoutMs?: number }): Promise<BluetoothGATTService[]> {
 
+    options?.signal?.throwIfAborted();
+
+    const connection = requireConnection(this.host.connectionScope(), "bluetooth.getServices()");
     const key = address.toString();
 
     if(this.serviceDiscoveryCorrelator.pending(key)) {
 
       throw new ConnectionError("getServices is already in flight for address " + key + ".", "GATT_GET_SERVICES_IN_FLIGHT");
     }
+
+    using request = composeRequestSignal(connection, { signal: options?.signal });
 
     // Seed the accumulator before sending so any inbound 71 frames have a destination. The accumulator's lifetime is bounded by the await's finally block below, which
     // ensures cleanup on every settle path (resolve, reject, abort, timeout).
@@ -843,7 +890,7 @@ export class BluetoothProxyApi implements SubscriptionLifecycle {
 
     try {
 
-      return await this.serviceDiscoveryCorrelator.await(key, this.awaitOptions(options?.signal, options?.timeoutMs ?? DEFAULT_SERVICE_DISCOVERY_TIMEOUT_MS));
+      return await this.serviceDiscoveryCorrelator.await(key, this.awaitOptions(request.signal, options?.timeoutMs ?? DEFAULT_SERVICE_DISCOVERY_TIMEOUT_MS));
 
     } finally {
 
@@ -868,11 +915,15 @@ export class BluetoothProxyApi implements SubscriptionLifecycle {
    *
    * @throws {@link ConnectionError} with code `"GATT_READ_IN_FLIGHT"` when another read for the same (address, handle) is already pending.
    * @throws {@link ConnectionError} with code `"GATT_ERROR"` when the device returns an error for the operation.
-   *
+   * @throws {@link NotConnectedError} with code `"CONNECT_IN_PROGRESS"` when the call is issued while a manual connect has not yet settled or the automatic reconnect is
+   * active, and with code `"NOT_CONNECTED"` when it is issued with no connection otherwise. Nothing is sent.
+   * @throws {@link ConnectionLostError} when the connection the request was issued on is torn down before the device replies.
+   * @throws The signal's reason, as it is, when `options.signal` aborts, including when it was already aborted at call time, in which case nothing is sent, and the
+   * timeout's `TimeoutError` when the device does not reply within `options.timeoutMs`.
    */
   public async readCharacteristic(address: bigint, handle: number, options?: { signal?: AbortSignal; timeoutMs?: number }): Promise<Buffer> {
 
-    return this.readImpl(address, handle, MessageType.BLUETOOTH_GATT_READ_REQUEST, options);
+    return this.readImpl({ address, handle, messageType: MessageType.BLUETOOTH_GATT_READ_REQUEST, options, request: "bluetooth.readCharacteristic()" });
   }
 
   /**
@@ -890,10 +941,18 @@ export class BluetoothProxyApi implements SubscriptionLifecycle {
    *
    * @throws {@link ConnectionError} with code `"GATT_WRITE_IN_FLIGHT"` when `response=true` and another write for the same (address, handle) is already pending.
    * @throws {@link ConnectionError} with code `"GATT_ERROR"` when `response=true` and the device returns an error.
-   *
+   * @throws {@link NotConnectedError} with code `"CONNECT_IN_PROGRESS"` when `response=true` and the call is issued while a manual connect has not yet settled or the
+   * automatic reconnect is active, and with code `"NOT_CONNECTED"` when `response=true` and it is issued with no connection otherwise. Nothing is sent. A write that
+   * awaits no response is never refused for a missing connection.
+   * @throws {@link ConnectionLostError} when `response=true` and the connection the request was issued on is torn down before the device replies.
+   * @throws The signal's reason, as it is, when `options.signal` was already aborted at call time, with or without a response. Nothing is sent.
+   * @throws The signal's reason, as it is, when `response=true` and `options.signal` aborts before the device replies, and the timeout's `TimeoutError` when
+   * `response=true` and the device does not reply within `options.timeoutMs`.
    */
   public async writeCharacteristic(address: bigint, handle: number, data: Buffer,
     options?: { response?: boolean; signal?: AbortSignal; timeoutMs?: number }): Promise<void> {
+
+    options?.signal?.throwIfAborted();
 
     const expectResponse = options?.response ?? false;
     const payload = encodeProtoFields([
@@ -906,12 +965,14 @@ export class BluetoothProxyApi implements SubscriptionLifecycle {
     if(!expectResponse) {
 
       // Fire-and-forget. No Correlator awaiting; no response will come. A stray BluetoothGATTWriteResponse for this (address, handle) is logged at debug by the
-      // dispatcher and otherwise ignored.
+      // dispatcher and otherwise ignored. A send that awaits nothing is never refused for a missing connection - the host drops its frame instead - so only the
+      // awaiting write below is admitted against the connection.
       this.host.send(MessageType.BLUETOOTH_GATT_WRITE_REQUEST, payload);
 
       return;
     }
 
+    const connection = requireConnection(this.host.connectionScope(), "bluetooth.writeCharacteristic()");
     const key = makeGattKey(address, handle);
 
     if(this.writeCorrelator.pending(key)) {
@@ -919,9 +980,11 @@ export class BluetoothProxyApi implements SubscriptionLifecycle {
       throw new ConnectionError("writeCharacteristic is already in flight for (" + address.toString() + ", " + handle.toString() + ").", "GATT_WRITE_IN_FLIGHT");
     }
 
+    using request = composeRequestSignal(connection, { signal: options?.signal });
+
     this.host.send(MessageType.BLUETOOTH_GATT_WRITE_REQUEST, payload);
 
-    return this.writeCorrelator.await(key, this.awaitOptions(options?.signal, options?.timeoutMs ?? DEFAULT_GATT_TIMEOUT_MS));
+    await this.writeCorrelator.await(key, this.awaitOptions(request.signal, options?.timeoutMs ?? DEFAULT_GATT_TIMEOUT_MS));
   }
 
   /**
@@ -939,11 +1002,15 @@ export class BluetoothProxyApi implements SubscriptionLifecycle {
    *
    * @throws {@link ConnectionError} with code `"GATT_READ_IN_FLIGHT"` when another read for the same (address, handle) is already pending.
    * @throws {@link ConnectionError} with code `"GATT_ERROR"` when the device returns an error.
-   *
+   * @throws {@link NotConnectedError} with code `"CONNECT_IN_PROGRESS"` when the call is issued while a manual connect has not yet settled or the automatic reconnect is
+   * active, and with code `"NOT_CONNECTED"` when it is issued with no connection otherwise. Nothing is sent.
+   * @throws {@link ConnectionLostError} when the connection the request was issued on is torn down before the device replies.
+   * @throws The signal's reason, as it is, when `options.signal` aborts, including when it was already aborted at call time, in which case nothing is sent, and the
+   * timeout's `TimeoutError` when the device does not reply within `options.timeoutMs`.
    */
   public async readDescriptor(address: bigint, handle: number, options?: { signal?: AbortSignal; timeoutMs?: number }): Promise<Buffer> {
 
-    return this.readImpl(address, handle, MessageType.BLUETOOTH_GATT_READ_DESCRIPTOR_REQUEST, options);
+    return this.readImpl({ address, handle, messageType: MessageType.BLUETOOTH_GATT_READ_DESCRIPTOR_REQUEST, options, request: "bluetooth.readDescriptor()" });
   }
 
   /**
@@ -960,10 +1027,17 @@ export class BluetoothProxyApi implements SubscriptionLifecycle {
    *
    * @throws {@link ConnectionError} with code `"GATT_WRITE_IN_FLIGHT"` when another write for the same (address, handle) is already pending.
    * @throws {@link ConnectionError} with code `"GATT_ERROR"` when the device returns an error.
-   *
+   * @throws {@link NotConnectedError} with code `"CONNECT_IN_PROGRESS"` when the call is issued while a manual connect has not yet settled or the automatic reconnect is
+   * active, and with code `"NOT_CONNECTED"` when it is issued with no connection otherwise. Nothing is sent.
+   * @throws {@link ConnectionLostError} when the connection the request was issued on is torn down before the device replies.
+   * @throws The signal's reason, as it is, when `options.signal` aborts, including when it was already aborted at call time, in which case nothing is sent, and the
+   * timeout's `TimeoutError` when the device does not reply within `options.timeoutMs`.
    */
   public async writeDescriptor(address: bigint, handle: number, data: Buffer, options?: { signal?: AbortSignal; timeoutMs?: number }): Promise<void> {
 
+    options?.signal?.throwIfAborted();
+
+    const connection = requireConnection(this.host.connectionScope(), "bluetooth.writeDescriptor()");
     const key = makeGattKey(address, handle);
 
     if(this.writeCorrelator.pending(key)) {
@@ -971,13 +1045,15 @@ export class BluetoothProxyApi implements SubscriptionLifecycle {
       throw new ConnectionError("writeDescriptor is already in flight for (" + address.toString() + ", " + handle.toString() + ").", "GATT_WRITE_IN_FLIGHT");
     }
 
+    using request = composeRequestSignal(connection, { signal: options?.signal });
+
     this.host.send(MessageType.BLUETOOTH_GATT_WRITE_DESCRIPTOR_REQUEST, encodeProtoFields([
       { fieldNumber: 1, value: address, wireType: WireType.VARINT },
       { fieldNumber: 2, value: handle, wireType: WireType.VARINT },
       { fieldNumber: 3, value: data, wireType: WireType.LENGTH_DELIMITED }
     ]));
 
-    return this.writeCorrelator.await(key, this.awaitOptions(options?.signal, options?.timeoutMs ?? DEFAULT_GATT_TIMEOUT_MS));
+    await this.writeCorrelator.await(key, this.awaitOptions(request.signal, options?.timeoutMs ?? DEFAULT_GATT_TIMEOUT_MS));
   }
 
   /**
@@ -995,10 +1071,17 @@ export class BluetoothProxyApi implements SubscriptionLifecycle {
    *
    * @throws {@link ConnectionError} with code `"GATT_NOTIFY_SETUP_IN_FLIGHT"` when another setNotify for the same (address, handle) is already pending.
    * @throws {@link ConnectionError} with code `"GATT_ERROR"` when the device returns an error.
-   *
+   * @throws {@link NotConnectedError} with code `"CONNECT_IN_PROGRESS"` when the call is issued while a manual connect has not yet settled or the automatic reconnect is
+   * active, and with code `"NOT_CONNECTED"` when it is issued with no connection otherwise. Nothing is sent.
+   * @throws {@link ConnectionLostError} when the connection the request was issued on is torn down before the device replies.
+   * @throws The signal's reason, as it is, when `options.signal` aborts, including when it was already aborted at call time, in which case nothing is sent, and the
+   * timeout's `TimeoutError` when the device does not reply within `options.timeoutMs`.
    */
   public async setNotify(address: bigint, handle: number, enable: boolean, options?: { signal?: AbortSignal; timeoutMs?: number }): Promise<void> {
 
+    options?.signal?.throwIfAborted();
+
+    const connection = requireConnection(this.host.connectionScope(), "bluetooth.setNotify()");
     const key = makeGattKey(address, handle);
 
     if(this.notifySetupCorrelator.pending(key)) {
@@ -1006,13 +1089,15 @@ export class BluetoothProxyApi implements SubscriptionLifecycle {
       throw new ConnectionError("setNotify is already in flight for (" + address.toString() + ", " + handle.toString() + ").", "GATT_NOTIFY_SETUP_IN_FLIGHT");
     }
 
+    using request = composeRequestSignal(connection, { signal: options?.signal });
+
     this.host.send(MessageType.BLUETOOTH_GATT_NOTIFY_REQUEST, encodeProtoFields([
       { fieldNumber: 1, value: address, wireType: WireType.VARINT },
       { fieldNumber: 2, value: handle, wireType: WireType.VARINT },
       { fieldNumber: 3, value: enable ? 1 : 0, wireType: WireType.VARINT }
     ]));
 
-    return this.notifySetupCorrelator.await(key, this.awaitOptions(options?.signal, options?.timeoutMs ?? DEFAULT_GATT_TIMEOUT_MS));
+    await this.notifySetupCorrelator.await(key, this.awaitOptions(request.signal, options?.timeoutMs ?? DEFAULT_GATT_TIMEOUT_MS));
   }
 
   /**
@@ -1071,16 +1156,25 @@ export class BluetoothProxyApi implements SubscriptionLifecycle {
    *
    * @throws {@link ConnectionError} with code `"GATT_SET_CONNECTION_PARAMS_FAILED"` when the device returns a nonzero `error` field.
    * @throws {@link ConnectionError} with code `"GATT_SET_CONNECTION_PARAMS_IN_FLIGHT"` when another setConnectionParams for the same address is already pending.
-   *
+   * @throws {@link NotConnectedError} with code `"CONNECT_IN_PROGRESS"` when the call is issued while a manual connect has not yet settled or the automatic reconnect is
+   * active, and with code `"NOT_CONNECTED"` when it is issued with no connection otherwise. Nothing is sent.
+   * @throws {@link ConnectionLostError} when the connection the request was issued on is torn down before the device replies.
+   * @throws The signal's reason, as it is, when `options.signal` aborts, including when it was already aborted at call time, in which case nothing is sent, and the
+   * timeout's `TimeoutError` when the device does not reply within `options.timeoutMs`.
    */
   public async setConnectionParams(address: bigint, params: ConnectionParams, options?: { signal?: AbortSignal; timeoutMs?: number }): Promise<void> {
 
+    options?.signal?.throwIfAborted();
+
+    const connection = requireConnection(this.host.connectionScope(), "bluetooth.setConnectionParams()");
     const key = address.toString();
 
     if(this.setConnectionParamsCorrelator.pending(key)) {
 
       throw new ConnectionError("setConnectionParams is already in flight for address " + key + ".", "GATT_SET_CONNECTION_PARAMS_IN_FLIGHT");
     }
+
+    using request = composeRequestSignal(connection, { signal: options?.signal });
 
     this.host.send(MessageType.BLUETOOTH_SET_CONNECTION_PARAMS_REQUEST, encodeProtoFields([
       { fieldNumber: 1, value: address, wireType: WireType.VARINT },
@@ -1090,7 +1184,7 @@ export class BluetoothProxyApi implements SubscriptionLifecycle {
       { fieldNumber: 5, value: params.timeout, wireType: WireType.VARINT }
     ]));
 
-    return this.setConnectionParamsCorrelator.await(key, this.awaitOptions(options?.signal, options?.timeoutMs ?? DEFAULT_GATT_TIMEOUT_MS));
+    await this.setConnectionParamsCorrelator.await(key, this.awaitOptions(request.signal, options?.timeoutMs ?? DEFAULT_GATT_TIMEOUT_MS));
   }
 
   /**
@@ -1747,32 +1841,51 @@ export class BluetoothProxyApi implements SubscriptionLifecycle {
   }
 
   /**
-   * Shared body for {@link readCharacteristic} and {@link readDescriptor}. Both send `(address, handle)` and await `BluetoothGATTReadResponse`; the only difference is
-   * the outbound message type.
+   * Shared body for {@link readCharacteristic} and {@link readDescriptor}. Each sends `(address, handle)` and awaits `BluetoothGATTReadResponse`; the reads differ
+   * only in the outbound message type and in the call path a refused read names.
+   *
+   * @param read - The read to issue.
+   * @param read.address - Device BLE address.
+   * @param read.handle - Characteristic or descriptor handle.
+   * @param read.messageType - The outbound request's message type.
+   * @param read.options - The public read's cancellation signal and timeout.
+   * @param read.request - The public read's call path, which a not-connected refusal names.
    */
-  private async readImpl(address: bigint, handle: number, messageType: number, options: { signal?: AbortSignal; timeoutMs?: number } | undefined): Promise<Buffer> {
+  private async readImpl(read: {
+    readonly address: bigint;
+    readonly handle: number;
+    readonly messageType: number;
+    readonly options: { signal?: AbortSignal; timeoutMs?: number } | undefined;
+    readonly request: string;
+  }): Promise<Buffer> {
 
-    const key = makeGattKey(address, handle);
+    read.options?.signal?.throwIfAborted();
+
+    const connection = requireConnection(this.host.connectionScope(), read.request);
+    const key = makeGattKey(read.address, read.handle);
 
     if(this.readCorrelator.pending(key)) {
 
-      throw new ConnectionError("read is already in flight for (" + address.toString() + ", " + handle.toString() + ").", "GATT_READ_IN_FLIGHT");
+      throw new ConnectionError("read is already in flight for (" + read.address.toString() + ", " + read.handle.toString() + ").", "GATT_READ_IN_FLIGHT");
     }
 
-    this.host.send(messageType, encodeProtoFields([
-      { fieldNumber: 1, value: address, wireType: WireType.VARINT },
-      { fieldNumber: 2, value: handle, wireType: WireType.VARINT }
+    using request = composeRequestSignal(connection, { signal: read.options?.signal });
+
+    this.host.send(read.messageType, encodeProtoFields([
+      { fieldNumber: 1, value: read.address, wireType: WireType.VARINT },
+      { fieldNumber: 2, value: read.handle, wireType: WireType.VARINT }
     ]));
 
-    return this.readCorrelator.await(key, this.awaitOptions(options?.signal, options?.timeoutMs ?? DEFAULT_GATT_TIMEOUT_MS));
+    return await this.readCorrelator.await(key, this.awaitOptions(request.signal, read.options?.timeoutMs ?? DEFAULT_GATT_TIMEOUT_MS));
   }
 
   /**
-   * Build the options object passed to `Correlator.await`. Centralised so the exactOptionalPropertyTypes spread idiom is used identically across every call site.
+   * Build the options every GATT wait hands `Correlator.await`: the request's composed signal, which follows the caller's signal and the connection, beside the call's
+   * timeout. The timeout stays on the correlator, whose own timeout leg rejects with the timeout signal's `TimeoutError`, so the composite carries no second timer.
    */
-  private awaitOptions(signal: AbortSignal | undefined, timeoutMs: number): { signal?: AbortSignal; timeoutMs: number } {
+  private awaitOptions(signal: AbortSignal, timeoutMs: number): { signal: AbortSignal; timeoutMs: number } {
 
-    return { ...((signal !== undefined) && { signal }), timeoutMs };
+    return { signal, timeoutMs };
   }
 
   /**

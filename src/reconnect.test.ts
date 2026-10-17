@@ -7,6 +7,7 @@ import { HealthState, disconnectedHealth } from "./health.ts";
 import { backoffDelay, defaultShouldRetry, nextBackoffDelay, resolveReconnectConfig, withReconnect } from "./reconnect.ts";
 import { describe, test } from "node:test";
 import type { ConnectionHealth } from "./health.ts";
+import { EventBus } from "./event-bus.ts";
 import type { LifecycleEvent } from "./lifecycle.ts";
 import type { Nullable } from "./types.ts";
 import type { WithReconnectClient } from "./reconnect.ts";
@@ -307,23 +308,26 @@ describe("withReconnect", () => {
     assert.equal(abortFired, true, "the body's signal must abort on disconnect");
   });
 
-  test("returns when the outer signal aborts", async () => {
+  // The client's lifecycle view is a real EventBus stream, the one the host hands out, so the outer signal ends it the way it ends a consumer's stream.
+  test("rejects with the outer signal's reason when that signal aborts", async () => {
 
-    const fake = makeFakeClient();
+    const bus = new EventBus<{ lifecycle: LifecycleEvent }>();
+    const client: WithReconnectClient = {
+
+      health: (): ConnectionHealth => disconnectedHealth(),
+      lifecycle: (options?: { signal?: AbortSignal }): AsyncIterable<LifecycleEvent> => bus.stream("lifecycle", options)
+    };
     const controller = new AbortController();
     let bodyCalled = 0;
 
-    const helperPromise = withReconnect(fake, () => { bodyCalled++; }, { signal: controller.signal });
+    const helperPromise = withReconnect(client, () => { bodyCalled++; }, { signal: controller.signal });
 
-    fake.push({ encrypted: false, kind: "connect" });
+    bus.emit("lifecycle", { encrypted: false, kind: "connect" });
     await new Promise((resolve) => setImmediate(resolve));
 
     controller.abort();
 
-    // The fake's lifecycle iterator ignores the abort signal, so `fake.end()` is what terminates the loop and lets the helper observe the loop end after the outer abort.
-    fake.end();
-    await helperPromise;
-
+    await assert.rejects(helperPromise, (err: unknown): boolean => err === controller.signal.reason);
     assert.equal(bodyCalled, 1, "body ran once before the outer abort fired");
   });
 

@@ -76,8 +76,8 @@ export class ConnectionError extends EspHomeError {}
  * Failure during the protocol handshake (plaintext or noise).
  *
  * @remarks Narrowing parent. The library does not throw this class directly - every handshake failure surfaces a more specific subclass
- * ({@link NoiseHandshakeError}, {@link NoiseHandshakeTimeoutError}, {@link PeerClosedDuringNoiseError}, {@link PlaintextHandshakeError}). Consumers can
- * `instanceof HandshakeError` to catch the whole family.
+ * ({@link NoiseHandshakeError}, {@link PeerClosedDuringNoiseError}, {@link PlaintextHandshakeError}). Consumers can `instanceof HandshakeError` to catch the whole
+ * family.
  */
 export class HandshakeError extends ConnectionError {}
 
@@ -97,7 +97,6 @@ export class HandshakeError extends ConnectionError {}
  * - `HANDSHAKE_REJECTED` - The device rejected the handshake in-band for a reason other than a wrong key, such as a malformed or unexpected handshake frame
  *   (`lifecycle/handshake.ts`). The message carries the device's reason text. Not a key problem, so it stays transient; a wrong key is reported instead as a permanent
  *   {@link EncryptionKeyInvalidError}.
- * - `HANDSHAKE_TIMEOUT` - The handshake-phase timeout elapsed (`lifecycle/handshake.ts`). Carried by {@link NoiseHandshakeTimeoutError}.
  * - `INVALID_PSK_LENGTH` - The PSK, or a cipher key installed through `CipherState.InitializeKey`, is not exactly 32 bytes (`crypto-noise.ts`). Consumer-supplied
  *   configuration error; the connect-flow handshake re-tags the PSK case into a permanent {@link EncryptionKeyInvalidError}.
  * - `INVALID_REMOTE_KEY` - The remote ephemeral public key was malformed or a low-order point, so X25519 key agreement failed (`crypto-noise.ts`). The `diffieHellman`
@@ -115,9 +114,8 @@ export class HandshakeError extends ConnectionError {}
  * - `UNSUPPORTED_TOKEN` - The device's noise-handshake server-hello frame selected a protocol byte other than 1 (`lifecycle/handshake.ts`). Indicates the peer
  *   negotiated a noise protocol variant this client does not support.
  */
-export type NoiseHandshakeErrorCode = "AUTH_FAILED" | "CT_TOO_SHORT" | "HANDSHAKE_COMPLETE" | "HANDSHAKE_REJECTED" | "HANDSHAKE_TIMEOUT" | "INVALID_PSK_LENGTH" |
-  "INVALID_REMOTE_KEY" | "MISSING_KEYS" | "MSG_TOO_LONG" | "NONCE_EXHAUSTED" | "NOT_INITIALIZED" | "PEER_CLOSED_NOISE" | "PEER_PLAINTEXT_DURING_NOISE" |
-  "TRUNCATED_E" | "UNSUPPORTED_TOKEN";
+export type NoiseHandshakeErrorCode = "AUTH_FAILED" | "CT_TOO_SHORT" | "HANDSHAKE_COMPLETE" | "HANDSHAKE_REJECTED" | "INVALID_PSK_LENGTH" | "INVALID_REMOTE_KEY" |
+  "MISSING_KEYS" | "MSG_TOO_LONG" | "NONCE_EXHAUSTED" | "NOT_INITIALIZED" | "PEER_CLOSED_NOISE" | "PEER_PLAINTEXT_DURING_NOISE" | "TRUNCATED_E" | "UNSUPPORTED_TOKEN";
 
 /**
  * Failure during the Noise NNpsk0 handshake itself. Carries a narrowed {@link NoiseHandshakeErrorCode} for precise dispatch.
@@ -143,11 +141,6 @@ export class NoiseHandshakeError extends HandshakeError {
     this.code = code;
   }
 }
-
-/**
- * Noise handshake aborted because the handshake-phase timeout elapsed.
- */
-export class NoiseHandshakeTimeoutError extends NoiseHandshakeError {}
 
 /**
  * Peer (the device) closed the socket while the noise handshake was still in flight. Triggers fallback to plaintext when applicable.
@@ -189,6 +182,18 @@ export class ConnectionClosedByPeerError extends ConnectionError {}
 export class HeartbeatStalledError extends ConnectionError {}
 
 /**
+ * The connection a request was issued on ended before the request completed. A pending request rejects with it when that connection is torn down, and a manual
+ * connect that a disconnect cuts short rejects with it too.
+ *
+ * @remarks Carries the code `CONNECTION_LOST`, and every wait one teardown ends rejects with the same instance. When the teardown knew what ended the connection (a
+ * transport fault, a heartbeat stall, a connect that failed after its transport attached), `cause` carries it; an explicit disconnect, a device's own disconnect
+ * request, and a superseding connect leave `cause` unset. It is distinct from the `CONNECTION_DROPPED` {@link ConnectionError} the reconnect supervisor's
+ * `shouldRetry` predicate receives for a disconnect with no typed cause: that error describes the end of the session to the supervisor, while this one is what a
+ * request still waiting on the session receives.
+ */
+export class ConnectionLostError extends ConnectionError {}
+
+/**
  * Device announced an API major version outside the client's supported range. Permanent because no protocol exchange will resolve it.
  *
  * @remarks The actual major-version-out-of-range check in `applyHelloResponse` throws {@link NegotiationFailedError} with code
@@ -198,11 +203,16 @@ export class HeartbeatStalledError extends ConnectionError {}
 export class IncompatibleApiVersionError extends PermanentError {}
 
 /**
- * A command was issued before the client connected, or after it disconnected. Indicates a lifecycle ordering bug in consumer code.
+ * An awaiting request was issued while no connection could carry it, so nothing was sent and no wait was registered.
  *
- * @remarks Reserved as a forward-compat slot. When an entity has not been discovered, the host class's `command()`, which returns `void`, drops the command with a
- * warning, and {@link EspHomeClient.commandAndAwait} rejects with {@link ConfigurationError} `UNKNOWN_ENTITY_ID`; neither throws this class. Available to
- * consumer-supplied wrappers that want stricter pre-flight enforcement.
+ * @remarks The code describes the moment the call was issued:
+ *
+ * - `CONNECT_IN_PROGRESS` - A manual connect had not yet settled, or the automatic reconnect was active (backing off, attempting, or announcing that it gave up). It
+ *   does not promise that a connection follows, so a call issued again from a `connect` or lifecycle `connect` listener runs only if one does.
+ * - `NOT_CONNECTED` - Neither was running: before the first connect, after a disconnect once any connect it cut short has settled, and inside the announcement of a
+ *   lost connection, whose listeners run before the client decides whether to reconnect, so an automatic reconnect can still begin right after.
+ *
+ * Subscriptions and fire-and-forget sends are not refused: the client records their intent or drops their frame.
  */
 export class NotConnectedError extends EspHomeError {}
 
@@ -337,75 +347,21 @@ export class BackpressureError extends EspHomeError {
   }
 }
 
-/**
- * Tagged codes for {@link CameraStreamClosedError}.
- *
- * @remarks The type is a discriminated union so additional codes can be added without breaking consumer `switch` statements that already pattern-match on the
- * code. Mirrors the {@link NoiseHandshakeErrorCode} forward-compat shape.
- *
- * Code table:
- *
- * - `STREAM_CLOSED` - The bus stream the snapshot awaits closed (typically because the transport disconnected) before any matching `CAMERA_IMAGE_RESPONSE` arrived
- *   for the requested camera id. Carried by {@link CameraStreamClosedError}.
- */
-export type CameraStreamClosedErrorCode = "STREAM_CLOSED";
-
-/**
- * Operational failure: the bus stream backing {@link CameraApi.snapshot} closed before any image arrived for the requested camera id.
- *
- * @remarks Standalone subclass of {@link EspHomeError} rather than a {@link ConfigurationError} code: this is not consumer misuse, it is an operational event
- * (typically the transport disconnected mid-snapshot). Follows the {@link BackpressureError} precedent for operational standalones. The
- * {@link CameraStreamClosedError.cameraId} property carries the branded id of the camera that failed so a consumer awaiting multiple cameras can correlate the
- * rejection.
- *
- */
-export class CameraStreamClosedError extends EspHomeError {
-
-  /**
-   * Branded camera id (the `${type}-${objectId}` form) whose snapshot was awaiting an image when the bus stream closed.
-   */
-  public readonly cameraId: string;
-
-  /**
-   * Narrowed code. Overrides the base class's optional `code` to make it required and narrowed.
-   */
-  public override readonly code: CameraStreamClosedErrorCode;
-
-  /**
-   * Creates a new CameraStreamClosedError.
-   *
-   * @param message - Human-readable description.
-   * @param code - Narrowed code (currently always `STREAM_CLOSED`).
-   * @param cameraId - The branded camera id whose snapshot was awaiting an image.
-   * @param options - Standard ErrorOptions; pass `{ cause }` to preserve an underlying error.
-   */
-  constructor(message: string, code: CameraStreamClosedErrorCode, cameraId: string, options?: ErrorOptions) {
-
-    super(message, code, options);
-
-    this.cameraId = cameraId;
-    this.code = code;
-  }
-}
-
 // User-facing / negotiation.
 
 /**
  * Tagged codes for {@link ConfigurationError}. The code table lives on the class.
  */
-export type ConfigurationErrorCode = "AWAIT_STREAM_CLOSED" | "COMMAND_UNSUPPORTED" | "ENUM_VALUE_UNKNOWN" | "EXTRA_SCHEMA_OVERRIDES_BUILTIN" | "MALFORMED_ENTITY_ID" |
+export type ConfigurationErrorCode = "COMMAND_UNSUPPORTED" | "ENUM_VALUE_UNKNOWN" | "EXTRA_SCHEMA_OVERRIDES_BUILTIN" | "MALFORMED_ENTITY_ID" |
   "SCHEMA_MISSING_DECODE_CALLBACK" | "SCHEMA_UNKNOWN" | "UNKNOWN_ENTITY_ID" | "VALUE_OUT_OF_RANGE";
 
 /**
- * Construction-time misconfiguration: bad PSK length, missing host, conflicting options, etc. Caught at the boundary so internal code can trust validated structures.
+ * Construction-time misconfiguration: missing host, conflicting options, etc. Caught at the boundary so internal code can trust validated structures.
  *
  * @remarks Carries a required {@link ConfigurationErrorCode} so consumers can pattern-match the specific misuse without parsing the message string.
  *
  * Code table:
  *
- * - `AWAIT_STREAM_CLOSED` - The state stream {@link EspHomeClient.commandAndAwait} was awaiting ended before a matching state event arrived. The client's own
- *   connection lifecycle never causes this: its event bus lives as long as the client, so a disconnect leaves the stream open and the await still settles through a
- *   matching event, its timeout, or the caller's signal.
  * - `COMMAND_UNSUPPORTED` - {@link EspHomeClient.commandAndAwait} was called for an entity type whose schema declares no command. Nothing is sent.
  * - `ENUM_VALUE_UNKNOWN` - A {@link EspHomeClient.commandAndAwait} command field received a string that is not one of the field's enum aliases. The message names the
  *   field and the value. Nothing is sent.
@@ -420,7 +376,6 @@ export type ConfigurationErrorCode = "AWAIT_STREAM_CLOSED" | "COMMAND_UNSUPPORTE
  * Usage:
  *
  * {@includeCode ./examples/showcase.ts#command-error-handling}
- *
  */
 export class ConfigurationError extends EspHomeError {
 

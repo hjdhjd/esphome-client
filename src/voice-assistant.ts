@@ -8,12 +8,12 @@
  *
  * @remarks Lazy-instantiated single-instance namespace exposed via `client.voiceAssistant`. Carves the voice-assistant entry points off the host class so the
  * file-size budget stays in check. Composes with the host via the narrow {@link VoiceAssistantHost} interface - no reach into private fields, only the bus,
- * the logger, and a synchronous frame-send hook.
+ * the logger, a synchronous frame-send hook, and the connection scope each awaiting request reads.
  *
  * The sub-API holds two distinct state lifetimes: the PRESERVED consumer subscription intent (including the requested flags), which must survive a reconnect so the
- * device is re-armed automatically, and the connection-scoped state (the cached configuration response, any in-flight announcement, and any pending configuration
- * read), which resets per connection. The connection-scoped half clears via {@link VoiceAssistantApi.clearConnectionState}; the preserved intent is replayed by
- * {@link VoiceAssistantApi.reissueOnReconnect}.
+ * device is re-armed automatically, and the connection-scoped cached configuration response, which resets per connection. The connection-scoped half clears via
+ * {@link VoiceAssistantApi.clearConnectionState}; the preserved intent is replayed by {@link VoiceAssistantApi.reissueOnReconnect}. An in-flight announcement or a
+ * pending configuration read is neither: each follows the connection it was issued on, so the host's teardown ends it with the connection-lost error.
  * Together these satisfy the uniform `SubscriptionLifecycle` contract the host loops over - VA implements it DIRECTLY (a single preserved desired-intent) rather than
  * through the keyed `ReissuableSubscription` multiset, because its request / audio streams are decoupled bus pass-throughs with no
  * per-iterator ledger to reduce.
@@ -29,8 +29,10 @@ import type { EventBus, StreamOptions } from "./event-bus.ts";
 import type { FieldValue, ProtoField } from "./protocol/index.ts";
 import { MessageType, WireType, encodeProtoFields, extractNumberField, extractStringField, extractTelemetryValue } from "./protocol/index.ts";
 import type { VoiceAssistantEvent, VoiceAssistantSubscribeFlag } from "./api-constants.ts";
+import { composeRequestSignal, requireConnection } from "./connection-scope.ts";
 import { Buffer } from "node:buffer";
 import { ConnectionError } from "./errors.ts";
+import type { ConnectionScope } from "./connection-scope.ts";
 import { Correlator } from "./correlator.ts";
 import { ReadableStream } from "node:stream/web";
 import type { SubscriptionLifecycle } from "./reissuable-subscription.ts";
@@ -42,43 +44,9 @@ import type { SubscriptionLifecycle } from "./reissuable-subscription.ts";
 const ANNOUNCE_KEY = "announce";
 
 /**
- * Build the rejection an awaited voice-assistant request settles with when its timeout or its caller's signal ends it: a `DOMException` named `AbortError` whose
- * `cause` is the originating reason.
- *
- * @param message - The error message, naming the request and how far it got.
- * @param cause - The originating reason: the timeout's `TimeoutError` or the caller signal's abort reason.
- * @returns The `AbortError` carrying `cause`.
+ * The timeout an awaited voice-assistant request waits under when the caller supplies none.
  */
-function abortError(message: string, cause: unknown): DOMException {
-
-  const error = new DOMException(message, "AbortError");
-
-  // The DOM lib types DOMException's constructor without the options bag that carries `cause`, so we install it with the descriptor `Error` gives its own `cause`:
-  // writable and configurable but not enumerable, which keeps the error's inspected and serialized shape standard.
-  Object.defineProperty(error, "cause", { configurable: true, value: cause, writable: true });
-
-  return error;
-}
-
-/**
- * Compose the signal a voice-assistant request waits under: a timeout of `timeoutMs` (5000ms when omitted), joined by the caller's `signal` when one is supplied.
- * The composite aborts with the reason of whichever source fires first, the timeout's `TimeoutError` or the caller's own reason, which becomes the `cause` of the
- * request's abort rejection.
- *
- * @param options - The caller's optional `signal` and `timeoutMs`.
- * @returns The composed timeout-and-caller signal.
- */
-function requestSignal(options?: { signal?: AbortSignal; timeoutMs?: number }): AbortSignal {
-
-  const sources: AbortSignal[] = [AbortSignal.timeout(options?.timeoutMs ?? 5000)];
-
-  if(options?.signal) {
-
-    sources.push(options.signal);
-  }
-
-  return AbortSignal.any(sources);
-}
+const DEFAULT_VOICE_REQUEST_TIMEOUT_MS = 5000;
 
 /**
  * Narrow interface the host implements for the voice-assistant sub-API. The sub-API never touches host private fields directly.
@@ -88,6 +56,10 @@ function requestSignal(options?: { signal?: AbortSignal; timeoutMs?: number }): 
 export interface VoiceAssistantHost {
 
   readonly bus: EventBus<ClientEventsMap>;
+
+  /** The connection a request issued at this moment would travel on, as {@link ConnectionScope} documents. */
+  connectionScope(): ConnectionScope;
+
   readonly log: EspHomeLogging;
   send(type: number, payload: Buffer): void;
 }
@@ -128,20 +100,12 @@ export class VoiceAssistantApi implements SubscriptionLifecycle {
 
   /**
    * The single in-flight {@link announce} slot, keyed by `ANNOUNCE_KEY` and resolved by the `voiceAssistantAnnounceFinished` listener the constructor installs.
-   * Connection-scoped: {@link clearConnectionState} rejects a pending announcement with an `AbortError`.
+   * A pending announcement's wait follows the connection it was issued on, so the host's teardown rejects it with the connection-lost error and frees the slot.
    */
   private readonly announceCorrelator = new Correlator<boolean>();
 
   /**
-   * Ends the {@link configuration} reads pending on the current connection. Each read composes this controller's signal into its wait for the reply, and
-   * {@link clearConnectionState} aborts it with a cause-less `AbortError` and installs a fresh controller, so a teardown settles every read issued before it and none
-   * issued after. Overlapping reads each wait on the bus for the next configuration reply rather than holding a correlator slot, so one connection-scoped signal is
-   * what reaches all of them.
-   */
-  private teardownController = new AbortController();
-
-  /**
-   * Constructs the sub-API. The host argument carries the bus, logger, and send hook; the sub-API does not store or read other host state.
+   * Constructs the sub-API. The host argument carries the bus, logger, send hook, and connection scope; the sub-API does not store or read other host state.
    *
    * @internal
    */
@@ -164,20 +128,14 @@ export class VoiceAssistantApi implements SubscriptionLifecycle {
   }
 
   /**
-   * Reset ONLY connection-scoped state. Called by the host at the disconnect boundary and again at connect-top via the `SubscriptionLifecycle` contract. Rejects
-   * a pending {@link announce} and every pending {@link configuration} read with an `AbortError` (an in-flight request cannot outlive the connection it was issued
-   * on), and clears the cached configuration the device re-pushes on a fresh connection. It deliberately does NOT touch `desired`: the consumer subscription intent
-   * (including its flags) is PRESERVED across the reconnect cycle so {@link reissueOnReconnect} re-arms the device with the originally-requested flags. Clearing the
-   * intent here would be the precise reconnect-drops-the-subscription bug this split exists to prevent.
+   * Reset ONLY connection-scoped state. Called by the host at the disconnect boundary and again at connect-top via the `SubscriptionLifecycle` contract. Clears the
+   * cached configuration the device re-pushes on a fresh connection, and ends no wait: a pending {@link announce} and every pending {@link configuration} read follow
+   * the connection they were issued on, and the host's teardown ends them through that connection's abort, ahead of this reset, with the connection-lost error. It
+   * deliberately does NOT touch `desired`: the consumer subscription intent (including its flags) is PRESERVED across the reconnect cycle so
+   * {@link reissueOnReconnect} re-arms the device with the originally-requested flags. Clearing the intent here would be the precise reconnect-drops-the-subscription
+   * bug this split exists to prevent.
    */
   public clearConnectionState(): void {
-
-    this.announceCorrelator.rejectAll(new DOMException("The connection was torn down before the voice-assistant announcement finished.", "AbortError"));
-
-    // The abort settles every read composed with this controller's signal before we return. The replacement is what a read issued after this call composes, so the
-    // teardown never reaches it.
-    this.teardownController.abort(new DOMException("The connection was torn down before the voice-assistant configuration read finished.", "AbortError"));
-    this.teardownController = new AbortController();
 
     this.cachedConfig = null;
   }
@@ -421,14 +379,15 @@ export class VoiceAssistantApi implements SubscriptionLifecycle {
   }
 
   /**
-   * Trigger a TTS announcement on the device. Resolves with the success flag from the matching `voiceAssistantAnnounceFinished` event, or rejects on timeout, abort,
-   * or disconnect.
+   * Trigger a TTS announcement on the device. Resolves with the success flag from the matching `voiceAssistantAnnounceFinished` event, or rejects with the reason of
+   * whichever source ended the wait.
    *
    * @remarks One announcement can be in flight at a time. The device's reply carries no per-call identity, so a call made while another is pending throws rather than
    * settling on the other call's reply. The pending slot is claimed before the wire request goes out so a fast device cannot beat it, and a disconnect rejects the
-   * pending call at once rather than leaving it to its timeout. A caller signal that is already aborted rejects the call before the in-flight check and sends nothing.
-   * The default timeout is 5000ms; supply `awaitOptions.timeoutMs` to override. The composed signal layers the caller's optional `AbortSignal` over the timeout via
-   * {@link AbortSignal.any}.
+   * pending call at once rather than leaving it to its timeout. A caller signal that is already aborted rejects the call before anything else, and a call issued with
+   * no connection is refused next, so neither claims the slot or sends anything. The default timeout is 5000ms; supply `awaitOptions.timeoutMs` to override. The wait
+   * follows the caller's optional `AbortSignal` and the connection the announcement was issued on, and holds the timeout itself, so a cancellation, a teardown, and a
+   * timeout each reject with their own reason, unwrapped.
    *
    * Usage:
    *
@@ -437,21 +396,20 @@ export class VoiceAssistantApi implements SubscriptionLifecycle {
    * @param options - The announce request fields.
    * @param awaitOptions - Optional cancellation signal and custom timeout (default 5000ms).
    * @returns A promise that resolves with the success flag from the device's response.
-   * @throws ConnectionError with code `ANNOUNCE_IN_FLIGHT` when another announcement is still pending.
-   * @throws DOMException named `AbortError` (code `ABORT_ERR`) on timeout or caller-signal abort, including a caller signal already aborted at call time, which sends
-   * nothing. The originating reason is carried as the error's `cause`: a `TimeoutError` when the {@link AbortSignal.timeout} elapses, or the caller signal's abort
-   * reason.
-   * @throws DOMException named `AbortError`, with no `cause`, when the connection is torn down while the announcement is pending.
-   *
+   * @throws {NotConnectedError} (`CONNECT_IN_PROGRESS`) when the call is issued while a manual connect has not yet settled or the automatic reconnect is active, and
+   * (`NOT_CONNECTED`) when it is issued with no connection otherwise. Nothing is sent and no slot is claimed.
+   * @throws {ConnectionError} (`ANNOUNCE_IN_FLIGHT`) when another announcement is still pending.
+   * @throws {ConnectionLostError} when the connection the announcement was issued on is torn down before the device finishes it.
+   * @throws The signal's reason, as it is, when `awaitOptions.signal` aborts, including when it was already aborted at call time, which sends nothing, and the
+   * timeout's `TimeoutError` when the device does not finish the announcement within `awaitOptions.timeoutMs`.
    */
   public async announce(options: VoiceAssistantAnnounceOptions, awaitOptions?: { signal?: AbortSignal; timeoutMs?: number }): Promise<boolean> {
 
-    // We honor a signal the caller has already aborted before anything else, so the call rejects as cancelled rather than as in flight, claims no slot, and sends
-    // nothing.
-    if(awaitOptions?.signal?.aborted) {
+    // We honor a signal the caller has already aborted before anything else, and refuse a call no connection can carry next, so each rejects as what it is rather
+    // than as in flight, claims no slot, and sends nothing.
+    awaitOptions?.signal?.throwIfAborted();
 
-      throw abortError("The voice-assistant announcement was aborted before it was sent.", awaitOptions.signal.reason);
-    }
+    const connection = requireConnection(this.host.connectionScope(), "voiceAssistant.announce()");
 
     if(this.announceCorrelator.pending(ANNOUNCE_KEY)) {
 
@@ -485,15 +443,17 @@ export class VoiceAssistantApi implements SubscriptionLifecycle {
       fields.push({ fieldNumber: 5, value: Buffer.from(options.conversationId, "utf8"), wireType: WireType.LENGTH_DELIMITED });
     }
 
-    const composedSignal = requestSignal(awaitOptions);
+    // The wait follows the caller's signal and the connection, and the correlator holds the timeout, so a cancellation, a teardown, and a timeout each reject with
+    // their own reason. The composite is bound ahead of the send, so a teardown the send itself triggers still ends the wait.
+    using request = composeRequestSignal(connection, { signal: awaitOptions?.signal });
 
     // We claim the slot before sending: `await` registers its entry synchronously, so a reply delivered before `send` returns (a synchronous mock transport, for one)
     // still finds it.
-    const reply = this.announceCorrelator.await(ANNOUNCE_KEY, { signal: composedSignal });
+    const reply = this.announceCorrelator.await(ANNOUNCE_KEY, { signal: request.signal, timeoutMs: awaitOptions?.timeoutMs ?? DEFAULT_VOICE_REQUEST_TIMEOUT_MS });
 
     this.host.send(MessageType.VOICE_ASSISTANT_ANNOUNCE_REQUEST, encodeProtoFields(fields));
 
-    return this.awaitReply({ message: "The voice-assistant announcement was aborted before the device finished it.", reply, signal: composedSignal });
+    return await reply;
   }
 
   /**
@@ -501,10 +461,11 @@ export class VoiceAssistantApi implements SubscriptionLifecycle {
    * otherwise issues a fresh `VoiceAssistantConfigurationRequest` and resolves on the matching response.
    *
    * @remarks The cache is populated by the inbound `voiceAssistantConfiguration` event listener installed in the constructor, so any prior request (or an unsolicited
-   * configuration push from the device) seeds the cache. Pass `refresh: true` to force a fresh request even when a cached value exists. The default timeout is 5000ms;
-   * the composed signal layers the caller's optional `AbortSignal` over the timeout via {@link AbortSignal.any}. Overlapping calls that reach the device each send their
-   * own request, and every one resolves with the device's configuration. A disconnect rejects every pending read at once rather than leaving it to its timeout, and a
-   * read issued after the disconnect waits for a reply of its own.
+   * configuration push from the device) seeds the cache. Pass `refresh: true` to force a fresh request even when a cached value exists. The default timeout is 5000ms.
+   * The wait follows the caller's optional `AbortSignal`, the timeout, and the connection the read was issued on, so a cancellation, a timeout, and a teardown each
+   * reject with their own reason, unwrapped. Overlapping calls that reach the device each send their own request, and every one resolves with the device's
+   * configuration. A disconnect rejects every pending read at once rather than leaving it to its timeout, and a read issued on a later connection waits for a reply of
+   * its own.
    *
    * Usage:
    *
@@ -512,74 +473,35 @@ export class VoiceAssistantApi implements SubscriptionLifecycle {
    *
    * @param options - Optional cancellation signal, custom timeout (default 5000ms), and `refresh` flag (default `false`).
    * @returns A promise that resolves with the configuration record.
-   * @throws DOMException named `AbortError` (code `ABORT_ERR`) on timeout or caller-signal abort, including a caller signal already aborted at call time, which sends
-   * nothing and rejects even when a cached configuration is available. The originating reason is carried as the error's `cause`: a `TimeoutError` when the
-   * {@link AbortSignal.timeout} elapses, or the caller signal's abort reason.
-   * @throws DOMException named `AbortError`, with no `cause`, when the connection is torn down while the read is pending.
-   *
+   * @throws {NotConnectedError} (`CONNECT_IN_PROGRESS`) when the call is issued while a manual connect has not yet settled or the automatic reconnect is active, and
+   * (`NOT_CONNECTED`) when it is issued with no connection otherwise. Nothing is sent, and the refusal comes ahead of the cache, which every teardown clears.
+   * @throws {ConnectionLostError} when the connection the read was issued on is torn down before the device answers.
+   * @throws The signal's reason, as it is, when `options.signal` aborts, including when it was already aborted at call time, which sends nothing and rejects even
+   * when a cached configuration is available, and the timeout's `TimeoutError` when the device does not answer within `options.timeoutMs`.
    */
   public async configuration(options?: { refresh?: boolean; signal?: AbortSignal; timeoutMs?: number }): Promise<VoiceAssistantConfiguration> {
 
-    // We honor a signal the caller has already aborted ahead of the cache, so a cancelled read rejects the same way whether or not a configuration has arrived.
-    if(options?.signal?.aborted) {
+    // We honor a signal the caller has already aborted, and refuse a call no connection can carry, ahead of the cache, so a cancelled or unconnected read rejects the
+    // same way whether or not a configuration has arrived.
+    options?.signal?.throwIfAborted();
 
-      throw abortError("The voice-assistant configuration read was aborted before it started.", options.signal.reason);
-    }
+    const connection = requireConnection(this.host.connectionScope(), "voiceAssistant.configuration()");
 
     if(!options?.refresh && this.cachedConfig) {
 
       return this.cachedConfig;
     }
 
-    const composedSignal = requestSignal(options);
+    // A bus wait takes one signal, so the composite carries the timeout beside the caller's signal and the connection. The connection was read once, before the send,
+    // so this configuration read stays with the connection it was issued on even when a teardown lands inside the send.
+    using request = composeRequestSignal(connection, { signal: options?.signal, timeoutMs: options?.timeoutMs ?? DEFAULT_VOICE_REQUEST_TIMEOUT_MS });
 
-    // We read the teardown signal once, before sending, so the read belongs to the connection it was issued on: a teardown that lands inside `send` installs the next
-    // connection's controller, and the wait below must still recognize the signal that settled it.
-    const teardown = this.teardownController.signal;
-    const reply = this.host.bus.once("voiceAssistantConfiguration", { signal: AbortSignal.any([ composedSignal, teardown ]) });
+    // The listener is in place before the request goes out, so a reply delivered inside the send still settles the read.
+    const reply = this.host.bus.once("voiceAssistantConfiguration", { signal: request.signal });
 
     this.host.send(MessageType.VOICE_ASSISTANT_CONFIGURATION_REQUEST, Buffer.alloc(0));
 
-    return this.awaitReply({ message: "The voice-assistant configuration request was aborted before the device answered.", reply, signal: composedSignal, teardown });
-  }
-
-  /**
-   * Wait for a request's reply and settle an abort in the documented shape. `signal` is the request's composed timeout-and-caller signal; when it ends the wait, the
-   * rejection becomes a `DOMException` named `AbortError` whose `cause` is the signal's reason, the timeout's `TimeoutError` or the caller's own reason. `teardown`, when
-   * supplied, is the connection-scoped signal {@link clearConnectionState} aborts; when it ends the wait, the rejection is that signal's reason itself, the cause-less
-   * `AbortError` a disconnect delivers. Every other rejection passes through unchanged, so the disconnect rejection the announcement's correlator delivers keeps its own
-   * shape.
-   *
-   * @param options - The `message` for the abort rejection, the pending `reply`, the composed `signal` the reply waits under, and the optional `teardown` signal.
-   * @returns The reply's value.
-   */
-  private async awaitReply<T>({ message, reply, signal, teardown }: { message: string; reply: Promise<T>; signal: AbortSignal; teardown?: AbortSignal }): Promise<T> {
-
-    try {
-
-      return await reply;
-
-    } catch(error) {
-
-      /* An abort reaches us in whichever form the reply's primitive rejects with: `Correlator.await` rejects with the signal's reason itself, and `EventBus.once`, which
-       * delegates to Node's `events.once`, rejects with Node's own `AbortError` carrying that reason as its `cause`. We match a source's reason by identity, and only
-       * once that source has aborted, so the rejection takes the shape of whichever source ended the wait even when another aborts in the same tick...a disconnect's
-       * `AbortError` has no `cause`, which an unaborted signal's `undefined` reason would otherwise match.
-       */
-      const endedBy = (source: AbortSignal): boolean => source.aborted && ((error === source.reason) || ((error instanceof Error) && (error.cause === source.reason)));
-
-      if(endedBy(signal)) {
-
-        throw abortError(message, signal.reason);
-      }
-
-      if(teardown && endedBy(teardown)) {
-
-        throw teardown.reason;
-      }
-
-      throw error;
-    }
+    return await reply;
   }
 
   /**

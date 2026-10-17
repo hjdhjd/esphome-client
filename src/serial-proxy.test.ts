@@ -5,6 +5,7 @@
  * for the AsyncIterable surface, and the reset/reissueOnReconnect lifecycle.
  */
 import type { CapturedContractFrame, ContractFrameKind } from "./reissuable-subscription-contract.helpers.ts";
+import { ConnectionError, NotConnectedError } from "./errors.ts";
 import type { FieldValue, ProtoField } from "./protocol/codec.ts";
 import type { SerialDataChunk, SerialProxyFlushResult, SerialProxyHost, SerialProxyInfo } from "./serial-proxy.ts";
 import { SerialProxyApi, extractSerialProxies } from "./serial-proxy.ts";
@@ -15,12 +16,14 @@ import { decodeProtobuf, encodeProtoFields } from "./protocol/codec.ts";
 import { describe, test } from "node:test";
 import { Buffer } from "node:buffer";
 import type { ClientEventsMap } from "./esphome-client.ts";
-import { ConnectionError } from "./errors.ts";
+import type { ConnectionScope } from "./connection-scope.ts";
 import { EventBus } from "./event-bus.ts";
 import { MessageType } from "./protocol/message-types.ts";
 import type { Nullable } from "./types.ts";
+import type { TestContext } from "node:test";
 import { WireType } from "./protocol/wire-types.ts";
 import assert from "node:assert/strict";
+import { connectionLostError } from "./connection-scope.ts";
 import { runReissuableSubscriptionContract } from "./reissuable-subscription-contract.helpers.ts";
 
 interface CapturedFrame {
@@ -35,22 +38,27 @@ interface HostHandle {
   debugLogs: string[];
   host: SerialProxyHost;
   sent: CapturedFrame[];
+  setConnection(controller: Nullable<AbortController>): void;
   setDeviceInfo(serialProxies?: readonly SerialProxyInfo[]): void;
   warnLogs: string[];
 }
 
-// Build a fresh `SerialProxyHost` in one call. Each test gets its own bus, captured-frames buffer, and recording logger so assertions stay isolated.
+// Build a fresh `SerialProxyHost` in one call. Each test gets its own bus, captured-frames buffer, and recording logger so assertions stay isolated. The connection
+// lives in a closure, starting attached, so a test aborts it to stand for a teardown, sets it to `null` to stand for no transport, and installs a fresh controller
+// for the next connection; a spread copy of the host reads the same controller.
 function makeHost(): HostHandle {
 
   const bus = new EventBus<ClientEventsMap>();
   const sent: CapturedFrame[] = [];
   const debugLogs: string[] = [];
   const warnLogs: string[] = [];
+  let connection: Nullable<AbortController> = new AbortController();
   let serialProxies: readonly SerialProxyInfo[] | undefined;
 
   const host: SerialProxyHost = {
 
     bus,
+    connectionScope: (): ConnectionScope => ((connection === null) ? { kind: "none" } : { kind: "attached", signal: connection.signal }),
     deviceInfo: (): Nullable<{ serialProxies?: readonly SerialProxyInfo[] }> => (serialProxies ? { serialProxies } : null),
     log: {
 
@@ -68,9 +76,29 @@ function makeHost(): HostHandle {
     debugLogs,
     host,
     sent,
+    setConnection: (controller: Nullable<AbortController>): void => { connection = controller; },
     setDeviceInfo: (proxies?: readonly SerialProxyInfo[]): void => { serialProxies = proxies; },
     warnLogs
   };
+}
+
+// Capture every signal `AbortSignal.timeout` builds during the test, delegating to the platform so each captured signal fires as a real one would. The test's mock
+// context restores the platform method when the test ends.
+function captureTimeoutSignals(t: TestContext): AbortSignal[] {
+
+  const captured: AbortSignal[] = [];
+  const platformTimeout = AbortSignal.timeout.bind(AbortSignal);
+
+  t.mock.method(AbortSignal, "timeout", (milliseconds: number): AbortSignal => {
+
+    const signal = platformTimeout(milliseconds);
+
+    captured.push(signal);
+
+    return signal;
+  });
+
+  return captured;
 }
 
 function decodeFields(payload: Buffer): Record<number, FieldValue[]> {
@@ -256,12 +284,21 @@ describe("SerialProxyApi.getModemPins", () => {
     assert.equal(result, SerialProxyLineStateFlags.RTS);
   });
 
-  test("rejects with AbortError on timeout", async () => {
+  test("rejects with the timeout signal's own TimeoutError when no reply arrives in time", async (t) => {
 
     const handle = makeHost();
     const api = new SerialProxyApi(handle.host);
+    const captured = captureTimeoutSignals(t);
+    const start = Date.now();
+    const pending = api.getModemPins(0, { timeoutMs: 10 });
+    const timeoutSignal = captured.at(-1);
 
-    await assert.rejects(api.getModemPins(0, { timeoutMs: 10 }), { constructor: DOMException, name: /^(?:AbortError|TimeoutError)$/ });
+    assert.ok(timeoutSignal, "the wait must build its timeout through AbortSignal.timeout");
+    await assert.rejects(pending, (err: unknown): boolean => err === timeoutSignal.reason);
+
+    const elapsed = Date.now() - start;
+
+    assert.ok(elapsed < 1000, "the call's own short timeout must bind, well under the default - observed " + String(elapsed) + " ms");
   });
 
   test("rejects with the user signal's reason on caller abort", async () => {
@@ -275,6 +312,98 @@ describe("SerialProxyApi.getModemPins", () => {
     controller.abort(reason);
 
     await assert.rejects(pending, (err: unknown): boolean => err === reason);
+  });
+
+  test("a call whose signal is already aborted rejects with that reason and sends nothing", async () => {
+
+    const handle = makeHost();
+    const api = new SerialProxyApi(handle.host);
+    const controller = new AbortController();
+    const reason = new Error("The caller gave up.");
+
+    controller.abort(reason);
+
+    await assert.rejects(api.getModemPins(0, { signal: controller.signal }), (err: unknown): boolean => err === reason);
+    assert.equal(handle.sent.length, 0, "a pre-aborted getModemPins sends no frame");
+  });
+
+  test("a pre-aborted call on an instance with a request pending rejects with its reason rather than as in flight", async () => {
+
+    const handle = makeHost();
+    const api = new SerialProxyApi(handle.host);
+    const first = api.getModemPins(0, { timeoutMs: 1000 });
+    const controller = new AbortController();
+    const reason = new Error("The caller gave up.");
+
+    controller.abort(reason);
+
+    await assert.rejects(api.getModemPins(0, { signal: controller.signal }), (err: unknown): boolean => err === reason);
+
+    api.acceptModemPinsResponse(encodeProtoFields([
+
+      { fieldNumber: 1, value: 0, wireType: WireType.VARINT },
+      { fieldNumber: 2, value: 0, wireType: WireType.VARINT }
+    ]));
+
+    await first;
+  });
+
+  test("a call with no connection is refused at once with NOT_CONNECTED, sends nothing, and is admitted once a connection is attached", async () => {
+
+    const handle = makeHost();
+    const api = new SerialProxyApi(handle.host);
+    const controller = new AbortController();
+    const reason = new Error("The caller gave up.");
+
+    handle.setConnection(null);
+    controller.abort(reason);
+
+    await assert.rejects(api.getModemPins(0, { timeoutMs: 1000 }), { code: "NOT_CONNECTED", constructor: NotConnectedError });
+
+    // The already-aborted check runs ahead of the admission, so a caller that already cancelled hears its own reason even with no connection.
+    await assert.rejects(api.getModemPins(0, { signal: controller.signal }), (err: unknown): boolean => err === reason);
+    assert.equal(handle.sent.length, 0, "a refused getModemPins sends no frame");
+
+    handle.setConnection(new AbortController());
+
+    const admitted = api.getModemPins(0, { timeoutMs: 1000 });
+
+    assert.equal(handle.sent.length, 1, "the call is admitted and sent once a connection is attached");
+
+    api.acceptModemPinsResponse(encodeProtoFields([
+
+      { fieldNumber: 1, value: 0, wireType: WireType.VARINT },
+      { fieldNumber: 2, value: 0, wireType: WireType.VARINT }
+    ]));
+
+    assert.equal(await admitted, 0);
+  });
+
+  test("a teardown the request's own send triggers rejects it with the connection-lost error, long before its timeout", async (t) => {
+
+    const handle = makeHost();
+    const connection = new AbortController();
+    const lost = connectionLostError();
+
+    handle.setConnection(connection);
+
+    // The send stands for a transport write that tears the connection down: it aborts the connection with the teardown's error, detaches it, and records the frame.
+    t.mock.method(handle.host, "send", (type: number, payload: Buffer): void => {
+
+      connection.abort(lost);
+      handle.setConnection(null);
+      handle.sent.push({ payload, type });
+    });
+
+    const api = new SerialProxyApi(handle.host);
+    const start = Date.now();
+
+    await assert.rejects(api.getModemPins(0, { timeoutMs: 5000 }), (err: unknown): boolean => err === lost);
+
+    const elapsed = Date.now() - start;
+
+    assert.ok(elapsed < 250, "the teardown must end the wait at once rather than at its timeout - observed " + String(elapsed) + " ms");
+    assert.equal(handle.sent.length, 1, "the request went out before the teardown");
   });
 
   test("rejects with ConnectionError(MODEM_PINS_IN_FLIGHT) on concurrent call for the same instance", async () => {
@@ -414,12 +543,88 @@ describe("SerialProxyApi.flush", () => {
     assert.equal(result.errorMessage, "uart underrun");
   });
 
-  test("rejects on timeout", async () => {
+  test("rejects with the timeout signal's own TimeoutError when no reply arrives in time", async (t) => {
 
     const handle = makeHost();
     const api = new SerialProxyApi(handle.host);
+    const captured = captureTimeoutSignals(t);
+    const start = Date.now();
+    const pending = api.flush(0, { timeoutMs: 10 });
+    const timeoutSignal = captured.at(-1);
 
-    await assert.rejects(api.flush(0, { timeoutMs: 10 }), { constructor: DOMException, name: /^(?:AbortError|TimeoutError)$/ });
+    assert.ok(timeoutSignal, "the wait must build its timeout through AbortSignal.timeout");
+    await assert.rejects(pending, (err: unknown): boolean => err === timeoutSignal.reason);
+
+    const elapsed = Date.now() - start;
+
+    assert.ok(elapsed < 1000, "the call's own short timeout must bind, well under the default - observed " + String(elapsed) + " ms");
+  });
+
+  test("a call whose signal is already aborted rejects with that reason and sends nothing", async () => {
+
+    const handle = makeHost();
+    const api = new SerialProxyApi(handle.host);
+    const controller = new AbortController();
+    const reason = new Error("The caller gave up.");
+
+    controller.abort(reason);
+
+    await assert.rejects(api.flush(0, { signal: controller.signal }), (err: unknown): boolean => err === reason);
+    assert.equal(handle.sent.length, 0, "a pre-aborted flush sends no frame");
+  });
+
+  test("a call with no connection is refused at once with NOT_CONNECTED, sends nothing, and is admitted once a connection is attached", async () => {
+
+    const handle = makeHost();
+    const api = new SerialProxyApi(handle.host);
+    const controller = new AbortController();
+    const reason = new Error("The caller gave up.");
+
+    handle.setConnection(null);
+    controller.abort(reason);
+
+    await assert.rejects(api.flush(0, { timeoutMs: 1000 }), { code: "NOT_CONNECTED", constructor: NotConnectedError });
+
+    // The already-aborted check runs ahead of the admission, so a caller that already cancelled hears its own reason even with no connection.
+    await assert.rejects(api.flush(0, { signal: controller.signal }), (err: unknown): boolean => err === reason);
+    assert.equal(handle.sent.length, 0, "a refused flush sends no frame");
+
+    handle.setConnection(new AbortController());
+
+    const admitted = api.flush(0, { timeoutMs: 1000 });
+
+    assert.equal(handle.sent.length, 1, "the call is admitted and sent once a connection is attached");
+
+    api.acceptRequestResponse(flushResponsePayload(0, SerialProxyStatus.OK));
+
+    assert.equal((await admitted).status, SerialProxyStatus.OK);
+  });
+
+  test("a teardown the request's own send triggers rejects it with the connection-lost error, long before its timeout", async (t) => {
+
+    const handle = makeHost();
+    const connection = new AbortController();
+    const lost = connectionLostError();
+
+    handle.setConnection(connection);
+
+    // The send stands for a transport write that tears the connection down: it aborts the connection with the teardown's error, detaches it, and records the frame.
+    t.mock.method(handle.host, "send", (type: number, payload: Buffer): void => {
+
+      connection.abort(lost);
+      handle.setConnection(null);
+      handle.sent.push({ payload, type });
+    });
+
+    const api = new SerialProxyApi(handle.host);
+    const start = Date.now();
+
+    await assert.rejects(api.flush(0, { timeoutMs: 5000 }), (err: unknown): boolean => err === lost);
+
+    const elapsed = Date.now() - start;
+
+    assert.ok(elapsed < 250, "the teardown must end the wait at once rather than at its timeout - observed " + String(elapsed) + " ms");
+    assert.equal(handle.sent.length, 1, "the request went out before the teardown");
   });
 
   test("rejects with ConnectionError(FLUSH_IN_FLIGHT) on concurrent call for the same instance", async () => {
@@ -670,17 +875,22 @@ describe("SerialProxyApi.acceptDataMessage", () => {
 
 describe("SerialProxyApi.clearConnectionState and reissueOnReconnect", () => {
 
-  test("clearConnectionState rejects every in-flight flush and getModemPins with AbortError", async () => {
+  test("a teardown of the connection rejects every in-flight flush and getModemPins with the connection-lost error it was aborted with", async () => {
 
     const handle = makeHost();
+    const connection = new AbortController();
+    const lost = connectionLostError();
+
+    handle.setConnection(connection);
+
     const api = new SerialProxyApi(handle.host);
-    const f = api.flush(0, { timeoutMs: 10000 });
-    const g = api.getModemPins(1, { timeoutMs: 10000 });
+    const f = api.flush(0, { timeoutMs: 1000 });
+    const g = api.getModemPins(1, { timeoutMs: 1000 });
 
-    api.clearConnectionState();
+    connection.abort(lost);
 
-    await assert.rejects(f, { constructor: DOMException, name: "AbortError" });
-    await assert.rejects(g, { constructor: DOMException, name: "AbortError" });
+    await assert.rejects(f, (err: unknown): boolean => err === lost);
+    await assert.rejects(g, (err: unknown): boolean => err === lost);
   });
 
   test("clearConnectionState clears the wire cache but PRESERVES the subscriber ledger (count stays N)", () => {
@@ -752,16 +962,23 @@ describe("SerialProxyApi.clearConnectionState and reissueOnReconnect", () => {
     assert.equal(handle.sent.length, 0, "post-clearConnectionState iterator teardown must not send a stray UNSUBSCRIBE");
   });
 
-  test("subsequent flush after clearConnectionState succeeds without throwing FLUSH_IN_FLIGHT", async () => {
+  test("a flush is admitted without FLUSH_IN_FLIGHT once a fresh controller stands in for the torn-down connection's aborted one", async () => {
 
     const handle = makeHost();
+    const connection = new AbortController();
+    const lost = connectionLostError();
+
+    handle.setConnection(connection);
+
     const api = new SerialProxyApi(handle.host);
-    const before = api.flush(0, { timeoutMs: 10000 });
+    const before = api.flush(0, { timeoutMs: 1000 });
 
-    api.clearConnectionState();
-    await assert.rejects(before);
+    connection.abort(lost);
+    await assert.rejects(before, (err: unknown): boolean => err === lost);
 
-    // After clearConnectionState, a new flush should be admissible.
+    // The next connection's controller takes the aborted one's place, and the torn-down wait has released its slot, so a new flush on the same instance is admitted.
+    handle.setConnection(new AbortController());
+
     const after = api.flush(0);
 
     api.acceptRequestResponse(flushResponsePayload(0, SerialProxyStatus.OK));

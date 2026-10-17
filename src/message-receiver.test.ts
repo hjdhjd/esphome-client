@@ -88,14 +88,14 @@ describe("MessageReceiver.waitFor", () => {
     assert.equal(message.type, 2);
   });
 
-  test("rejects when the abort signal fires", async () => {
+  test("rejects with a string reason as it is when the abort signal fires", async () => {
 
     const transport = new MockTransport();
     const receiver = new MessageReceiver(transport);
     const controller = new AbortController();
     const promise = receiver.waitFor([42], { signal: controller.signal });
 
-    controller.abort();
+    controller.abort("wait-cancelled");
 
     await assert.rejects(promise, (err: unknown): boolean => err === controller.signal.reason);
   });
@@ -361,6 +361,84 @@ describe("MessageReceiver.startDrain", () => {
 
     assert.equal(singleFireCauses.length, 1, "onTerminal must fire exactly once across two terminal triggers");
   });
+
+  // A device's disconnect request during setup is refused by its interleave handler, and the refusal is stored. When no setup wait is parked and the next wanted frame
+  // is already buffered, a late waitFor takes that frame and never reads the refusal, so the hand-off is the last place it can surface.
+  test("startDrain throws the stored interleave refusal when a wanted frame was buffered behind it, and installs no handlers", async () => {
+
+    const transport = new MockTransport();
+    const receiver = new MessageReceiver(transport);
+    const refusal = new Error("The device asked to disconnect during setup.");
+    const drained: number[] = [];
+    const causes: Error[] = [];
+
+    receiver.onInterleave(MessageType.DISCONNECT_REQUEST, () => { throw refusal; });
+
+    transport.pushInbound(MessageType.DISCONNECT_REQUEST, Buffer.alloc(0));
+    transport.pushInbound(42, Buffer.from([1]));
+    await transport.whenIdle();
+
+    assert.throws(() => receiver.startDrain({ default: (msg): void => { drained.push(msg.type); } }, (cause) => { causes.push(cause); }),
+      (err: unknown): boolean => err === refusal);
+
+    // Nothing was installed: a later frame is not handed to the drain handlers, and a later fault reaches no terminal callback.
+    transport.pushInbound(42, Buffer.from([2]));
+    await transport.whenIdle();
+    transport.fail(new ConnectionClosedByPeerError("Synthetic peer death after the refused hand-off.", "PEER_CLOSED"));
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.deepEqual(drained, [], "the refused hand-off must hand no frame to the drain handlers, the buffered one included");
+    assert.deepEqual(causes, [], "the refused hand-off must install no terminal callback");
+  });
+
+  test("startDrain throws the stored transport fault from before the hand-off", async () => {
+
+    const transport = new MockTransport();
+    const receiver = new MessageReceiver(transport);
+    const fault = new ConnectionClosedByPeerError("Synthetic setup-phase peer death.", "PEER_CLOSED");
+    const causes: Error[] = [];
+
+    receiver.onInterleave(99, () => { /* noop, just primes the pump */ });
+    await new Promise((resolve) => setImmediate(resolve));
+
+    transport.fail(fault);
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.throws(() => receiver.startDrain({}, (cause) => { causes.push(cause); }), (err: unknown): boolean => err === fault);
+    assert.deepEqual(causes, [], "a fault before the hand-off is thrown, never escalated through the terminal callback");
+  });
+
+  test("startDrain throws the stored clean end from before the hand-off as TRANSPORT_CLOSED", async () => {
+
+    const transport = new MockTransport();
+    const receiver = new MessageReceiver(transport);
+
+    receiver.onInterleave(99, () => { /* noop, just primes the pump */ });
+    await new Promise((resolve) => setImmediate(resolve));
+
+    transport[Symbol.dispose]();
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.throws(() => receiver.startDrain({}, () => { /* the hand-off throws before installing this */ }),
+      { code: "TRANSPORT_CLOSED", constructor: ConnectionClosedByPeerError });
+  });
+
+  test("startDrain throws the stored failure at the hand-off only: a second call after a run-phase fault returns without a throw", async () => {
+
+    const transport = new MockTransport();
+    const receiver = new MessageReceiver(transport);
+    const fault = new ConnectionClosedByPeerError("Synthetic run-phase peer death.", "PEER_CLOSED");
+    const causes: Error[] = [];
+
+    receiver.startDrain({}, (cause) => { causes.push(cause); });
+    await new Promise((resolve) => setImmediate(resolve));
+
+    transport.fail(fault);
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.deepEqual(causes, [fault], "the run-phase fault escalates through the terminal callback");
+    assert.doesNotThrow(() => receiver.startDrain({}, () => { /* a repeat call installs nothing */ }), "a repeat call after the hand-off is a no-op");
+  });
 });
 
 describe("MessageReceiver.dispose", () => {
@@ -420,6 +498,21 @@ describe("MessageReceiver edge cases", () => {
     transport.fail(new Error("simulated transport failure"));
 
     await assert.rejects(promise, /simulated transport failure/);
+  });
+
+  // The signal bounds the wait so a receiver that kept no record of the clean end fails this row on its assertion, with the signal's TimeoutError, rather than hanging.
+  test("a waitFor after the transport's stream ended cleanly rejects at once with TRANSPORT_CLOSED", async () => {
+
+    const transport = new MockTransport();
+    const receiver = new MessageReceiver(transport);
+
+    receiver.onInterleave(99, () => { /* noop, just primes the pump */ });
+    await new Promise((resolve) => setImmediate(resolve));
+
+    transport[Symbol.dispose]();
+    await new Promise((resolve) => setImmediate(resolve));
+
+    await assert.rejects(receiver.waitFor([42], { signal: AbortSignal.timeout(1000) }), { code: "TRANSPORT_CLOSED", constructor: ConnectionClosedByPeerError });
   });
 
   test("multiple parallel awaiters on different types resolve independently", async () => {

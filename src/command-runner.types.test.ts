@@ -7,6 +7,7 @@ import { describe, test } from "node:test";
 import { runCommand, runCommandAndAwait } from "./command-runner.ts";
 import type { ClientEventsMap } from "./esphome-client.ts";
 import type { CommandHost } from "./command-runner.ts";
+import type { ConnectionScope } from "./connection-scope.ts";
 import { ENTITY_SCHEMAS } from "./schemas/index.ts";
 import type { EntityId } from "./entity-id.ts";
 import type { EntitySchema } from "./schemas/index.ts";
@@ -26,6 +27,7 @@ const noopLogger: EspHomeLogging = {
 const stubHost = (): CommandHost => ({
 
   bus: new EventBus<ClientEventsMap>(),
+  connectionScope: (): ConnectionScope => ({ kind: "none" }),
   deviceIdForKey: (): number | undefined => undefined,
   keyForId: (): Nullable<number> => null,
   log: noopLogger,

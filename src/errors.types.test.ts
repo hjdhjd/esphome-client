@@ -70,6 +70,5 @@ describe("NoiseHandshakeErrorCode discriminated union", () => {
 
     // Real codes are accepted.
     assert.equal(accept("AUTH_FAILED"), "AUTH_FAILED");
-    assert.equal(accept("HANDSHAKE_TIMEOUT"), "HANDSHAKE_TIMEOUT");
   });
 });

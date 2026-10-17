@@ -55,9 +55,9 @@ const HOME_ID_DATA_BYTES = 4;
 const FRAME_CHANNEL = 0;
 
 /**
- * Narrow interface the host implements for the Z-Wave-proxy sub-API. Mirrors {@link BluetoothProxyHost} and {@link SerialProxyHost} in
- * shape: a bus, a logger, a frame-send hook, plus a read-through accessor for the latest decoded {@link DeviceInfo}. The sub-API never reaches into
- * host private fields.
+ * Narrow interface the host implements for the Z-Wave-proxy sub-API. Mirrors {@link BluetoothProxyHost} and {@link SerialProxyHost} in shape, without their
+ * connection scope, since no Z-Wave call awaits a reply: a bus, a logger, a frame-send hook, plus a read-through accessor for the latest decoded {@link DeviceInfo}.
+ * The sub-API never reaches into host private fields.
  *
  * @internal
  */

@@ -15,17 +15,19 @@
  * @module testing/mock-client
  */
 import type { ClientEventsMap, DeviceInfo, LogEventData } from "../esphome-client.ts";
-import type { CommandAndAwaitOptions, NonAwaitableEntityType, TransmitEntityType } from "../command-runner.ts";
+import type { CommandAndAwaitOptions, CommandHost, NonAwaitableEntityType, TransmitEntityType } from "../command-runner.ts";
 import type { CommandFor, Entity, EntitySchema, EntityType, StateEventFor, TelemetryEvent } from "../schemas/index.ts";
-import { ConfigurationError, ConnectionError } from "../errors.ts";
-import { DEFAULT_COMMAND_AWAIT_TIMEOUT_MS, ENCODE_REFUSAL_CODES, assertTransmitter, encodeCommand, entityTypeFromId } from "../command-runner.ts";
+import type { EspHomeLogging, Nullable } from "../types.ts";
 import { EventBus, endedAsyncIterable } from "../event-bus.ts";
 import { HealthState, connectedHealth, disconnectedHealth, downHealth } from "../health.ts";
 import { MOCK, createRecordingMock } from "./recording-mock.ts";
+import { assertTransmitter, encodeCommand, runCommandAndAwait } from "../command-runner.ts";
 import { BluetoothProxyApi } from "../bluetooth-proxy.ts";
 import { CameraApi } from "../camera.ts";
 import type { ClientCapabilities } from "../capabilities.ts";
+import { ConnectionError } from "../errors.ts";
 import type { ConnectionHealth } from "../health.ts";
+import type { ConnectionScope } from "../connection-scope.ts";
 import { ENTITY_SCHEMAS } from "../schemas/entity-schemas.ts";
 import type { EncodeResult } from "../command-pipeline.ts";
 import type { EntityId } from "../entity-id.ts";
@@ -33,7 +35,6 @@ import { HomeAssistantApi } from "../home-assistant.ts";
 import type { LifecycleEvent } from "../lifecycle.ts";
 import type { LogLevel } from "../api-constants.ts";
 import type { MockController } from "./recording-mock.ts";
-import type { Nullable } from "../types.ts";
 import { ReadableStream } from "node:stream/web";
 import { SerialProxyApi } from "../serial-proxy.ts";
 import type { StreamOptions } from "../event-bus.ts";
@@ -41,9 +42,14 @@ import type { SubDevice } from "../sub-device.ts";
 import { UserServicesApi } from "../user-services.ts";
 import { VoiceAssistantApi } from "../voice-assistant.ts";
 import { ZWaveProxyApi } from "../zwave-proxy.ts";
+import { connectionLostError } from "../connection-scope.ts";
 import { disconnectedCapabilities } from "../capabilities.ts";
 import { entityId } from "../entity-id.ts";
 import { getSchemaIn } from "../schemas/extensions.ts";
+
+// The logger the mock hands the real client's encoder and runner. The mock has no reader for their log lines, so every level discards them.
+const discard = (): void => { /* The mock has no reader for the line. */ };
+const DISCARD_LOG: EspHomeLogging = { debug: discard, error: discard, info: discard, warn: discard };
 
 /**
  * One recorded {@link MockClient.command} call, captured for later assertion.
@@ -70,11 +76,13 @@ export interface RecordedCommand<T extends EntityType = EntityType> {
  * In-memory test double for {@link EspHomeClient}. Implements the public consumption surface; tests drive state via {@link MockClient.populateEntities},
  * {@link MockClient.setDeviceInfo}, and {@link MockClient.emit}, and assert on consumer behavior via {@link MockClient.commands} and the `on`/`stream` rails.
  *
- * Teardown: {@link MockClient.disconnect} and {@link MockClient.setConnected} with `false` end the session the way the real client's teardown does. The session's
- * device info, capabilities, encryption flag, and sub-devices return to their disconnected values, and a connected mock announces the end on `healthChange`,
- * `lifecycle`, and `disconnect`, in the real client's order. A connect installs a connected health record of its own, as the real client's does, so a test seeds a
- * health record after {@link MockClient.setConnected} with `true`, and a test that connects again seeds the next session's records again, as a real device reports
- * them on every connect.
+ * Teardown: {@link MockClient.disconnect} and {@link MockClient.setConnected} with `false` end the session the way the real client's teardown does. A pending
+ * {@link MockClient.commandAndAwait} rejects with the connection-lost error the teardown builds, the session's device info, capabilities, encryption flag, and
+ * sub-devices return to their disconnected values, and a connected mock announces the end on `healthChange`, `lifecycle`, and `disconnect`, in the real client's
+ * order. A connect installs a connected health record of its own, as the real client's does, so a test seeds a health record after {@link MockClient.setConnected}
+ * with `true`, and a test that connects again seeds the next session's records again, as a real device reports them on every connect. An awaiting call follows the
+ * connection, not the health record: {@link MockClient.commandAndAwait} on a mock that is not connected rejects with `NotConnectedError` coded `NOT_CONNECTED`, so a
+ * test calls {@link MockClient.setConnected} with `true` before it awaits a command.
  *
  * Sub-API mocks: every sub-API the real client exposes is mirrored on MockClient via {@link createRecordingMock}. Tests address each sub-API's recorded-call log
  * under the {@link MOCK} symbol: `mock.bluetooth[MOCK].calls`, `mock.services[MOCK].stub("list", () => services)`, etc. The reflection-driven factory enumerates
@@ -121,7 +129,10 @@ export class MockClient {
   private capabilitiesRecord: ClientCapabilities = disconnectedCapabilities();
   private healthRecord: ConnectionHealth = Object.freeze(disconnectedHealth());
   private encrypted = false;
-  private connected = false;
+
+  // The mock's connection scope, which exists exactly while the mock is connected, as the real client's scope exists exactly while a transport is attached. Its abort
+  // at teardown ends every pending command wait with one connection-lost error.
+  private connection: Nullable<AbortController> = null;
 
   /**
    * Constructs a fresh MockClient with an empty registry, no recorded commands, and a disconnected state. Tests typically call {@link populateEntities} and
@@ -214,20 +225,24 @@ export class MockClient {
   }
 
   /**
-   * Record a command and resolve with the entity's next matching state event. Mirrors {@link EspHomeClient.commandAndAwait}: the command is encoded and recorded as
-   * {@link command} records it, then the returned promise parks until a test drives the matching state through {@link emitState}...the deterministic analogue of the
-   * real client awaiting the device's correlated response. The optional `predicate`, `signal`, and `timeoutMs` honour the real await contract, and on timeout or abort
-   * the promise rejects with the abort reason. A malformed id, an unregistered id, and a command the client's encoder refuses each reject at once, in the real runner's
-   * order, before anything subscribes or is recorded, with the real runner's error and code.
+   * Record a command and resolve with the entity's next matching state event. Mirrors {@link EspHomeClient.commandAndAwait} by running the real client's runner over
+   * the mock: the command is encoded and recorded as {@link command} records it, then the returned promise parks until a test drives the matching state through
+   * {@link emitState}...the deterministic analogue of the real client awaiting the device's correlated response. The checks, their order, their errors, and their
+   * codes are the runner's own: a caller's signal already aborted rejects with its reason, a mock that is not connected refuses the call, and a malformed id, an
+   * unregistered id, and a command the client's encoder refuses each reject at once, before anything subscribes or is recorded. The optional `predicate`, `signal`,
+   * and `timeoutMs` honour the real await contract, and a teardown rejects a pending call with the connection-lost error.
    *
    * @param id - The branded entity id; its type must be command-and-awaitable (sensors, buttons, cameras, and IR/RF are excluded at compile time).
    * @param options - The command options.
    * @param awaitOptions - Optional acceptance predicate, cancellation signal, and timeout override (default 2000 ms).
    *
+   * @throws {NotConnectedError} with code `NOT_CONNECTED` when the mock is not connected. Nothing is recorded.
    * @throws {ConfigurationError} with code `MALFORMED_ENTITY_ID` when `id` is not a valid `${type}-${objectId}` brand.
    * @throws {ConfigurationError} with code `UNKNOWN_ENTITY_ID` when no entity is registered for `id`.
    * @throws {ConfigurationError} with the real runner's refusal code (`ENUM_VALUE_UNKNOWN` or `VALUE_OUT_OF_RANGE`, for example) when the client's encoder refuses
    * the command.
+   * @throws {ConnectionLostError} when {@link disconnect}, {@link setConnected} with `false`, or a dispose tears the mock's connection down first.
+   * @throws The signal's reason, as it is, when `awaitOptions.signal` aborts, and the timeout's `TimeoutError` when no matching state arrives in time.
    */
   public async commandAndAwait<T extends Exclude<EntityType, NonAwaitableEntityType>>(
     id: EntityId<T>,
@@ -235,61 +250,24 @@ export class MockClient {
     awaitOptions?: CommandAndAwaitOptions<T>
   ): Promise<StateEventFor<typeof ENTITY_SCHEMAS[T]>> {
 
-    // Surface a malformed id and then an unregistered one as typed throws rather than a silent timeout, in the order the real runner checks them...a command awaiting
-    // a state from an entity that cannot exist is caller misuse, and failing eagerly reads more clearly than hanging until the timeout fires. The prefix comes from the
-    // runner's own extraction, so the mock and the client agree on which ids are malformed.
-    const entityType = entityTypeFromId(id);
-
-    if(entityType === null) {
-
-      throw new ConfigurationError("commandAndAwait(): malformed entity id '" + id + "'.", "MALFORMED_ENTITY_ID");
-    }
-
+    // The mock hands the runner a host built for this call, so the runner's own admission, validation, encode, composition, and match loop run unchanged. Its lookups
+    // answer from the registered entry the id names, its connection is the mock's scope, and its send records the command after the runner has opened the state
+    // stream, the pre-subscribe order the real client relies on. It logs nowhere and counts no metric, as the mock has no reader for its log lines or its metrics.
     const entity = this.entityRegistry.get(id);
+    const connection = this.connection;
+    const host: CommandHost = {
 
-    if(!entity) {
+      bus: this.bus,
+      connectionScope: (): ConnectionScope => (connection === null) ? { kind: "none" } : { kind: "attached", signal: connection.signal },
+      deviceIdForKey: (): number | undefined => entity?.deviceId,
+      keyForId: (): Nullable<number> => entity?.key ?? null,
+      log: DISCARD_LOG,
+      metrics: undefined,
+      resolveSchema: (entityType: string): EntitySchema | undefined => getSchemaIn(ENTITY_SCHEMAS, entityType),
+      send: (): void => { this.recordedCommands.push({ id, options, timestamp: Date.now() }); }
+    };
 
-      throw new ConfigurationError("commandAndAwait(): unknown entity id '" + id + "'.", "UNKNOWN_ENTITY_ID");
-    }
-
-    // Encode before anything subscribes, as the real runner does, so a command the client's encoder refuses rejects at once with the runner's refusal code rather
-    // than recording nothing and waiting out the timeout.
-    const encoded = this.encode(entity, id, options);
-
-    if(!encoded.ok) {
-
-      const code = ENCODE_REFUSAL_CODES[encoded.reason];
-
-      throw new ConfigurationError("commandAndAwait(): command for " + id + " refused before sending (" + code + ")" +
-        ((encoded.detail === undefined) ? "." : ": " + encoded.detail + "."), code);
-    }
-
-    // Compose the abort sources as the real client does: the timeout always fires and the caller's signal layers on when supplied. We subscribe to the state stream
-    // BEFORE recording the command so a synchronous emitState in the test cannot beat the listener, the same pre-subscribe ordering the real runner relies on.
-    const sources: AbortSignal[] = [AbortSignal.timeout(awaitOptions?.timeoutMs ?? DEFAULT_COMMAND_AWAIT_TIMEOUT_MS)];
-
-    if(awaitOptions?.signal) {
-
-      sources.push(awaitOptions.signal);
-    }
-
-    const stream = this.bus.stream(entityType as EntityType, { signal: AbortSignal.any(sources) }) as AsyncIterable<StateEventFor<typeof ENTITY_SCHEMAS[T]>>;
-    const predicate = awaitOptions?.predicate;
-
-    this.recordedCommands.push({ id, options, timestamp: Date.now() });
-
-    for await (const event of stream) {
-
-      // Match the resolved key, then the optional predicate. Promise.try normalizes a sync boolean, an async boolean, a sync throw, and an async reject into one path.
-      if(((event as unknown as { key: number }).key === entity.key) && (await Promise.try(() => predicate?.(event) ?? true))) {
-
-        return event;
-      }
-    }
-
-    // Reached only if the stream ends cleanly without a match, which the mock never causes because it never disposes its bus; the timeout and caller-abort paths
-    // reject through the iterator's throw before here. Surfacing a typed error mirrors the real runner rather than returning undefined.
-    throw new ConfigurationError("commandAndAwait(): stream ended before a matching state event arrived.", "AWAIT_STREAM_CLOSED");
+    return await runCommandAndAwait(host, id, options, awaitOptions);
   }
 
   /**
@@ -311,7 +289,7 @@ export class MockClient {
 
         deviceIdForKey: (): number | undefined => entity.deviceId,
         keyForId: (): number => entity.key,
-        log: { debug: (): void => { /* discard */ } },
+        log: DISCARD_LOG,
         resolveSchema: (entityType: string): EntitySchema | undefined => getSchemaIn(ENTITY_SCHEMAS, entityType)
       },
       id,
@@ -393,23 +371,25 @@ export class MockClient {
    */
   public setConnected(connected: boolean, reason?: string): void {
 
-    if(connected === this.connected) {
+    if(connected === this.isConnected) {
 
       return;
     }
 
     if(connected) {
 
-      // Connect in the real client's order: the connected record goes in silently before any announcement, so every listener below reads it from `health()`, and
-      // `healthChange` follows `connect` carrying the record current at that moment. One wall-clock read supplies the connect epoch and the first inbound activity,
-      // as the real client seeds its heartbeat from its connect epoch.
+      // Connect in the real client's order: the connection scope and the connected record go in silently before any announcement, so every listener below reads them,
+      // and `healthChange` follows `connect` carrying the record current at that moment. One wall-clock read supplies the connect epoch and the first inbound
+      // activity, as the real client seeds its heartbeat from its connect epoch. The announcements carry the encryption flag read here, as the real client's carry
+      // the flag of the session they announce, so a `connect` listener that disconnects the mock does not change what the later announcements report.
+      const encrypted = this.encrypted;
       const now = Date.now();
 
-      this.connected = true;
-      this.setHealthRecord(connectedHealth(this.healthRecord, { connectedAtMs: now, encrypted: this.encrypted, lastInboundActivityAt: now }));
-      this.bus.emit("connect", this.encrypted);
+      this.connection = new AbortController();
+      this.setHealthRecord(connectedHealth(this.healthRecord, { connectedAtMs: now, encrypted, lastInboundActivityAt: now }));
+      this.bus.emit("connect", encrypted);
       this.bus.emit("healthChange", this.healthRecord);
-      this.bus.emit("lifecycle", { encrypted: this.encrypted, kind: "connect" });
+      this.bus.emit("lifecycle", { encrypted, kind: "connect" });
 
       return;
     }
@@ -844,7 +824,7 @@ export class MockClient {
    */
   public get isConnected(): boolean {
 
-    return this.connected;
+    return this.connection !== null;
   }
 
   /**
@@ -887,18 +867,21 @@ export class MockClient {
    */
   private disconnectInternal(reason: string | undefined): void {
 
-    // The mock is live while it is connected. The teardown clears the flag, so we read liveness before it runs.
-    const live = this.connected;
+    // The mock is live while it holds a connection scope. We take the scope, clear the field, and abort the scope in one step, ahead of every reset and announcement,
+    // so each pending command wait rejects with this one connection-lost error before anything is announced, as on the real client.
+    const connection = this.connection;
+
+    this.connection = null;
+    connection?.abort(connectionLostError());
 
     // The session's reported facts end with it, so `deviceInfo()`, `capabilities()`, `isEncrypted`, and `subDevices()` read the disconnected values rather than the
     // last session's seeded ones. The real client resets its encryption flag through its capability record; the mock keeps the flag apart, so it resets both.
-    this.connected = false;
     this.capabilitiesRecord = disconnectedCapabilities();
     this.deviceInfoRecord = null;
     this.encrypted = false;
     this.subDeviceList.length = 0;
 
-    if(!live) {
+    if(!connection) {
 
       return;
     }

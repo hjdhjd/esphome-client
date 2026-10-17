@@ -8,12 +8,15 @@ import { Buffer } from "node:buffer";
 import { CameraApi } from "./camera.ts";
 import type { CameraEvent } from "./schemas/index.ts";
 import type { CameraHost } from "./camera.ts";
-import { CameraStreamClosedError } from "./errors.ts";
 import type { ClientEventsMap } from "./esphome-client.ts";
+import type { ConnectionScope } from "./connection-scope.ts";
 import type { EntityId } from "./entity-id.ts";
 import { EventBus } from "./event-bus.ts";
 import { MessageType } from "./protocol/message-types.ts";
+import { NotConnectedError } from "./errors.ts";
+import type { Nullable } from "./types.ts";
 import assert from "node:assert/strict";
+import { connectionLostError } from "./connection-scope.ts";
 import { entityId } from "./entity-id.ts";
 import { runReissuableSubscriptionContract } from "./reissuable-subscription-contract.helpers.ts";
 
@@ -28,11 +31,14 @@ interface RecordingCameraHost extends CameraHost {
   events: { event: string; payload: unknown }[];
   published: { event: CameraEvent; id: EntityId<"camera"> }[];
   sent: { type: number; payload: Buffer }[];
+  setConnection: (controller: Nullable<AbortController>) => void;
   warnings: { context?: unknown; message: string }[];
 }
 
 // The fake host publishes the way the client does: it records the call, then emits on the generic telemetry channel and on the camera channel, in that order. The
-// client's cache write, which precedes both emits, is asserted by the host tests in esphome-client.test.ts.
+// client's cache write, which precedes the emits, is asserted by the host tests in esphome-client.test.ts. The connection lives in a closure, starting attached, so a
+// test aborts it to stand for a teardown, sets it to `null` to stand for no transport, and installs a fresh controller for the next connection; a spread copy of the
+// host reads the same controller.
 function makeHost(maxImageBytes = 8 * 1024 * 1024): RecordingCameraHost {
 
   const bus = new EventBus<ClientEventsMap>();
@@ -40,12 +46,14 @@ function makeHost(maxImageBytes = 8 * 1024 * 1024): RecordingCameraHost {
   const published: { event: CameraEvent; id: EntityId<"camera"> }[] = [];
   const sent: { type: number; payload: Buffer }[] = [];
   const warnings: { context?: unknown; message: string }[] = [];
+  let connection: Nullable<AbortController> = new AbortController();
 
   bus.on("camera", (payload) => { events.push({ event: "camera", payload }); });
 
   return {
 
     bus,
+    connectionScope: (): ConnectionScope => ((connection === null) ? { kind: "none" } : { kind: "attached", signal: connection.signal }),
     events,
     log: {
 
@@ -64,6 +72,7 @@ function makeHost(maxImageBytes = 8 * 1024 * 1024): RecordingCameraHost {
     published,
     send: (type: number, payload: Buffer): void => { sent.push({ payload, type }); },
     sent,
+    setConnection: (controller: Nullable<AbortController>): void => { connection = controller; },
     warnings
   };
 }
@@ -289,10 +298,10 @@ describe("CameraApi.snapshot", () => {
     assert.deepEqual(result, Buffer.from([0xff]), "snapshot must skip a foreign camera's event even when its name collides, and resolve only with this camera's image");
   });
 
-  test("rejects with a typed CameraStreamClosedError when the bus disposes before any image arrives", async () => {
+  test("rejects with a plain Error naming the bus and the camera when the bus disposes before any image arrives", async () => {
 
-    // Simulates the operational case: the transport disconnects mid-snapshot, the host disposes the bus, and the awaiting consumer sees the typed rejection. The error
-    // must carry the branded camera id and the tagged STREAM_CLOSED code so a consumer awaiting multiple cameras can correlate which snapshot failed.
+    // Only the event bus ending the stream reaches the snapshot's tail, which no connection lifecycle causes, so the rejection is a plain Error that names the bus and
+    // the branded camera id rather than a public class or code. The object form's exact constructor refuses any EspHomeError subclass.
     const host = makeHost();
     const cam = new CameraApi(host, entityId("camera", "front"));
 
@@ -303,15 +312,52 @@ describe("CameraApi.snapshot", () => {
 
     host.bus.dispose();
 
-    await assert.rejects(snapshotPromise, (err: unknown): boolean => {
+    await assert.rejects(snapshotPromise,
+      { constructor: Error, message: /^camera\.snapshot\(\): the event bus ended the wait before an image arrived for camera-front\.$/ });
+  });
 
-      assert.equal(err instanceof CameraStreamClosedError, true, "must be a CameraStreamClosedError");
-      assert.equal((err as CameraStreamClosedError).code, "STREAM_CLOSED");
-      assert.equal((err as CameraStreamClosedError).cameraId, "camera-front", "must carry the branded camera id");
-      assert.ok((err as Error).message.includes("camera-front"), "message must name the camera id for log correlation");
+  test("a teardown of the connection rejects a pending snapshot with the connection-lost error it was aborted with", async () => {
 
-      return true;
-    });
+    const host = makeHost();
+    const connection = new AbortController();
+    const lost = connectionLostError();
+
+    host.setConnection(connection);
+
+    const cam = new CameraApi(host, entityId("camera", "front"));
+    const snapshotPromise = cam.snapshot({ timeoutMs: 1000 });
+
+    await new Promise((resolve) => setImmediate(resolve));
+
+    connection.abort(lost);
+
+    await assert.rejects(snapshotPromise, (err: unknown): boolean => err === lost);
+  });
+
+  test("a snapshot whose caller signal is already aborted rejects with that reason and sends nothing", async () => {
+
+    const host = makeHost();
+    const cam = new CameraApi(host, entityId("camera", "front"));
+    const controller = new AbortController();
+    const reason = new Error("The caller gave up.");
+
+    controller.abort(reason);
+
+    await assert.rejects(cam.snapshot({ signal: controller.signal }), (err: unknown): boolean => err === reason);
+    assert.equal(host.sent.length, 0, "a pre-aborted snapshot sends no image request");
+  });
+
+  test("a snapshot issued with no connection is refused at once with NOT_CONNECTED, sending nothing and opening no stream", async () => {
+
+    const host = makeHost();
+    const cam = new CameraApi(host, entityId("camera", "front"));
+    const listenersBefore = host.bus.listenerCount("camera");
+
+    host.setConnection(null);
+
+    await assert.rejects(cam.snapshot({ timeoutMs: 1000 }), { code: "NOT_CONNECTED", constructor: NotConnectedError });
+    assert.equal(host.sent.length, 0, "a refused snapshot sends no image request");
+    assert.equal(host.bus.listenerCount("camera"), listenersBefore, "a refused snapshot opens no camera stream");
   });
 });
 

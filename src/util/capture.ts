@@ -18,12 +18,12 @@
  *
  * @module util/capture
  */
+import { CliError, translateConnectFailure } from "./cli-error.ts";
 import type { EspHomeLogging, Nullable } from "../types.ts";
 import type { InboundMessage, TransportLike, TransportOpenOptions } from "../transport.ts";
 import { ProtocolByte, Transport } from "../transport.ts";
 import { encodeVarint, readVarint } from "../protocol/codec.ts";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { CliError } from "./cli-error.ts";
 import type { DeviceInfo } from "../esphome-client.ts";
 import { MessageType } from "../protocol/message-types.ts";
 import { MockTransport } from "../testing/mock-transport.ts";
@@ -36,7 +36,7 @@ import { openEspHomeClient } from "../esphome-client.ts";
 const DEFAULT_DURATION_MS = 10000;
 
 // replayCapture is a deterministic offline driver: the frames are pre-queued, so a well-formed connect completes in milliseconds. Bound the overall connect
-// envelope so an undrivable capture (a missing discovery frame) surfaces the typed ConnectionError quickly instead of waiting the production default.
+// envelope so an undrivable capture (a missing discovery frame) surfaces as a timed-out connect quickly instead of waiting the production default.
 const REPLAY_CONNECT_TIMEOUT_MS = 5000;
 
 // Schema version stamped into every metadata file. Bump when the binary frame format or metadata-file shape changes incompatibly.
@@ -342,8 +342,8 @@ export async function recordCapture(options: RecordCaptureOptions): Promise<Capt
   const frames: InboundMessage[] = [];
 
   // `await using` disposes the connection on every exit path, including a throw during the capture window. The host owns the port default, so we forward `port` only
-  // when the caller set one rather than restating 6053 here.
-  await using client = await openEspHomeClient({
+  // when the caller set one rather than restating 6053 here. A connect that runs out the client's deadline is reported as a failure naming the host.
+  await using client = await translateConnectFailure(options.host, openEspHomeClient({
 
     host: options.host,
     keepAlive: false,
@@ -355,7 +355,7 @@ export async function recordCapture(options: RecordCaptureOptions): Promise<Capt
     // The factory receives the client's fully-resolved open options (host, port, log, frame/buffer limits, metrics, signal), so the tee wraps Transport.open(options)
     // with the client's own configuration - there is no second copy of any transport setting here to drift from the client's.
     transportFactory: async (transportOptions: TransportOpenOptions): Promise<TransportLike> => new RecordingTransport(await Transport.open(transportOptions), frames)
-  });
+  }));
 
   await delay(options.durationMs ?? DEFAULT_DURATION_MS);
 
@@ -443,8 +443,9 @@ export async function replayCaptureFrames(frames: readonly InboundMessage[], log
 
   // A synchronous `using` dispose is correct for an offline replay: there is no live peer, so we tear the client down with a plain TCP-style close rather than the async
   // graceful disconnect (a DISCONNECT_REQUEST plus a wait for a DISCONNECT_RESPONSE the peerless MockTransport can never send, which would stall the disposal until its
-  // timeout). The telemetry has already been counted in the body before this scope exits, and `using` still disposes on every exit path including a throw.
-  using client = await openEspHomeClient({
+  // timeout). The telemetry has already been counted in the body before this scope exits, and `using` still disposes on every exit path including a throw. A connect
+  // that runs out the replay's deadline is reported as a failure naming the replay host.
+  using client = await translateConnectFailure("replay", openEspHomeClient({
 
     connectTimeoutMs: REPLAY_CONNECT_TIMEOUT_MS,
     host: "replay",
@@ -454,7 +455,7 @@ export async function replayCaptureFrames(frames: readonly InboundMessage[], log
     psk: null,
     reconnect: false,
     transportFactory: (): MockTransport => transport
-  });
+  }));
 
   let telemetryEventCount = 0;
 

@@ -206,15 +206,19 @@ export interface WithReconnectClient {
 export interface WithReconnectOptions {
 
   /**
-   * Cancellation signal. Aborting drains the iterator and returns from the helper.
+   * Cancellation signal. Aborting ends the lifecycle stream, aborts the running body's signal, and rejects the helper's promise with this signal's reason once the body
+   * has settled.
    */
   signal?: AbortSignal;
 }
 
 /**
  * Run a body callback once per successful connect. The helper subscribes to {@link WithReconnectClient.lifecycle}, fires the body on the first observed `connect`
- * event (or immediately if the client is already connected when the helper starts), and re-fires on every subsequent `connect` after a `disconnect`. The body's
- * abort signal aborts the moment the matching `disconnect` arrives so re-entrant operations (`commandAndAwait`, `client.stream(...)` iterators) can wind down cleanly.
+ * event (or immediately if the client is already connected when the helper starts), and re-fires on every subsequent `connect` after a `disconnect`. When the
+ * connection drops, the teardown rejects the body's awaiting calls (a command wait, a snapshot, a sub-API request) with {@link ConnectionLostError} first, and the
+ * body's signal then aborts on the matching `disconnect`, which ends the body's stream iterators. A body tells a disconnect apart from another failure by
+ * `instanceof ConnectionLostError`, or by its signal's `aborted` flag after awaiting, never by comparing the rejection with its signal's reason, which those calls do
+ * not carry.
  *
  * Typical use: work bound to a single connection, such as a one-shot request whose answer can change between sessions or a command sequence that must restart
  * from its first step after a reconnect. Sub-API subscriptions (the voice assistant, logs, Home Assistant, camera streams, and the Bluetooth, serial, and Z-Wave
@@ -230,7 +234,7 @@ export interface WithReconnectOptions {
  * {@link EspHomeClient} but can be any compatible test harness).
  * @param body - Callback invoked on every successful connect. Receives the client and an `AbortSignal` that fires on the next disconnect; should respect it.
  * @param options - Optional outer cancellation signal.
- * @returns A promise that resolves when the outer signal aborts or the lifecycle stream ends.
+ * @returns A promise that resolves when the lifecycle stream ends, and rejects with the outer signal's reason when that signal aborts.
  */
 export async function withReconnect(client: WithReconnectClient, body: (client: WithReconnectClient, signal: AbortSignal) => Promise<void> | void,
   options?: WithReconnectOptions): Promise<void> {

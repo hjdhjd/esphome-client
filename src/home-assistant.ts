@@ -105,8 +105,8 @@ export interface HomeAssistantInboundContext {
 }
 
 /**
- * Narrow interface the {@link HomeAssistantApi} consumes from the host. Mirrors `LogSubscriptionManagerHost` and
- * {@link VoiceAssistantHost} - the bus and logger flow in for both inbound emit and outbound diagnostic, the decoder is reused by the inbound
+ * Narrow interface the {@link HomeAssistantApi} consumes from the host. Mirrors `LogSubscriptionManagerHost`, with no connection scope because no bridge call awaits
+ * a reply - the bus and logger flow in for inbound emit and outbound diagnostic alike, the decoder is reused by the inbound
  * dispatchers, and the synchronous frame-send hook backs the outbound subscribe-and-respond methods. The bridge never reads or writes host private state directly.
  *
  * @property bus - Event bus the inbound dispatchers emit decoded payloads to.

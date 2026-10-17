@@ -10,19 +10,24 @@ import type {
   BluetoothGATTService, BluetoothLERawAdvertisement, BluetoothProxyHost, BluetoothScannerStateData, ConnectionStateData, ConnectionsFreeData, NotifyDataChunk
 } from "./bluetooth-proxy.ts";
 import type { CapturedContractFrame, ContractFrameKind } from "./reissuable-subscription-contract.helpers.ts";
-import { ConnectionError, TruncatedMessageError } from "./errors.ts";
+import { ConnectionError, ConnectionLostError, NotConnectedError, TruncatedMessageError } from "./errors.ts";
+import type { EspHomeLogging, Nullable } from "./types.ts";
 import type { FieldValue, ProtoField } from "./protocol/codec.ts";
+import { MockTransport, pushHandshake } from "./testing/mock-transport.ts";
 import { decodeProtobuf, encodeProtoFields, encodeVarintBigInt } from "./protocol/codec.ts";
 import { describe, test } from "node:test";
 import { BluetoothProxyApi } from "./bluetooth-proxy.ts";
 import { Buffer } from "node:buffer";
 import type { ClientEventsMap } from "./esphome-client.ts";
+import type { ConnectionScope } from "./connection-scope.ts";
+import { EspHomeClient } from "./esphome-client.ts";
 import { EventBus } from "./event-bus.ts";
 import { MessageType } from "./protocol/message-types.ts";
-import type { Nullable } from "./types.ts";
 import { WireType } from "./protocol/wire-types.ts";
 import assert from "node:assert/strict";
+import { connectionLostError } from "./connection-scope.ts";
 import { runReissuableSubscriptionContract } from "./reissuable-subscription-contract.helpers.ts";
+import { setImmediate as settle } from "node:timers/promises";
 
 interface CapturedFrame {
 
@@ -37,21 +42,26 @@ interface HostHandle {
   host: BluetoothProxyHost;
   sent: CapturedFrame[];
   setBluetoothProxyFeatureFlags(flags?: number): void;
+  setConnection(controller: Nullable<AbortController>): void;
   warnLogs: string[];
 }
 
-// Build a fresh `BluetoothProxyHost` in one call. Each test gets its own bus, captured-frames buffer, and recording logger so assertions stay isolated.
+// Build a fresh `BluetoothProxyHost` in one call. Each test gets its own bus, captured-frames buffer, and recording logger so assertions stay isolated. The connection
+// lives in a closure, starting attached, so a test aborts it to stand for a teardown, sets it to `null` to stand for no transport, and installs a fresh controller
+// for the next connection; a spread copy of the host reads the same controller.
 function makeHost(): HostHandle {
 
   const bus = new EventBus<ClientEventsMap>();
   const sent: CapturedFrame[] = [];
   const debugLogs: string[] = [];
   const warnLogs: string[] = [];
+  let connection: Nullable<AbortController> = new AbortController();
   let flags: number | undefined;
 
   const host: BluetoothProxyHost = {
 
     bus,
+    connectionScope: (): ConnectionScope => ((connection === null) ? { kind: "none" } : { kind: "attached", signal: connection.signal }),
     deviceInfo: (): Nullable<{ bluetoothProxyFeatureFlags?: number }> => ((flags === undefined) ? null : { bluetoothProxyFeatureFlags: flags }),
     log: {
 
@@ -70,8 +80,28 @@ function makeHost(): HostHandle {
     host,
     sent,
     setBluetoothProxyFeatureFlags: (value?: number): void => { flags = value; },
+    setConnection: (controller: Nullable<AbortController>): void => { connection = controller; },
     warnLogs
   };
+}
+
+// A logger that records nothing, for the rows that construct a real client.
+function quietLogger(): EspHomeLogging {
+
+  return { debug: (): void => undefined, error: (): void => undefined, info: (): void => undefined, warn: (): void => undefined };
+}
+
+// Read the signal of the connection a host reports attached, failing the row when it reports none.
+function attachedSignal(host: BluetoothProxyHost): AbortSignal {
+
+  const scope = host.connectionScope();
+
+  if(scope.kind !== "attached") {
+
+    assert.fail("The host must report an attached connection, but its scope reads " + scope.kind + ".");
+  }
+
+  return scope.signal;
 }
 
 function decodeFields(payload: Buffer): Record<number, FieldValue[]> {
@@ -942,6 +972,46 @@ function readUint64Field(payload: Buffer, fieldNumber: number): bigint | undefin
 
   return undefined;
 }
+
+// The options a table row hands a wait: the caller's signal when the row passes one, and the wait's timeout.
+interface GattWaitOptions {
+
+  readonly signal?: AbortSignal;
+  readonly timeoutMs: number;
+}
+
+// One Bluetooth wait, issued with the minimum arguments it needs.
+interface GattWait {
+
+  readonly issue: (api: BluetoothProxyApi, address: bigint, options: GattWaitOptions) => Promise<unknown>;
+  readonly name: string;
+}
+
+// Every Bluetooth wait the not-connected rule covers, one entry per public call. `writeCharacteristic` asks for a response, since only a write that awaits one is a
+// wait; a write without a response is a fire-and-forget send, which the rule exempts.
+const GATT_WAITS: readonly GattWait[] = [
+
+  { issue: (api, address, options): Promise<unknown> => api.connect(address, options), name: "connect" },
+  { issue: (api, address, options): Promise<unknown> => api.disconnect(address, options), name: "disconnect" },
+  { issue: (api, address, options): Promise<unknown> => api.pair(address, options), name: "pair" },
+  { issue: (api, address, options): Promise<unknown> => api.unpair(address, options), name: "unpair" },
+  { issue: (api, address, options): Promise<unknown> => api.clearCache(address, options), name: "clearCache" },
+  { issue: (api, address, options): Promise<unknown> => api.getServices(address, options), name: "getServices" },
+  { issue: (api, address, options): Promise<unknown> => api.readCharacteristic(address, 1, options), name: "readCharacteristic" },
+  { issue: (api, address, options): Promise<unknown> => api.readDescriptor(address, 1, options), name: "readDescriptor" },
+  {
+
+    issue: (api, address, options): Promise<unknown> => api.writeCharacteristic(address, 1, Buffer.alloc(0), { ...options, response: true }),
+    name: "writeCharacteristic"
+  },
+  { issue: (api, address, options): Promise<unknown> => api.writeDescriptor(address, 1, Buffer.alloc(0), options), name: "writeDescriptor" },
+  { issue: (api, address, options): Promise<unknown> => api.setNotify(address, 1, true, options), name: "setNotify" },
+  {
+
+    issue: (api, address, options): Promise<unknown> => api.setConnectionParams(address, { latency: 0, maxInterval: 40, minInterval: 24, timeout: 400 }, options),
+    name: "setConnectionParams"
+  }
+];
 
 describe("BluetoothProxyApi.connect", () => {
 
@@ -1884,23 +1954,39 @@ describe("BluetoothProxyApi.acceptGattErrorResponse routing", () => {
 
 describe("BluetoothProxyApi.clearConnectionState and reissueOnReconnect (GATT)", () => {
 
-  test("clearConnectionState rejects every pending Correlator with AbortError; the cache clears", async () => {
+  for(const [ index, wait ] of GATT_WAITS.entries()) {
 
-    const handle = makeHost();
-    const api = new BluetoothProxyApi(handle.host);
-    const readPromise = api.readCharacteristic(0x160n, 0x2a);
-    const connectPromise = api.connect(0x161n);
+    test(wait.name + "(): a connection teardown rejects it with the connection-lost error; clearConnectionState() clears the cache and leaves it pending", async () => {
 
-    // Seed the cache, then verify it clears.
-    api.acceptDeviceConnectionResponse(encodeDeviceConnection(0x162n, true));
-    assert.equal(api.isConnected(0x162n), true);
+      const handle = makeHost();
+      const api = new BluetoothProxyApi(handle.host);
+      const connection = new AbortController();
+      const lost = connectionLostError();
 
-    api.clearConnectionState();
+      handle.setConnection(connection);
 
-    await assert.rejects(readPromise, { constructor: DOMException, name: "AbortError" });
-    await assert.rejects(connectPromise, { constructor: DOMException, name: "AbortError" });
-    assert.equal(api.isConnected(0x162n), false);
-  });
+      // Seed the connection-state cache under an address no wait in the table uses, so the reset below has an entry to clear.
+      api.acceptDeviceConnectionResponse(encodeDeviceConnection(0x1ffn, true));
+      assert.equal(api.isConnected(0x1ffn), true);
+
+      const pending = wait.issue(api, 0x160n + BigInt(index), { timeoutMs: 1000 });
+      let settled = false;
+
+      void pending.then((): void => { settled = true; }, (): void => { settled = true; });
+
+      // The participant reset clears the connection-scoped cache and ends no wait, so the wait is still parked a macrotask later.
+      api.clearConnectionState();
+      await settle();
+
+      assert.equal(api.isConnected(0x1ffn), false, "clearConnectionState() must clear the connection-state cache");
+      assert.equal(settled, false, "clearConnectionState() must leave a pending " + wait.name + "() pending");
+
+      // The connection's abort is what ends the wait, with the one error the teardown built.
+      connection.abort(lost);
+
+      await assert.rejects(pending, (err: unknown): boolean => err === lost);
+    });
+  }
 
   test("a surviving notify subscriber is re-armed with NOTIFY(enable=true) across clearConnectionState + reissueOnReconnect", () => {
 
@@ -1926,6 +2012,202 @@ describe("BluetoothProxyApi.clearConnectionState and reissueOnReconnect (GATT)",
       assert.equal(frame.type, MessageType.BLUETOOTH_GATT_NOTIFY_REQUEST);
       assert.equal(decodeFields(frame.payload)[3]?.[0], 1, "enable bit must be 1");
     }
+  });
+});
+
+describe("BluetoothProxyApi waits: an already-aborted signal, no connection, and a timeout", () => {
+
+  for(const wait of GATT_WAITS) {
+
+    test(wait.name + "() handed a signal already aborted rejects with its reason and sends nothing, on a free key and on a key a pending call holds", async () => {
+
+      const handle = makeHost();
+      const api = new BluetoothProxyApi(handle.host);
+      const connection = new AbortController();
+      const controller = new AbortController();
+      const lost = connectionLostError();
+      const reason = new Error("Cancelled before the request.");
+
+      handle.setConnection(connection);
+      controller.abort(reason);
+
+      await assert.rejects(wait.issue(api, 0x170n, { signal: controller.signal, timeoutMs: 1000 }), (err: unknown): boolean => err === reason);
+      assert.equal(handle.sent.length, 0, "a pre-aborted " + wait.name + "() must send nothing");
+
+      // A pending call holds the key, and the pre-aborted call still reports its caller's cancellation rather than the in-flight refusal.
+      const pending = wait.issue(api, 0x170n, { timeoutMs: 1000 });
+
+      await assert.rejects(wait.issue(api, 0x170n, { signal: controller.signal, timeoutMs: 1000 }), (err: unknown): boolean => err === reason);
+      assert.equal(handle.sent.length, 1, "only the pending " + wait.name + "() may send its request");
+
+      connection.abort(lost);
+      await assert.rejects(pending, (err: unknown): boolean => err === lost);
+    });
+  }
+
+  test("writeCharacteristic() without a response handed a signal already aborted rejects with its reason and sends nothing", async () => {
+
+    const handle = makeHost();
+    const api = new BluetoothProxyApi(handle.host);
+    const controller = new AbortController();
+    const reason = new Error("Cancelled before the write.");
+
+    controller.abort(reason);
+
+    await assert.rejects(api.writeCharacteristic(0x170n, 1, Buffer.from([0x01]), { signal: controller.signal }), (err: unknown): boolean => err === reason);
+    assert.equal(handle.sent.length, 0);
+  });
+
+  for(const wait of GATT_WAITS) {
+
+    test(wait.name + "() with no connection rejects NOT_CONNECTED and sends nothing; a pre-aborted call rejects with its reason; a connection admits it", async () => {
+
+      const handle = makeHost();
+      const api = new BluetoothProxyApi(handle.host);
+      const controller = new AbortController();
+      const reason = new Error("Cancelled before the request.");
+
+      handle.setConnection(null);
+      controller.abort(reason);
+
+      await assert.rejects(wait.issue(api, 0x150n, { timeoutMs: 1000 }), { code: "NOT_CONNECTED", constructor: NotConnectedError });
+      await assert.rejects(wait.issue(api, 0x150n, { signal: controller.signal, timeoutMs: 1000 }), (err: unknown): boolean => err === reason);
+      assert.deepEqual(handle.sent, [], "a refused " + wait.name + "() must send nothing");
+
+      // The refusal claimed no in-flight slot, so the same call is admitted, and sends its request, once the fake holds a connection.
+      const connection = new AbortController();
+      const lost = connectionLostError();
+
+      handle.setConnection(connection);
+
+      const admitted = wait.issue(api, 0x150n, { timeoutMs: 1000 });
+
+      assert.equal(handle.sent.length, 1, "an admitted " + wait.name + "() must send its request");
+
+      connection.abort(lost);
+      await assert.rejects(admitted, (err: unknown): boolean => err === lost);
+    });
+  }
+
+  test("a getServices() refused for no connection seeds no accumulator, so a services-done frame for its address is logged as stray", async () => {
+
+    const handle = makeHost();
+    const api = new BluetoothProxyApi(handle.host);
+    const strayLines = (): number => handle.debugLogs.filter((line): boolean => line.startsWith("Stray BluetoothGATTGetServicesDoneResponse")).length;
+
+    handle.setConnection(null);
+
+    await assert.rejects(api.getServices(0x150n), { code: "NOT_CONNECTED", constructor: NotConnectedError });
+
+    const before = strayLines();
+
+    api.acceptGetServicesDoneResponse(encodeProtoFields([{ fieldNumber: 1, value: 0x150n, wireType: WireType.VARINT }]));
+
+    assert.equal(strayLines(), before + 1);
+  });
+
+  test("writeCharacteristic() without a response is not refused with no connection: it resolves and hands its frame to the send hook", async () => {
+
+    const handle = makeHost();
+    const api = new BluetoothProxyApi(handle.host);
+
+    handle.setConnection(null);
+
+    await api.writeCharacteristic(0x150n, 1, Buffer.from([0x01]));
+
+    assert.equal(handle.sent.length, 1);
+    assert.equal(handle.sent[0]!.type, MessageType.BLUETOOTH_GATT_WRITE_REQUEST);
+  });
+
+  test("a wait the device never answers rejects with its own timeout's TimeoutError, unwrapped", async (t) => {
+
+    const handle = makeHost();
+    const api = new BluetoothProxyApi(handle.host);
+    const built: { milliseconds: number; signal: AbortSignal }[] = [];
+    const platformTimeout = AbortSignal.timeout.bind(AbortSignal);
+
+    // Capture each signal `AbortSignal.timeout` builds, delegating to the platform so a captured signal fires as a real one would. The test's mock context restores
+    // the platform method when the test ends.
+    t.mock.method(AbortSignal, "timeout", (milliseconds: number): AbortSignal => {
+
+      const signal = platformTimeout(milliseconds);
+
+      built.push({ milliseconds, signal });
+
+      return signal;
+    });
+
+    const start = performance.now();
+    const pending = api.readCharacteristic(0x180n, 1, { timeoutMs: 20 });
+    const timeout = built.find((entry): boolean => entry.milliseconds === 20)?.signal;
+
+    assert.ok(timeout, "the wait must build its timeout through AbortSignal.timeout with the duration it was given");
+
+    await assert.rejects(pending, (err: unknown): boolean => err === timeout.reason);
+
+    const elapsed = performance.now() - start;
+
+    assert.equal((timeout.reason as DOMException).name, "TimeoutError", "the reason is the platform's own TimeoutError");
+
+    // The identity holds for a timeout of any duration, so this bound is what ties the rejection to the timeout the wait asked for.
+    assert.ok(elapsed < 500, "the requested timeout, not a slower one, must end the wait - observed " + String(elapsed) + " ms");
+  });
+});
+
+describe("BluetoothProxyApi over a real client", () => {
+
+  test("reads end with the connection that carried them, a read whose own send disconnects included, and are refused while no connection is attached", async (t) => {
+
+    const firstTransport = new MockTransport();
+    const secondTransport = new MockTransport();
+    const transportQueue = [ firstTransport, secondTransport ];
+    const client = new EspHomeClient({ host: "test.local", logger: quietLogger(), reconnect: false,
+      transportFactory: (): MockTransport => transportQueue.shift() ?? new MockTransport() });
+    const host = (client.bluetooth as unknown as { host: BluetoothProxyHost }).host;
+
+    pushHandshake(firstTransport);
+    await client.connect({ signal: AbortSignal.timeout(2000) });
+
+    // A read pending when disconnect() tears its connection down rejects at once with the connection-lost error that teardown aborted the connection with.
+    const first = attachedSignal(host);
+    const pending = client.bluetooth.readCharacteristic(0x180n, 1, { timeoutMs: 5000 });
+    const disconnectedAt = Date.now();
+
+    client.disconnect();
+
+    await assert.rejects(pending, (err: unknown): boolean => err === first.reason);
+    assert.ok(first.reason instanceof ConnectionLostError, "the disconnect must abort the connection with a connection-lost error");
+    assert.ok((Date.now() - disconnectedAt) < 250, "the pending read must reject at the disconnect, far short of its timeout");
+
+    // With no connection attached, a read is refused at once.
+    await assert.rejects(client.bluetooth.readCharacteristic(0x180n, 1, { timeoutMs: 5000 }), { code: "NOT_CONNECTED", constructor: NotConnectedError });
+
+    pushHandshake(secondTransport);
+    await client.connect({ signal: AbortSignal.timeout(2000) });
+
+    // On a fresh connection, the disconnect lands inside the read's own send, after the read was admitted and before it parks on its correlator, so the wait it
+    // reaches must already be ended rather than parked on a signal that fired.
+    const second = attachedSignal(host);
+    const platformSend = secondTransport.send.bind(secondTransport);
+
+    t.mock.method(secondTransport, "send", async (type: number, payload: Buffer): Promise<void> => {
+
+      if(type === MessageType.BLUETOOTH_GATT_READ_REQUEST) {
+
+        client.disconnect();
+      }
+
+      await platformSend(type, payload);
+    });
+
+    const issuedAt = Date.now();
+
+    await assert.rejects(client.bluetooth.readCharacteristic(0x180n, 1, { timeoutMs: 5000 }), (err: unknown): boolean => err === second.reason);
+
+    const elapsed = Date.now() - issuedAt;
+
+    assert.ok(elapsed < 250, "the read must reject at once, far short of its timeout: " + String(elapsed) + " ms");
+    assert.ok(second.reason instanceof ConnectionLostError, "the disconnect must abort the connection with a connection-lost error");
   });
 });
 

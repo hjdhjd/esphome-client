@@ -20,10 +20,10 @@ import { AlarmControlPanelCommand, AlarmControlPanelState, BluetoothScannerMode,
   LogLevel, MediaPlayerCommand, MediaPlayerState, RadioFrequencyModulation, SerialProxyLineStateFlags, SerialProxyParity, SerialProxyPortType, SerialProxyStatus,
   VoiceAssistantEvent, VoiceAssistantSubscribeFlag } from "../api-constants.ts";
 import type { AlarmControlPanelEvent, ClimateEvent, CoverEvent, FanEvent, LockEvent, MediaPlayerEvent, SirenEvent, SwitchEvent } from "../schemas/entity-types.ts";
-import { BackpressureError, BufferOverflowError, CameraStreamClosedError, ConfigurationError, ConnectionClosedByPeerError, ConnectionError, ConnectionRefusedError,
+import { BackpressureError, BufferOverflowError, ConfigurationError, ConnectionClosedByPeerError, ConnectionError, ConnectionLostError, ConnectionRefusedError,
   ConnectionTimeoutError, EncryptionKeyInvalidError, EncryptionKeyMissingError, EncryptionRequiredError, EspHomeError, FrameTooLargeError, HandshakeError,
-  HeartbeatStalledError, NegotiationFailedError, NoiseHandshakeError, NoiseHandshakeTimeoutError, PeerClosedDuringNoiseError, PermanentError,
-  PlaintextHandshakeError, ProtocolError } from "../errors.ts";
+  HeartbeatStalledError, NegotiationFailedError, NoiseHandshakeError, NotConnectedError, PeerClosedDuringNoiseError, PermanentError, PlaintextHandshakeError,
+  ProtocolError } from "../errors.ts";
 import type { ClientEventsMap, DeviceInfo, EspHomeClientOptions, ExecuteServiceArgumentValue } from "../esphome-client.ts";
 import type { Entity, ExtraSchemaSet, TelemetryEvent } from "../schemas/index.ts";
 import { EspHomeClient, openEspHomeClient } from "../esphome-client.ts";
@@ -159,10 +159,11 @@ export async function disconnectAndCleanupExample(client: EspHomeClient): Promis
 // #endregion disconnect-and-cleanup
 
 /**
- * Run a body callback once per successful connect. The body's signal aborts on the next disconnect so re-entrant operations (`commandAndAwait`, streams) wind down
- * before the next connect attempt. The body's first parameter is the structural `WithReconnectClient` interface (health + lifecycle); to reach the full surface
- * (sub-APIs, command, telemetry stream), close over the outer `client` reference. Sub-API subscriptions are taken once, before the helper, because the host
- * reissues them after every reconnect; the body keeps to work that belongs to one connection.
+ * Run a body callback once per successful connect. A disconnect rejects the body's awaiting calls (`commandAndAwait`, a snapshot, a sub-API request) with the
+ * connection-lost error, and the body's signal, which aborts on the same disconnect, ends its stream iterators before the next connect attempt. The body's first
+ * parameter is the structural `WithReconnectClient` interface (health + lifecycle); to reach the full surface (sub-APIs, command, telemetry stream), close over the
+ * outer `client` reference. Sub-API subscriptions are taken once, before the helper, because the host reissues them after every reconnect; the body keeps to work
+ * that belongs to one connection. The helper rejects with the outer signal's own reason once that signal aborts.
  */
 // #region with-reconnect
 export async function withReconnectExample(client: EspHomeClient): Promise<void> {
@@ -170,14 +171,27 @@ export async function withReconnectExample(client: EspHomeClient): Promise<void>
   // The host reissues the voice-assistant subscription after every reconnect, so it is taken once, outside the helper.
   client.voiceAssistant.subscribe();
 
-  await withReconnect(client, async (_, signal) => {
+  const deadline = AbortSignal.timeout(60000);
 
-    // A device can come back from a reboot or a reflash with different wake words, so each connection asks it for a fresh configuration. The body's signal
-    // abandons the request if the connection drops first.
-    const configuration = await client.voiceAssistant.configuration({ refresh: true, signal });
+  try {
 
-    log.info("The device reported its voice-assistant configuration for this connection.", configuration);
-  }, { signal: AbortSignal.timeout(60000) });
+    await withReconnect(client, async (_, signal) => {
+
+      // A device can come back from a reboot or a reflash with different wake words, so each connection asks it for a fresh configuration. A connection that drops
+      // first rejects the request with the connection-lost error, which ends this connection's body; the next connect runs it again.
+      const configuration = await client.voiceAssistant.configuration({ refresh: true, signal });
+
+      log.info("The device reported its voice-assistant configuration for this connection.", configuration);
+    }, { signal: deadline });
+
+  } catch(error) {
+
+    // The helper rejects with the outer signal's own reason when our deadline ends it, so we tell that planned end apart from a failure by identity.
+    if(error !== deadline.reason) {
+
+      throw error;
+    }
+  }
 }
 // #endregion with-reconnect
 
@@ -553,7 +567,7 @@ export async function connectThenConstructExample(
   // restart the wait on the `entities` event or accept the snapshot at gate-resolution time as "constructed".
   const expected = new Set<EntityId>(client.entitiesByDevice(0).filter(predicate).map((entity) => entityId(entity.type, entity.objectId)));
 
-  // Compose caller signal over the internal timeout - mirrors the convention used by camera, serial-proxy, voice-assistant, and the run-phase handshake.
+  // Compose the caller's signal over the internal timeout, so whichever fires first ends the wait with its own reason. The composite lives only as long as this wait.
   const composedSignal = signal ? AbortSignal.any([ signal, AbortSignal.timeout(timeoutMs) ]) : AbortSignal.timeout(timeoutMs);
 
   const matchesExpected = (snapshot: ReadonlyMap<EntityId, TelemetryEvent>): boolean => expected.values().every((id) => snapshot.has(id));
@@ -1083,9 +1097,10 @@ export async function logSubscriptionExample(client: EspHomeClient): Promise<voi
  * narrowed code unions ({@link NoiseHandshakeError.code}, {@link BackpressureError.dropped}) for precise dispatch.
  *
  * The narrowing chain below progresses from most-specific to most-general. Encryption errors (all extending {@link PermanentError}) come first because they signal
- * configuration mistakes the auto-reconnect loop should not retry. Noise-handshake subclasses come next so the timeout / peer-closed cases can branch separately
- * from the generic noise failure. The structural families ({@link HandshakeError}, {@link ConnectionError}, {@link ProtocolError}) are the catch-all rails - any
- * subclass not enumerated above falls into the appropriate family branch. {@link EspHomeError} is the final library-level rail before the bare-`Error` re-throw.
+ * configuration mistakes the auto-reconnect loop should not retry. Noise-handshake subclasses come next so the peer-closed case can branch separately from the
+ * generic noise failure. The structural families ({@link HandshakeError}, {@link ConnectionError}, {@link ProtocolError}) are the catch-all rails - any subclass not
+ * enumerated above falls into the appropriate family branch. {@link EspHomeError} is the final library-level rail, and a connect or handshake timeout, which rejects
+ * with the platform `TimeoutError` rather than a library class, comes after it, before the re-throw of anything else.
  */
 // #region error-class-enumeration
 export async function errorClassEnumerationExample(): Promise<void> {
@@ -1121,14 +1136,8 @@ export async function errorClassEnumerationExample(): Promise<void> {
       return;
     }
 
-    // Noise-handshake-specific failures. Order matters: the timeout and peer-closed subclasses must come before the NoiseHandshakeError parent so the tagged
-    // `code` field on those subclasses (HANDSHAKE_TIMEOUT / PEER_CLOSED_NOISE / PEER_PLAINTEXT_DURING_NOISE) does not collapse into the parent branch.
-    if(error instanceof NoiseHandshakeTimeoutError) {
-
-      // Per-step handshake timeout elapsed.
-      return;
-    }
-
+    // Noise-handshake-specific failures. Order matters: the peer-closed subclass must come before the NoiseHandshakeError parent so its tagged `code`
+    // (PEER_CLOSED_NOISE / PEER_PLAINTEXT_DURING_NOISE) does not collapse into the parent branch.
     if(error instanceof PeerClosedDuringNoiseError) {
 
       // Peer closed mid-handshake or sent a plaintext indicator byte.
@@ -1176,6 +1185,13 @@ export async function errorClassEnumerationExample(): Promise<void> {
       return;
     }
 
+    if(error instanceof ConnectionLostError) {
+
+      // The connection a request was issued on was torn down before the request completed, or a disconnect cut a manual connect short. `cause` carries what ended
+      // the connection when the teardown knew it.
+      return;
+    }
+
     if(error instanceof HandshakeError) {
 
       // Catch-all for any handshake subclass not enumerated above (forward-compat).
@@ -1215,17 +1231,24 @@ export async function errorClassEnumerationExample(): Promise<void> {
       return;
     }
 
-    // Operational stream-closed: the bus stream backing `camera(id).snapshot()` ended (transport dropped) before an image arrived. Carries the branded `cameraId`
-    // and the tagged `STREAM_CLOSED` code so a consumer awaiting multiple cameras can correlate which snapshot failed.
-    if(error instanceof CameraStreamClosedError) {
+    // An awaiting request issued with no connection to carry it, so nothing was sent. `code` is CONNECT_IN_PROGRESS when a connect was running as the call was
+    // issued, so the call can be issued again from a connect listener, and NOT_CONNECTED otherwise.
+    if(error instanceof NotConnectedError) {
 
-      log.error("The camera stream closed before an image arrived.", error.cameraId, error.code);
+      log.error("The request was issued with no connection to carry it.", error.code);
 
       return;
     }
 
     // Library-level catch-all. Any EspHomeError subclass not narrowed above (ConfigurationError from a misuse path, etc.) falls here.
     if(error instanceof EspHomeError) {
+
+      return;
+    }
+
+    // The library's connect or handshake timeout elapsed. The open was given no signal of its own, so a platform TimeoutError here can only be the library's; the
+    // step it elapsed in is logged at debug level.
+    if((error instanceof DOMException) && (error.name === "TimeoutError")) {
 
       return;
     }
@@ -1237,19 +1260,40 @@ export async function errorClassEnumerationExample(): Promise<void> {
 // #endregion error-class-enumeration
 
 /**
- * {@link EspHomeClient.commandAndAwait} surfaces a handful of distinct rejection paths: {@link ConfigurationError} codes for a malformed id (`MALFORMED_ENTITY_ID`),
- * an id no entity is registered for (`UNKNOWN_ENTITY_ID`), and a state stream that ended before a match (`AWAIT_STREAM_CLOSED`), plus {@link DOMException} for the
- * abort/timeout cases. The fire-and-forget
+ * {@link EspHomeClient.commandAndAwait} surfaces a handful of distinct rejection paths: {@link NotConnectedError} for a call issued with no connection to carry it,
+ * {@link ConfigurationError} codes for a malformed id (`MALFORMED_ENTITY_ID`) and an id no entity is registered for (`UNKNOWN_ENTITY_ID`),
+ * {@link ConnectionLostError} when the connection the command was issued on is torn down first, and the caller signal's own reason or the default deadline's
+ * `TimeoutError`. The caller's own deadline is told apart by identity, so the library's timeout is never mistaken for it. The fire-and-forget
  * {@link EspHomeClient.command} never throws - it logs and drops on encoder failures and unknown ids.
  */
 // #region command-error-handling
 export async function commandErrorHandlingExample(client: EspHomeClient, lightId: EntityId<"light">): Promise<void> {
 
+  const deadline = AbortSignal.timeout(2000);
+
   try {
 
-    await client.commandAndAwait(lightId, { state: true }, { signal: AbortSignal.timeout(2000) });
+    await client.commandAndAwait(lightId, { state: true }, { signal: deadline });
 
   } catch(error) {
+
+    if(error === deadline.reason) {
+
+      // Our own deadline elapsed first.
+      return;
+    }
+
+    if(error instanceof NotConnectedError) {
+
+      // No connection could carry the command, so nothing was sent. CONNECT_IN_PROGRESS means a connect was running; a connect listener can issue it again.
+      return;
+    }
+
+    if(error instanceof ConnectionLostError) {
+
+      // The connection was torn down before the light confirmed the command.
+      return;
+    }
 
     if(error instanceof ConfigurationError) {
 
@@ -1262,21 +1306,16 @@ export async function commandErrorHandlingExample(client: EspHomeClient, lightId
 
         case "UNKNOWN_ENTITY_ID":
 
-          // The id parses but the entity is not registered on the current connection - typically discovery has not completed.
-          break;
-
-        case "AWAIT_STREAM_CLOSED":
-
-          // The state stream ended before a matching state event arrived, which the client's own connection lifecycle never causes.
+          // The id parses but the entity is not registered on the current connection.
           break;
       }
 
       return;
     }
 
-    if((error instanceof DOMException) && ((error.name === "AbortError") || (error.name === "TimeoutError"))) {
+    if((error instanceof DOMException) && (error.name === "TimeoutError")) {
 
-      // Caller signal aborted or the 2000ms default deadline elapsed.
+      // The 2000ms default deadline elapsed before the light confirmed the command.
       return;
     }
 
@@ -1495,12 +1534,11 @@ export async function voiceAssistantConfigurationExample(client: EspHomeClient):
 // #endregion voice-assistant-configuration
 
 /**
- * Capture one image. The await composes the caller's optional signal with a 5000ms timeout; multi-packet reassembly is owned by the sub-API. Repeated `client.camera(id)`
- * calls return the same instance for the lifetime of the client.
+ * Capture one image. The await follows the caller's optional signal, a 5000ms timeout, and the connection; multi-packet reassembly is owned by the sub-API. Repeated
+ * `client.camera(id)` calls return the same instance for the lifetime of the client.
  *
- * Two operational rejection paths the consumer narrows on: {@link DOMException} (timeout or caller abort) and {@link CameraStreamClosedError} (the transport
- * disconnected before any image arrived for this camera id - the typed error carries `code: "STREAM_CLOSED"` and the branded `cameraId` so consumers awaiting multiple
- * cameras can correlate the rejection).
+ * Three operational rejection paths the consumer narrows on: {@link ConnectionLostError} (the connection was torn down before any image arrived), the caller signal's
+ * own reason or the timeout's `TimeoutError`, and {@link NotConnectedError} (the snapshot was requested with no connection to carry it, so nothing was sent).
  */
 // #region camera-snapshot
 export async function cameraSnapshotExample(client: EspHomeClient): Promise<Nullable<Buffer>> {
@@ -1514,17 +1552,23 @@ export async function cameraSnapshotExample(client: EspHomeClient): Promise<Null
 
   } catch(error) {
 
-    if(error instanceof CameraStreamClosedError) {
+    if(error instanceof ConnectionLostError) {
 
-      // Transport disconnected mid-snapshot. The `code` tag is `STREAM_CLOSED`; `cameraId` names the failing camera for log correlation.
-      log.error("The transport disconnected before the snapshot arrived.", error.code, error.cameraId);
+      // The connection dropped mid-snapshot. Every request it carried rejects with the same error, whose `cause` says what ended the connection when known.
+      log.error("The connection ended before the snapshot arrived.", camId);
 
       return null;
     }
 
-    if((error instanceof DOMException) && ((error.name === "AbortError") || (error.name === "TimeoutError"))) {
+    if((error instanceof DOMException) && (error.name === "TimeoutError")) {
 
-      // Timeout elapsed or the caller aborted.
+      // The snapshot's 5000ms timeout or our own 8000ms deadline elapsed. Each rejects with a TimeoutError, and this example handles them alike.
+      return null;
+    }
+
+    if(error instanceof NotConnectedError) {
+
+      // No connection could carry the request, so nothing was sent.
       return null;
     }
 

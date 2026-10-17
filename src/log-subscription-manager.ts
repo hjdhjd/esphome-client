@@ -57,8 +57,8 @@ import { logLevelName } from "./api-constants.ts";
 const LOG_CHANNEL = 0;
 
 /**
- * Narrow interface the manager consumes from the host. Mirrors {@link CameraHost} / {@link VoiceAssistantHost} - the bus and logger flow in, plus
- * a synchronous frame-send hook. The manager never reads or writes host private state directly.
+ * Narrow interface the manager consumes from the host. Mirrors {@link VoiceAssistantHost} without its connection scope, since a log subscription awaits no reply -
+ * the bus and logger flow in, plus a synchronous frame-send hook. The manager never reads or writes host private state directly.
  */
 export interface LogSubscriptionManagerHost {
 

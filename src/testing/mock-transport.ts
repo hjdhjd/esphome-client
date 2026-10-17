@@ -36,6 +36,7 @@ import type { Nullable, ServiceEntity } from "../types.ts";
 import { encodePackedSint32, encodeProtoFields, encodeVarint, encodeVarintBigInt } from "../protocol/codec.ts";
 import type { BaseEntity } from "../schemas/index.ts";
 import { Buffer } from "node:buffer";
+import { ConnectionClosedByPeerError } from "../errors.ts";
 import type { DeviceInfo } from "../esphome-client.ts";
 import { ENTITY_SCHEMAS } from "../schemas/index.ts";
 import { MessageType } from "../protocol/message-types.ts";
@@ -235,7 +236,8 @@ export class MockTransport implements TransportLike {
   }
 
   /**
-   * Simulate a fatal transport error. Pending awaiters reject, a pending {@link whenIdle} resolves, and subsequent calls reject with the same error.
+   * Simulate a fatal transport error. Pending awaiters reject, a pending {@link whenIdle} resolves, and subsequent calls reject with the same error, the inbound
+   * iterator once it has yielded the messages already queued, as the real transport does.
    *
    * @param error - The error to surface.
    */
@@ -258,23 +260,7 @@ export class MockTransport implements TransportLike {
       awaiter.reject(error);
     }
 
-    if(this.handshakeAwaiter) {
-
-      const awaiter = this.handshakeAwaiter;
-
-      this.handshakeAwaiter = null;
-      this.cleanupAwaiterSignal(awaiter);
-      awaiter.reject(error);
-    }
-
-    if(this.firstByteAwaiter) {
-
-      const awaiter = this.firstByteAwaiter;
-
-      this.firstByteAwaiter = null;
-      this.cleanupAwaiterSignal(awaiter);
-      awaiter.reject(error);
-    }
+    this.rejectParkedValueAwaiters(error);
   }
 
   /**
@@ -363,12 +349,7 @@ export class MockTransport implements TransportLike {
         }
 
         this.cleanupAwaiterSignal(awaiter);
-
-        // Forward the abort reason as-is. AbortSignal.reason can be any value (per the DOM spec); when callers used `AbortSignal.timeout(...)` it is a DOMException
-        // which is an Error subclass. We coerce non-Error reasons to a plain Error wrapping the value to satisfy the prefer-promise-reject-errors lint.
-        const reason: Error = (signal.reason instanceof Error) ? signal.reason : new Error("Aborted: " + String(signal.reason));
-
-        reject(reason);
+        reject(signal.reason);
       };
 
       awaiter.signalListener = listener;
@@ -409,12 +390,7 @@ export class MockTransport implements TransportLike {
         }
 
         this.cleanupAwaiterSignal(awaiter);
-
-        // Forward the abort reason as-is. AbortSignal.reason can be any value (per the DOM spec); when callers used `AbortSignal.timeout(...)` it is a DOMException
-        // which is an Error subclass. We coerce non-Error reasons to a plain Error wrapping the value to satisfy the prefer-promise-reject-errors lint.
-        const reason: Error = (signal.reason instanceof Error) ? signal.reason : new Error("Aborted: " + String(signal.reason));
-
-        reject(reason);
+        reject(signal.reason);
       };
 
       awaiter.signalListener = listener;
@@ -477,7 +453,8 @@ export class MockTransport implements TransportLike {
   /**
    * Async-iterator factory backing the inbound-message stream. Implements the {@link TransportLike} async-iterable contract; the host's
    * {@link MessageReceiver} pulls inbound messages from this iterator. Each call to `next()` either returns a queued message
-   * (pushed via {@link MockTransport.pushInbound}) or parks an awaiter that resolves when the next message arrives. Returns the terminal `done` sentinel after
+   * (pushed via {@link MockTransport.pushInbound}) or parks an awaiter that resolves when the next message arrives. Queued messages come first, as the real
+   * transport yields them: once they are drained, `next()` rejects with the error {@link MockTransport.fail} stored, or returns the terminal `done` sentinel after
    * disposal.
    *
    * @returns An async iterator that yields one {@link InboundMessage} per pushed frame.
@@ -488,16 +465,16 @@ export class MockTransport implements TransportLike {
 
       next: async (): Promise<IteratorResult<InboundMessage>> => {
 
-        if(this.fatalError) {
-
-          throw this.fatalError;
-        }
-
         const queued = this.messageQueue.shift();
 
         if(queued) {
 
           return { done: false, value: queued };
+        }
+
+        if(this.fatalError) {
+
+          throw this.fatalError;
         }
 
         if(this.terminated) {
@@ -548,6 +525,27 @@ export class MockTransport implements TransportLike {
       this.messageAwaiter = null;
       this.cleanupAwaiterSignal(awaiter);
       awaiter.resolve({ done: true, value: undefined });
+    }
+
+    this.rejectParkedValueAwaiters(new ConnectionClosedByPeerError("Transport disposed.", "TRANSPORT_DISPOSED"));
+  }
+
+  // Reject a parked first-byte or handshake awaiter with the error that ended the transport. A fault and a dispose each settle them, as the real transport's do, so a
+  // setup wait parked on a transport that has ended rejects at once rather than waiting for its signal or parking forever.
+  private rejectParkedValueAwaiters(error: Error): void {
+
+    const parked = [ this.handshakeAwaiter, this.firstByteAwaiter ];
+
+    this.handshakeAwaiter = null;
+    this.firstByteAwaiter = null;
+
+    for(const awaiter of parked) {
+
+      if(awaiter) {
+
+        this.cleanupAwaiterSignal(awaiter);
+        awaiter.reject(error);
+      }
     }
   }
 

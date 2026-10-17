@@ -17,7 +17,7 @@ import {
   parseInvocation, parseJsonOption, parsePercent, parseRgb, printInteractiveHelp, runCapabilities, runDevices, runInfo, runInteractiveControl, runList, runSnapshot,
   showUsage, tryParseIntStrict
 } from "./espc.ts";
-import { CliError, isUserFacingError } from "./cli-error.ts";
+import { CliError, isUserFacingError, translateConnectFailure } from "./cli-error.ts";
 import type { CommandOptions, ControlClient, EntityWithId, Invocation, PrinterLevel } from "./espc.ts";
 import type { Entity, EntityType, TelemetryEvent } from "../schemas/index.ts";
 import { describe, test } from "node:test";
@@ -29,6 +29,7 @@ import { ConnectionRefusedError } from "../errors.ts";
 import type { DeviceInfo } from "../esphome-client.ts";
 import { ENTITY_SCHEMAS } from "../schemas/index.ts";
 import type { EntityId } from "../entity-id.ts";
+import { EspHomeClient } from "../esphome-client.ts";
 import { MockClient } from "../testing/mock-client.ts";
 import type { Nullable } from "../types.ts";
 import assert from "node:assert/strict";
@@ -554,6 +555,49 @@ describe("isUserFacingError - the failure classification the binary and the REPL
       "a thrown string" ];
 
     assert.deepEqual(thrown.map((error): boolean => isUserFacingError(error)), [ true, true, false, false ]);
+  });
+});
+
+describe("translateConnectFailure - the CLI's report of a connect that timed out", () => {
+
+  test("turns a TimeoutError rejection into a CliError naming the host, with the rejection as its cause", async () => {
+
+    const timeout = new DOMException("The operation was aborted due to timeout.", "TimeoutError");
+
+    await assert.rejects(translateConnectFailure("192.0.2.1", Promise.reject(timeout)), (error: unknown): boolean => {
+
+      assert.ok(error instanceof CliError, "a timed-out connect must reach the bin as a user-facing CliError");
+      assert.match(error.message, /192\.0\.2\.1/, "the failure must name the host");
+      assert.equal(error.cause, timeout, "the failure must carry the TimeoutError as its cause");
+
+      return true;
+    });
+  });
+
+  test("hands back a cancellation and every other rejection as it is", async () => {
+
+    const cancelled = new DOMException("cancelled", "AbortError");
+    const refused = new Error("socket refused");
+
+    await assert.rejects(translateConnectFailure("192.0.2.1", Promise.reject(cancelled)), (error: unknown): boolean => error === cancelled);
+    await assert.rejects(translateConnectFailure("192.0.2.1", Promise.reject(refused)), (error: unknown): boolean => error === refused);
+  });
+
+  test("espc reports a connect that timed out as a CliError whose cause is the TimeoutError", async (t) => {
+
+    const timeout = new DOMException("The operation was aborted due to timeout.", "TimeoutError");
+    const { printer } = makePrinter();
+
+    t.mock.method(EspHomeClient.prototype, "connect", (): Promise<void> => Promise.reject(timeout));
+
+    await assert.rejects(dispatch(parseInvocation([ "-h", "127.0.0.1", "info" ]), printer), (error: unknown): boolean => {
+
+      assert.ok(error instanceof CliError, "espc's timed-out connect must reach the bin as a user-facing CliError");
+      assert.match(error.message, /127\.0\.0\.1/, "the failure must name the host");
+      assert.equal(error.cause, timeout, "the failure must carry the TimeoutError as its cause");
+
+      return true;
+    });
   });
 });
 

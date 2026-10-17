@@ -6,8 +6,7 @@
 import { API_FEATURE_VERSIONS, deviceSupports } from "../api-feature-versions.ts";
 import type { ClientMetrics, EspHomeLogging, NoiseServerHello, Nullable, PskResolver } from "../types.ts";
 import {
-  EncryptionKeyInvalidError, EncryptionKeyMissingError, EncryptionRequiredError, NegotiationFailedError,
-  NoiseHandshakeError, NoiseHandshakeTimeoutError, PlaintextHandshakeError, ProtocolError
+  EncryptionKeyInvalidError, EncryptionKeyMissingError, EncryptionRequiredError, NegotiationFailedError, NoiseHandshakeError, PlaintextHandshakeError, ProtocolError
 } from "../errors.ts";
 import { MessageType, WireType } from "../protocol/index.ts";
 import { decodeProtobuf, encodeProtoFields } from "../protocol/codec.ts";
@@ -138,7 +137,7 @@ const KEY_REJECTED_REASON = "Handshake MAC failure";
  * authenticated: the device's in-band rejection of the key (header != 0 with ESPHome's wrong-key reason), OR a local AEAD failure decrypting the reply
  * (`AUTH_FAILED`), OR a malformed / low-order peer ephemeral that fails X25519 key agreement (`INVALID_REMOTE_KEY`). Every enumerated failure above is a permanent
  * bad-key failure; the granular cause code is preserved on the error's `cause` chain.
- * @throws {NoiseHandshakeTimeoutError} when the abort signal fires (timeout or user-driven abort).
+ * @throws The abort signal's own reason when the signal fires: the platform `TimeoutError` of a timeout, or a caller's reason, unchanged.
  * @throws {PlaintextHandshakeError} when the announced server name does not match the expected name.
  */
 export async function performNoiseHandshake(input: NoiseHandshakeInput): Promise<void> {
@@ -241,7 +240,7 @@ export async function performNoiseHandshake(input: NoiseHandshakeInput): Promise
     // the phase context the primitive lacks, so we re-tag every genuine bad-key code into the permanent EncryptionKeyInvalidError. The framing / internal codes
     // (TRUNCATED_E, CT_TOO_SHORT, MISSING_KEYS, HANDSHAKE_COMPLETE) are NOT key problems and pass through unchanged as their own NoiseHandshakeError - the fallback gate
     // fails them closed but the reconnect supervisor may retry a one-off garble. We do NOT call noiseClient.destroy() here: the outer catch is the single teardown owner,
-    // and our EncryptionKeyInvalidError (not a DOMException) flows through it unchanged.
+    // and our EncryptionKeyInvalidError flows through it unchanged.
     try {
 
       noiseClient.readMessage(serverHandshake.subarray(1));
@@ -273,13 +272,9 @@ export async function performNoiseHandshake(input: NoiseHandshakeInput): Promise
 
   } catch(err) {
 
+    // Every failure leaves unchanged, a signal's reason included, so a timeout reaches the connect flow as the platform `TimeoutError` and a cancellation as the
+    // caller's own reason. The fallback gate keys on PeerClosedDuringNoiseError alone, so neither falls back to plaintext.
     noiseClient?.destroy();
-
-    // Translate signal-driven aborts into typed timeout errors so the caller's catch can decide whether to fall back.
-    if((err instanceof DOMException) && ((err.name === "AbortError") || (err.name === "TimeoutError"))) {
-
-      throw new NoiseHandshakeTimeoutError("Noise handshake timed out.", "HANDSHAKE_TIMEOUT", { cause: err });
-    }
 
     throw err;
   }

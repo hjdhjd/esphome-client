@@ -9,6 +9,7 @@ import { MockTransport, MockTransportPhase, mockNoiseHandshakeExchange, pushDevi
 import { describe, test } from "node:test";
 import { mockDeviceInfo, mockEntityDiscovery } from "./factories.ts";
 import { Buffer } from "node:buffer";
+import { ConnectionClosedByPeerError } from "../errors.ts";
 import type { DeviceInfo } from "../esphome-client.ts";
 import { ENTITY_SCHEMAS } from "../schemas/index.ts";
 import type { EspHomeLogging } from "../types.ts";
@@ -292,24 +293,24 @@ describe("MockTransport whenIdle", () => {
 
 describe("MockTransport abort handling", () => {
 
-  test("firstByte rejects when the abort signal fires", async () => {
+  test("firstByte rejects with a string reason as it is when the abort signal fires", async () => {
 
     const t = new MockTransport();
     const controller = new AbortController();
     const promise = t.firstByte(controller.signal);
 
-    controller.abort();
+    controller.abort("first-byte-cancelled");
 
     await assert.rejects(promise, (err: unknown): boolean => err === controller.signal.reason, "abort signal must reject the parked firstByte awaiter");
   });
 
-  test("nextNoiseHandshakeFrame rejects when the abort signal fires", async () => {
+  test("nextNoiseHandshakeFrame rejects with a string reason as it is when the abort signal fires", async () => {
 
     const t = new MockTransport();
     const controller = new AbortController();
     const promise = t.nextNoiseHandshakeFrame(controller.signal);
 
-    controller.abort();
+    controller.abort("handshake-frame-cancelled");
 
     await assert.rejects(promise, (err: unknown): boolean => err === controller.signal.reason);
   });
@@ -358,6 +359,24 @@ describe("MockTransport.fail (simulating fatal transport error)", () => {
     await assert.rejects(t.sendNoiseHandshakeFrame(Buffer.alloc(0)), /dead/);
   });
 
+  test("the inbound iterator yields the messages queued before a fault, then rejects with the fault, as the real transport does", async () => {
+
+    const t = new MockTransport();
+    const fault = new Error("peer reset behind the queued frames");
+
+    t.pushInbound(1, Buffer.from([0x01]));
+    t.pushInbound(2, Buffer.from([0x02]));
+    t.fail(fault);
+
+    const it = t[Symbol.asyncIterator]();
+    const first = await it.next();
+    const second = await it.next();
+
+    assert.equal(first.value?.type, 1, "the first queued message must come before the fault");
+    assert.equal(second.value?.type, 2, "the second queued message must come before the fault");
+    await assert.rejects(it.next(), (err: unknown): boolean => err === fault);
+  });
+
   test("fail is safe to call more than once - calling twice does not throw", () => {
 
     const t = new MockTransport();
@@ -381,6 +400,27 @@ describe("MockTransport disposal", () => {
     const result = await promise;
 
     assert.equal(result.done, true, "iterator must end cleanly on dispose");
+  });
+
+  // Each awaiter below carries a bounding signal so a dispose that left it parked fails the row on its assertion, with the signal's TimeoutError, rather than hanging.
+  test("Symbol.dispose rejects a parked firstByte awaiter with TRANSPORT_DISPOSED, as the real transport does", async () => {
+
+    const t = new MockTransport();
+    const promise = t.firstByte(AbortSignal.timeout(1000));
+
+    t[Symbol.dispose]();
+
+    await assert.rejects(promise, { code: "TRANSPORT_DISPOSED", constructor: ConnectionClosedByPeerError });
+  });
+
+  test("Symbol.dispose rejects a parked nextNoiseHandshakeFrame awaiter with TRANSPORT_DISPOSED, as the real transport does", async () => {
+
+    const t = new MockTransport();
+    const promise = t.nextNoiseHandshakeFrame(AbortSignal.timeout(1000));
+
+    t[Symbol.dispose]();
+
+    await assert.rejects(promise, { code: "TRANSPORT_DISPOSED", constructor: ConnectionClosedByPeerError });
   });
 
   test("Symbol.asyncDispose calls Symbol.dispose synchronously", async () => {

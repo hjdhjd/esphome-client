@@ -9,13 +9,14 @@
  *
  * @remarks Two named runners, one shared host interface. {@link runCommand} extracts the entity type from the branded id, applies the matching {@link COMMAND_ADAPTERS}
  * runtime adapter (light's RGB flatten, siren's duration round), runs the schema-driven {@link encodeEntityCommand} pipeline, frames-and-sends through the host, and
- * emits the `entity.commands.sent` metric. {@link runCommandAndAwait} shares that runner's encode and send, and adds a pre-subscription stage (open the bus stream
- * *before* the command sends), an `AbortSignal.any` composition (timeout plus the caller's optional signal), and a predicate-match loop normalized through
- * {@link Promise.try} so sync and async predicates collapse to one rejection path.
+ * emits the `entity.commands.sent` metric. {@link runCommandAndAwait} shares that runner's encode and send, and adds an admission check (refuse a call no connection
+ * can carry), a pre-subscription stage (open the bus stream *before* the command sends), a composed signal that follows the caller's optional signal, the timeout,
+ * and the connection, and a predicate-match loop normalized through {@link Promise.try} so sync and async predicates collapse to one rejection path.
  *
  * The narrow `CommandHost` interface mirrors {@link RunPhaseHost} and {@link LogSubscriptionManagerHost}: a small read surface
  * plus a handful of methods for behavior the host owns. The interface carries only state-bearing primitives - the bus the runner subscribes to for state events, the
- * logger, the metrics sink, the registry's id <-> key bijection (`keyForId`), the registry's device-id overlay (`deviceIdForKey`), and the framing-and-send hook.
+ * logger, the metrics sink, the registry's id <-> key bijection (`keyForId`), the registry's device-id overlay (`deviceIdForKey`), the connection scope
+ * (`connectionScope`), and the framing-and-send hook.
  * Pure-function imports ({@link COMMAND_ADAPTERS}, {@link encodeEntityCommand}, {@link reportUnrecognizedOptions}) are not interface members because they have no
  * host-state dependency.
  *
@@ -36,11 +37,13 @@ import type { ClientMetrics, EspHomeLogging, Nullable } from "./types.ts";
 import type { CommandFor, StateEventFor } from "./schemas/derived.ts";
 import { ConfigurationError, ConnectionError } from "./errors.ts";
 import type { EncodeFailureReason, EncodeResult } from "./command-pipeline.ts";
+import { composeRequestSignal, requireConnection } from "./connection-scope.ts";
 import { encodeEntityCommand, reportUnrecognizedOptions } from "./command-pipeline.ts";
 import type { Buffer } from "node:buffer";
 import { COMMAND_ADAPTERS } from "./schemas/index.ts";
 import type { ClientEventsMap } from "./esphome-client.ts";
 import type { ConfigurationErrorCode } from "./errors.ts";
+import type { ConnectionScope } from "./connection-scope.ts";
 import type { EntityId } from "./entity-id.ts";
 import type { EventBus } from "./event-bus.ts";
 import { InfraredCapabilityFlags } from "./api-constants.ts";
@@ -95,8 +98,8 @@ export interface CommandAndAwaitOptions<T extends CommandAndAwaitable> {
   predicate?: (state: StateEventFor<typeof ENTITY_SCHEMAS[T]>) => boolean | Promise<boolean>;
 
   /**
-   * Optional caller-supplied {@link AbortSignal}. Composed with the timeout signal via {@link AbortSignal.any}; either source aborts the await and tears the bus
-   * subscription down. A pre-aborted signal rejects immediately; a mid-stream abort tears down between iterations.
+   * Optional caller-supplied {@link AbortSignal}. The await follows it beside the timeout and the connection the command was issued on; whichever aborts first rejects
+   * the await with its own reason and tears the bus subscription down. A pre-aborted signal rejects at once with its reason, before anything is sent.
    */
   signal?: AbortSignal;
 
@@ -108,7 +111,7 @@ export interface CommandAndAwaitOptions<T extends CommandAndAwaitable> {
 
 /**
  * Narrow interface {@link runCommand} and {@link runCommandAndAwait} consume from the host. Mirrors {@link RunPhaseHost} - a small read surface
- * (bus, logger, optional metrics sink), a few methods that delegate into the host's registry and transport, and nothing else. Pure-function imports
+ * (bus, logger, optional metrics sink), a few methods that delegate into the host's registry, connection scope, and transport, and nothing else. Pure-function imports
  * ({@link COMMAND_ADAPTERS}, {@link encodeEntityCommand}, {@link reportUnrecognizedOptions}) live as direct module imports inside the runner because they have no
  * host-state dependency.
  *
@@ -124,6 +127,9 @@ export interface CommandHost {
    * call site. The runner does not emit through this bus; it only opens streams (the per-entity-type state channel) and consumes events.
    */
   readonly bus: EventBus<ClientEventsMap>;
+
+  /** The connection a request issued at this moment would travel on, as {@link ConnectionScope} documents. */
+  connectionScope(): ConnectionScope;
 
   /**
    * Resolve the wire-side `device_id` overlay for an entity key. Mirrors {@link EntityRegistry.deviceIdForKey}; the runner forwards the
@@ -150,7 +156,7 @@ export interface CommandHost {
   readonly log: EspHomeLogging;
 
   /**
-   * Optional structured-metrics sink. The runner increments `entity.commands.sent` with `{ type: <entityType> }` once per successful encode-and-send. Absent
+   * Optional structured-metrics sink. The runner increments `entity.commands.sent` with `{ type: <entityType> }` once per command handed to the send path. Absent
    * (`undefined`) means zero-cost emit - every emit site uses optional chaining.
    */
   readonly metrics: ClientMetrics | undefined;
@@ -406,21 +412,25 @@ export function runCommand<T extends EntityType>(host: CommandHost, id: EntityId
 /**
  * Send a command and resolve with the next matching state event for the same entity. Body of the host's {@link EspHomeClient.commandAndAwait} method.
  *
- * @remarks Stages: extract entity type (typed throw on malformed id), resolve target key (typed throw on unknown id), encode the command (typed throw on an encode
- * refusal), compose abort sources, pre-subscribe to the entity's state stream, send the encoded command, run the predicate-match loop. The command is encoded once,
- * before anything subscribes, so a refused command rejects at once and opens no stream. The pre-subscribe stage (#5) runs before the send (#6) so a fast device
- * cannot beat the listener; the BackpressureStream attaches its emitter listener synchronously in its constructor, so the listener is live the moment
+ * @remarks Stages: refuse a call whose caller already cancelled and then one no connection can carry, extract entity type (typed throw on malformed id), resolve
+ * target key (typed throw on unknown id), encode the command (typed throw on an encode refusal), compose abort sources, pre-subscribe to the entity's state stream,
+ * send the encoded command, run the predicate-match loop. Admission comes first, so a refused call validates, opens, sends, and counts nothing. The command is
+ * encoded once, before anything subscribes, so a refused command rejects at once and opens no stream. The pre-subscribe stage (#6) runs before the send (#7) so a
+ * fast device cannot beat the listener; the BackpressureStream attaches its emitter listener synchronously in its constructor, so the listener is live the moment
  * `host.bus.stream(...)` returns.
  *
  * Predicate normalization. Supports sync `boolean` and async `Promise<boolean>` predicates - both go through {@link Promise.try}, which collapses sync throws and
  * async rejects to a single Promise rejection that propagates out of the await. The default (no predicate) accepts any state event whose key matches the resolved
  * target.
  *
- * Error surface. Throws {@link ConfigurationError} with code `MALFORMED_ENTITY_ID` when the branded id has no `-` separator (consumer-side unsafe cast
- * across the brand boundary), `UNKNOWN_ENTITY_ID` when the key resolution misses (consumer issued a command before discovery completed, or for an entity that is not
- * on the current connection), `SCHEMA_UNKNOWN`, `COMMAND_UNSUPPORTED`, `ENUM_VALUE_UNKNOWN`, or `VALUE_OUT_OF_RANGE` when the encoder refuses the command (nothing
- * is sent), or `AWAIT_STREAM_CLOSED` when the bus is disposed without a matching event arriving. The timeout surfaces as the `TimeoutError` of
- * {@link AbortSignal.timeout}, and a caller's abort surfaces as that signal's reason when the reason is an `Error` and as an `AbortError` otherwise.
+ * Error surface. A caller's signal already aborted rejects with its reason, as it is, before anything else. Throws {@link NotConnectedError} coded
+ * `CONNECT_IN_PROGRESS` when the call is issued while a manual connect has not yet settled or the automatic reconnect is active, and `NOT_CONNECTED` when it is
+ * issued with no connection otherwise, ahead of every check below. Throws {@link ConfigurationError} with code `MALFORMED_ENTITY_ID` when the branded id has no `-`
+ * separator (consumer-side unsafe cast across the brand boundary), `UNKNOWN_ENTITY_ID` when the key resolution misses (consumer issued a command for an entity
+ * that is not on the current connection), and `SCHEMA_UNKNOWN`, `COMMAND_UNSUPPORTED`, `ENUM_VALUE_UNKNOWN`, or `VALUE_OUT_OF_RANGE` when the encoder refuses the
+ * command (nothing is sent). Once the command is sent, the timeout rejects with the `TimeoutError` of {@link AbortSignal.timeout}, a caller's abort with that
+ * signal's reason, as it is, and a teardown of the connection the command was issued on with its {@link ConnectionLostError}. A plain `Error` reports the event
+ * bus ending the wait without a matching event, which the client's own connection lifecycle never causes.
  *
  * @typeParam T - Entity type tag carried by the branded id; constrained to the {@link CommandAndAwaitable} subset.
  * @param host - The command-dispatch host interface.
@@ -436,9 +446,13 @@ export async function runCommandAndAwait<T extends CommandAndAwaitable>(
   awaitOptions?: CommandAndAwaitOptions<T>
 ): Promise<StateEventFor<typeof ENTITY_SCHEMAS[T]>> {
 
-  const timeoutMs = awaitOptions?.timeoutMs ?? DEFAULT_COMMAND_AWAIT_TIMEOUT_MS;
+  // Stage 1: refuse a call whose caller already cancelled, and then one no connection can carry, ahead of validation, so a refused call opens no stream, sends
+  // nothing, and counts no metric.
+  awaitOptions?.signal?.throwIfAborted();
 
-  // Stage 1: extract the entity type. Mirrors runCommand's stage 1 but throws instead of warn-and-drop; consumers awaiting a Promise expect failures surfaced rather than
+  const connection = requireConnection(host.connectionScope(), "commandAndAwait()");
+
+  // Stage 2: extract the entity type. Mirrors runCommand's stage 1 but throws instead of warn-and-drop; consumers awaiting a Promise expect failures surfaced rather than
   // silently swallowed.
   const entityType = entityTypeFromId(id);
 
@@ -447,7 +461,7 @@ export async function runCommandAndAwait<T extends CommandAndAwaitable>(
     throw new ConfigurationError("commandAndAwait(): malformed entity id '" + id + "'.", "MALFORMED_ENTITY_ID");
   }
 
-  // Stage 2: resolve the target key for the predicate-match loop. We need the key here (not just inside the encode) because the predicate matches by
+  // Stage 3: resolve the target key for the predicate-match loop. We need the key here (not just inside the encode) because the predicate matches by
   // `key === targetKey`; the encode would refuse an unregistered entity too, but throwing here surfaces the misuse as the unknown-id error before anything else runs.
   const targetKey = host.keyForId(id) ?? undefined;
 
@@ -456,7 +470,7 @@ export async function runCommandAndAwait<T extends CommandAndAwaitable>(
     throw new ConfigurationError("commandAndAwait(): unknown entity id '" + id + "'.", "UNKNOWN_ENTITY_ID");
   }
 
-  // Stage 3: encode the command before anything subscribes or sends. A refused command (a type without a command schema, an unknown enum alias, an out-of-range
+  // Stage 4: encode the command before anything subscribes or sends. A refused command (a type without a command schema, an unknown enum alias, an out-of-range
   // value) rejects at once with its refusal code rather than sending nothing and waiting out the timeout.
   const { result, wireOptions } = encodeCommand({ entityType, host, id, options });
 
@@ -468,29 +482,22 @@ export async function runCommandAndAwait<T extends CommandAndAwaitable>(
       ((result.detail === undefined) ? "." : ": " + result.detail + "."), code);
   }
 
-  // Stage 4: compose the abort sources. The timeout always fires; the caller's signal is layered on when supplied. AbortSignal.any returns a single composite that
-  // aborts on any source - the BackpressureStream attaches a one-shot listener and rejects parked iterators with the timeout's TimeoutError or the caller's own
-  // abort reason, whichever source fired first.
-  const sources: AbortSignal[] = [AbortSignal.timeout(timeoutMs)];
+  // Stage 5: compose the abort sources. The composite follows the caller's signal, the timeout, and the connection, and the stream rejects a parked iterator with the
+  // reason of whichever source aborts first: the caller's own reason, the timeout's TimeoutError, or the connection-lost error a teardown aborts the connection with.
+  // The binding releases those listeners when the await settles.
+  using request = composeRequestSignal(connection, { signal: awaitOptions?.signal, timeoutMs: awaitOptions?.timeoutMs ?? DEFAULT_COMMAND_AWAIT_TIMEOUT_MS });
 
-  if(awaitOptions?.signal) {
-
-    sources.push(awaitOptions.signal);
-  }
-
-  const composedSignal = AbortSignal.any(sources);
-
-  /* Stage 5 (architectural keystone): pre-subscribe to the entity's state stream BEFORE the command sends. The bus.stream() constructor attaches its EventEmitter
-   * listener synchronously, so the moment this line returns we are listening for state events. Stage 6 then sends the wire frame; any state response the device
+  /* Stage 6 (architectural keystone): pre-subscribe to the entity's state stream BEFORE the command sends. The bus.stream() constructor attaches its EventEmitter
+   * listener synchronously, so the moment this line returns we are listening for state events. Stage 7 then sends the wire frame; any state response the device
    * emits between this line and the for-await consumption queues into the BackpressureStream's internal buffer and surfaces on the first iterator pull. Reordering
-   * stages 5 and 6 would re-introduce a race where a fast device can beat the listener and the await hangs until timeout.
+   * stages 6 and 7 would re-introduce a race where a fast device can beat the listener and the await hangs until timeout.
    */
-  const stream = host.bus.stream(entityType as T, { signal: composedSignal });
+  const stream = host.bus.stream(entityType as T, { signal: request.signal });
 
-  // Stage 6: send the command stage 3 encoded. An accepted command the device never answers waits out the timeout, and the caller sees its TimeoutError.
+  // Stage 7: send the command stage 4 encoded. An accepted command the device never answers waits out the timeout, and the caller sees its TimeoutError.
   sendEncodedCommand(host, result, wireOptions);
 
-  // Stage 7: run the predicate-match loop. Iterate the stream until we see a state event whose key matches the resolved target and whose predicate accepts. Predicate
+  // Stage 8: run the predicate-match loop. Iterate the stream until we see a state event whose key matches the resolved target and whose predicate accepts. Predicate
   // normalization through Promise.try handles sync boolean, async boolean, sync throw, and async reject in one path.
   for await (const event of stream) {
 
@@ -517,7 +524,7 @@ export async function runCommandAndAwait<T extends CommandAndAwaitable>(
     }
   }
 
-  // Fallthrough only happens when the stream ends cleanly (EventBus disposed) without a matching event. Surface a typed error rather than hanging or returning undefined;
-  // the timeout and abort paths reject from the iterator before we reach here.
-  throw new ConfigurationError("commandAndAwait(): stream ended before a matching state event arrived.", "AWAIT_STREAM_CLOSED");
+  // Fallthrough only happens when the stream ends cleanly (EventBus disposed) without a matching event, which no connection lifecycle causes, so the error names the
+  // bus rather than carrying a public code. The timeout, abort, and teardown paths reject from the iterator before we reach here.
+  throw new Error("commandAndAwait(): the event bus ended the wait before a matching state event arrived.");
 }

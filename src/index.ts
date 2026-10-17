@@ -42,13 +42,13 @@ export type { ESPHomeHandshakeOptions, NoiseHandshakeOptions, NoiseRole } from "
 export { entityId, isEntityId, parseEntityId } from "./entity-id.ts";
 export type { EntityId } from "./entity-id.ts";
 export {
-  AuthenticationError, BackpressureError, BufferOverflowError, CameraStreamClosedError, ConfigurationError, ConnectionClosedByPeerError, ConnectionError,
+  AuthenticationError, BackpressureError, BufferOverflowError, ConfigurationError, ConnectionClosedByPeerError, ConnectionError, ConnectionLostError,
   ConnectionRefusedError, ConnectionTimeoutError, DecodingError, DecryptionFailedError, EncodingError, EncryptionKeyInvalidError, EncryptionKeyMissingError,
   EncryptionRequiredError, EspHomeError, FrameTooLargeError, HandshakeError, HeartbeatStalledError, IncompatibleApiVersionError, MalformedVarintError,
-  MessageTooManyFieldsError, NegotiationFailedError, NoiseHandshakeError, NoiseHandshakeTimeoutError, NotConnectedError, PeerClosedDuringNoiseError, PermanentError,
-  PlaintextHandshakeError, ProtocolError, TruncatedMessageError, UnknownEntityTypeError, UnknownMessageTypeError, UnsupportedCapabilityError
+  MessageTooManyFieldsError, NegotiationFailedError, NoiseHandshakeError, NotConnectedError, PeerClosedDuringNoiseError, PermanentError, PlaintextHandshakeError,
+  ProtocolError, TruncatedMessageError, UnknownEntityTypeError, UnknownMessageTypeError, UnsupportedCapabilityError
 } from "./errors.ts";
-export type { CameraStreamClosedErrorCode, ConfigurationErrorCode, NoiseHandshakeErrorCode } from "./errors.ts";
+export type { ConfigurationErrorCode, NoiseHandshakeErrorCode } from "./errors.ts";
 export { EspHomeClient, openEspHomeClient } from "./esphome-client.ts";
 export type {
   ClientEventsMap, ConstructionRetryConfig, DeviceInfo, EspHomeClientOpenOptions, EspHomeClientOptions, ExecuteServiceArgumentValue, LogEventData, MessageEventData,

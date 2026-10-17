@@ -116,7 +116,7 @@ Some ESPHome nodes advertise multiple logical **sub-devices** under one connecti
 ### Commands
 
 - `client.command<T>(id, options)` is fire-and-forget. It logs and drops on encoder failures or unknown ids.
-- `client.commandAndAwait<T>(id, options, awaitOptions?)` subscribes to the matching state-event channel before sending the command frame (avoiding the fast-device race) and resolves with the first event matching the optional `predicate`. Rejects with `DOMException("TimeoutError")` after the default 2000ms or the consumer's `AbortSignal`.
+- `client.commandAndAwait<T>(id, options, awaitOptions?)` subscribes to the matching state-event channel before sending the command frame (avoiding the fast-device race) and resolves with the first event matching the optional `predicate`. Rejects with the platform `TimeoutError` after the default 2000ms, with the consumer's `AbortSignal` reason as it is, and with `ConnectionLostError` when the connection is torn down first. Issued with no connection to carry it, the call rejects at once with `NotConnectedError` and sends nothing.
 - Read-only, stateless, and transmit-only entity types (`binary_sensor`, `button`, `camera`, `infrared`, `radio_frequency`, `sensor`, `text_sensor`) are excluded from `commandAndAwait` at the type level - awaiting a state echo is meaningless for them.
 
 ### Telemetry
@@ -141,13 +141,17 @@ Failures surface as typed subclasses of `EspHomeError`:
 
 - **Encryption** (all `PermanentError`) - `EncryptionKeyMissingError`, `EncryptionKeyInvalidError`, `EncryptionRequiredError`.
 - **Negotiation** (`PermanentError`) - `NegotiationFailedError`, raised when API-version negotiation finds no overlap.
-- **Handshake** - `NoiseHandshakeError` (with a tagged `code`), `NoiseHandshakeTimeoutError`, `PeerClosedDuringNoiseError`, `PlaintextHandshakeError`.
-- **Connection** - `ConnectionRefusedError`, `ConnectionTimeoutError`, `ConnectionClosedByPeerError`, `HeartbeatStalledError`.
+- **Handshake** - `NoiseHandshakeError` (with a tagged `code`), `PeerClosedDuringNoiseError`, `PlaintextHandshakeError`.
+- **Connection** - `ConnectionRefusedError`, `ConnectionTimeoutError`, `ConnectionClosedByPeerError`, `HeartbeatStalledError`, and `ConnectionLostError`, which
+  every pending request rejects with when the connection it was issued on is torn down.
 - **Protocol** - `FrameTooLargeError`, `BufferOverflowError`, `DecodingError`, `EncodingError`.
-- **Operational** - `BackpressureError` (with dropped-item count), `CameraStreamClosedError` (with branded `cameraId`).
-- **Configuration** - `ConfigurationError` (with `code` one of `MALFORMED_ENTITY_ID`, `UNKNOWN_ENTITY_ID`, `AWAIT_STREAM_CLOSED`, `EXTRA_SCHEMA_OVERRIDES_BUILTIN`).
+- **Operational** - `BackpressureError` (with dropped-item count), and `NotConnectedError`, which an awaiting request issued with no connection to carry it rejects
+  with at once, coded `CONNECT_IN_PROGRESS` when a connect was running as the call was issued and `NOT_CONNECTED` otherwise.
+- **Configuration** - `ConfigurationError` (with `code` one of `MALFORMED_ENTITY_ID`, `UNKNOWN_ENTITY_ID`, `EXTRA_SCHEMA_OVERRIDES_BUILTIN`).
 
-The auto-reconnect supervisor's default `shouldRetry` predicate filters out every `PermanentError` subclass automatically. Consumers can `instanceof`-check for precise dispatch.
+Timeouts and cancellations are not library classes: an awaiting call rejects with the platform `TimeoutError` when its timeout elapses and with the caller's
+own `AbortSignal` reason, as it is, when the caller cancels. The auto-reconnect supervisor's default `shouldRetry` predicate filters out every `PermanentError`
+subclass automatically. Consumers can `instanceof`-check for precise dispatch.
 
 ## Runtime
 
@@ -157,6 +161,10 @@ Two construction paths cover the consumer surface:
 
 - **`openEspHomeClient(options)`** (canonical) - async factory with bounded retry on transient errors (default three retries with exponential backoff and jitter) and short-circuit on `PermanentError` subclasses.
 - **`new EspHomeClient(options)` + `await client.connect({ signal })`** - explicit two-step construction for consumers who need to attach subscriptions before the discovery handshake fans out.
+
+A connect or `openEspHomeClient` that runs out the library's connect or handshake timeout rejects with the platform `TimeoutError`, which carries no step or host.
+The step is logged at debug level and, for a client the consumer constructed, carried on the legacy `disconnect` event. A consumer that wraps the open in a try
+beside its own `AbortSignal.timeout` tells its own timeout apart by identity, `error === mySignal.reason`, never by `name === "TimeoutError"`.
 
 Disposal flows through `Symbol.dispose` (sync, immediate teardown) and `Symbol.asyncDispose` (graceful: sends `DISCONNECT_REQUEST` and awaits the matching response within `gracefulDisconnectTimeoutMs`, then falls through). The two `using` keywords pick the matching path; consumers not using explicit resource management call the same paths imperatively as `client.disconnect()` (sync) and `client.disconnectAsync()` (graceful).
 
@@ -206,7 +214,7 @@ Each sub-API is a lazy single-instance namespace reached through a property on t
 - `stream({ signal })` - continuous async iterable of complete frames.
 - `readable({ signal })` - Web Streams adapter over `stream()`.
 
-Multi-packet image reassembly lives in the sub-API. Operational failures surface through `CameraStreamClosedError` (transport disconnected mid-snapshot) and `DOMException("TimeoutError" | "AbortError")`.
+Multi-packet image reassembly lives in the sub-API. A snapshot rejects with `ConnectionLostError` when the connection is torn down before an image arrives, with the platform `TimeoutError` when its timeout elapses, with the caller's `AbortSignal` reason when the caller cancels, and with `NotConnectedError` when no connection can carry the request.
 
 ### Voice assistant
 
@@ -300,7 +308,7 @@ Test helpers ship under the `esphome-client/testing` conditional subpath, separa
 import { MockClient, MockTransport, mockEntity, mockStateMessage } from "esphome-client/testing";
 ```
 
-- **`MockClient`** - consumer-facing test harness. Mirrors the real `EspHomeClient` surface so production code under test runs unchanged. Drive state via `populate*` / `set*` / `emit*` methods; assert on a `commands` log capturing every issued command. Every sub-API on `MockClient` is a `Proxy`-backed recording mock; address its recorded calls and stage return values through the exported `MOCK` symbol (`mock.bluetooth[MOCK]` exposes a `MockController`).
+- **`MockClient`** - consumer-facing test harness. Mirrors the real `EspHomeClient` surface so production code under test runs unchanged. Drive state via `populate*` / `set*` / `emit*` methods; assert on a `commands` log capturing every issued command. An awaiting call such as `commandAndAwait` needs `setConnected(true)` first and rejects with `NotConnectedError` coded `NOT_CONNECTED` otherwise, and a teardown rejects a pending one with `ConnectionLostError`, as on the real client. Every sub-API on `MockClient` is a `Proxy`-backed recording mock; address its recorded calls and stage return values through the exported `MOCK` symbol (`mock.bluetooth[MOCK]` exposes a `MockController`).
 - **`MockTransport`** - integration-level transport double. Return it from `EspHomeClientOptions.transportFactory` (a factory yielding a fresh transport per connect, e.g. `transportFactory: () => transport`) to exercise the real client's handshake / decoder / dispatcher pipelines against a scripted byte sequence rather than a device. Script that sequence with the exported `push*` fixture-injection helpers, starting with `pushHandshake`, which queues a whole plaintext connect before the client is awaited.
 - **Factory helpers** - `mockEntity`, `mockEntityDiscovery`, `mockStateMessage`, `mockDeviceInfo`, `mockHealth`, `mockNoiseHandshakeExchange`.
 

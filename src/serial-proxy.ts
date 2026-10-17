@@ -7,11 +7,12 @@
  * Serial-proxy sub-API.
  *
  * @remarks Lazy-instantiated single-instance namespace exposed via `client.serial`. Composes with the host via the narrow {@link SerialProxyHost} interface - no reach
- * into host private fields, only the bus, the logger, a synchronous frame-send hook, and an accessor for the latest {@link DeviceInfo}.
+ * into host private fields, only the bus, the connection scope, the logger, a synchronous frame-send hook, and an accessor for the latest {@link DeviceInfo}.
  *
  * The sub-API owns its own connection-scoped state: a per-request-type `Correlator` for each in-flight await (flush, getModemPins), keyed by instance
- * number, and a `ReissuableSubscription` keyed by instance number for per-instance data streaming, whose subscriber ledger survives reconnect and
- * whose wire cache drives {@link SerialProxyApi.reissueOnReconnect}. Connection-scoped state resets on connect via {@link SerialProxyApi.clearConnectionState}.
+ * number, whose waits follow the connection scope so a teardown ends them, and a `ReissuableSubscription` keyed by instance number for per-instance data streaming,
+ * whose subscriber ledger survives reconnect and whose wire cache drives {@link SerialProxyApi.reissueOnReconnect}. The wire cache resets on connect via
+ * {@link SerialProxyApi.clearConnectionState}.
  *
  * Serial Proxy is *not* entity-shaped. The proto enumerates serial-proxy instances on `DeviceInfoResponse.serial_proxies` (field 25, repeated `SerialProxyInfo`),
  * keyed by zero-based `instance` index - not via `ListEntities`, not by a fixed32 entity key. The composition story mirrors {@link VoiceAssistantApi}
@@ -26,9 +27,11 @@ import type { EventBus, StreamOptions } from "./event-bus.ts";
 import type { FieldValue, ProtoField } from "./protocol/index.ts";
 import { MessageType, WireType, decodeProtobuf, encodeProtoFields, extractNumberField, extractStringField } from "./protocol/index.ts";
 import type { SerialProxyParity, SerialProxyPortType, SerialProxyStatus } from "./api-constants.ts";
+import { composeRequestSignal, requireConnection } from "./connection-scope.ts";
 import { Buffer } from "node:buffer";
 import type { ClientEventsMap } from "./esphome-client.ts";
 import { ConnectionError } from "./errors.ts";
+import type { ConnectionScope } from "./connection-scope.ts";
 import { Correlator } from "./correlator.ts";
 import { SerialProxyRequestType } from "./api-constants.ts";
 import type { SubscriptionLifecycle } from "./reissuable-subscription.ts";
@@ -111,15 +114,18 @@ export interface SerialProxyFlushResult {
 }
 
 /**
- * Narrow interface the host implements for the serial-proxy sub-API. Mirrors {@link VoiceAssistantHost} and
- * `LogSubscriptionManagerHost` in shape: a bus, a logger, a frame-send hook, plus a read-through accessor for the latest decoded
- * {@link DeviceInfo}. The sub-API never reaches into host private fields.
+ * Narrow interface the host implements for the serial-proxy sub-API. Mirrors {@link VoiceAssistantHost} in shape: a bus, a logger, a frame-send hook, and the
+ * connection scope, plus a read-through accessor for the latest decoded {@link DeviceInfo}. The sub-API never reaches into host private fields.
  *
  * @internal
  */
 export interface SerialProxyHost {
 
   readonly bus: EventBus<ClientEventsMap>;
+
+  /** The connection a request issued at this moment would travel on, as {@link ConnectionScope} documents. */
+  connectionScope(): ConnectionScope;
+
   readonly log: EspHomeLogging;
 
   /**
@@ -133,15 +139,15 @@ export interface SerialProxyHost {
 }
 
 /**
- * Per-await options accepted by {@link SerialProxyApi.flush} and {@link SerialProxyApi.getModemPins}. The composed signal layers the caller's optional `AbortSignal`
- * over the timeout via `AbortSignal.any`, mirroring the {@link VoiceAssistantApi.announce} contract.
+ * Per-await options accepted by {@link SerialProxyApi.flush} and {@link SerialProxyApi.getModemPins}. The wait follows the caller's optional `AbortSignal`, the
+ * timeout, and the connection the request was issued on, and rejects with the reason of whichever ends it first.
  */
 export interface SerialProxyAwaitOptions {
 
   /** Optional user abort signal. When aborted, the await rejects with `signal.reason`. */
   signal?: AbortSignal;
 
-  /** Optional timeout in milliseconds. Defaults to 5000ms. When elapsed, the await rejects with `DOMException(name: "AbortError")`. */
+  /** Optional timeout in milliseconds. Defaults to 5000ms. When elapsed, the await rejects with the timeout signal's own `DOMException(name: "TimeoutError")`. */
   timeoutMs?: number;
 }
 
@@ -163,14 +169,14 @@ export class SerialProxyApi implements SubscriptionLifecycle {
   private readonly dataSubscription: ReissuableSubscription<number, boolean, boolean>;
 
   /**
-   * Per-instance correlator for in-flight {@link flush} awaits. The key is the numeric `instance` index; the value is the decoded {@link SerialProxyFlushResult}.
-   * Cleared (every entry rejected with `AbortError`) on {@link clearConnectionState}.
+   * Per-instance correlator for in-flight {@link flush} awaits. The key is the numeric `instance` index; the value is the decoded {@link SerialProxyFlushResult}. Each
+   * entry follows its request's composed signal, so a teardown ends it through the connection scope.
    */
   private readonly flushCorrelator: Correlator<SerialProxyFlushResult, number>;
 
   /**
-   * Per-instance correlator for in-flight {@link getModemPins} awaits. The key is the numeric `instance` index; the value is the raw line-states bitmask. Cleared on
-   * {@link clearConnectionState}.
+   * Per-instance correlator for in-flight {@link getModemPins} awaits. The key is the numeric `instance` index; the value is the raw line-states bitmask. Each entry
+   * follows its request's composed signal, so a teardown ends it through the connection scope.
    */
   private readonly modemPinsCorrelator: Correlator<number, number>;
 
@@ -200,18 +206,14 @@ export class SerialProxyApi implements SubscriptionLifecycle {
   }
 
   /**
-   * Reset ONLY connection-scoped state. Called by the host on every disconnect and again at the top of every connect attempt. Rejects every pending {@link flush} and
-   * {@link getModemPins} await with an `AbortError` (in-flight request/response state cannot outlive the connection it was issued on) and clears the data
-   * subscription's connection-scoped wire cache (the device starts every fresh connection with no subscription). The subscriber ledger is PRESERVED: iterators alive
-   * across the reconnect cycle stay live, and the host's {@link reissueOnReconnect} call after the new connection is up re-issues SUBSCRIBE for each instance with
-   * surviving subscribers.
+   * Reset ONLY connection-scoped state. Called by the host on every disconnect and again at the top of every connect attempt. Clears the data subscription's
+   * connection-scoped wire cache (the device starts every fresh connection with no subscription) and ends no wait: a pending {@link flush} or {@link getModemPins}
+   * follows the connection scope, whose abort rejects it with the connection-lost error before this runs. The subscriber ledger is PRESERVED: iterators alive across
+   * the reconnect cycle stay live, and the host's {@link reissueOnReconnect} call after the new connection is up re-issues SUBSCRIBE for each instance with surviving
+   * subscribers.
    */
   public clearConnectionState(): void {
 
-    const reason = new DOMException("Serial proxy reset: connection torn down before the prior request completed.", "AbortError");
-
-    this.flushCorrelator.rejectAll(reason);
-    this.modemPinsCorrelator.rejectAll(reason);
     this.dataSubscription.clearConnectionState();
   }
 
@@ -334,8 +336,8 @@ export class SerialProxyApi implements SubscriptionLifecycle {
    * Read the current RTS / DTR modem-control line states for an instance. Sends `SerialProxyGetModemPinsRequest` and awaits the matching response, correlated by the
    * `instance` index.
    *
-   * @remarks Concurrent calls for the same instance throw {@link ConnectionError} with code `MODEM_PINS_IN_FLIGHT`. The composed signal layers the caller's optional
-   * `AbortSignal` over the timeout via `AbortSignal.any`; the default timeout is 5000ms.
+   * @remarks Concurrent calls for the same instance throw {@link ConnectionError} with code `MODEM_PINS_IN_FLIGHT`. The wait follows the caller's optional
+   * `AbortSignal` and the connection the request was issued on, and the correlator holds the timeout; the default timeout is 5000ms.
    *
    * Usage:
    *
@@ -344,12 +346,18 @@ export class SerialProxyApi implements SubscriptionLifecycle {
    * @param instance - Zero-based instance index.
    * @param options - Optional cancellation signal and custom timeout (default 5000ms).
    * @returns A promise that resolves with the line-states bitmask. Decode against {@link SerialProxyLineStateFlags}.
+   * @throws {NotConnectedError} (`CONNECT_IN_PROGRESS`) when the call is issued while a manual connect has not yet settled or the automatic reconnect is active, and
+   * (`NOT_CONNECTED`) when it is issued with no connection otherwise. Nothing is sent, and this check runs before the in-flight check.
    * @throws ConnectionError with code `MODEM_PINS_IN_FLIGHT` when another await for the same instance is still pending.
-   * @throws DOMException with name `AbortError` on either timeout or caller-signal abort. `Correlator.await` manufactures the timeout error itself; it
-   * does not propagate {@link AbortSignal.timeout}'s native `TimeoutError`.
-   *
+   * @throws {ConnectionLostError} when the connection the request was issued on is torn down before the device replies.
+   * @throws The signal's reason, as it is, when `options.signal` aborts, including when it was already aborted at call time, and the timeout's `TimeoutError` when
+   * the reply outlasts `options.timeoutMs`.
    */
   public async getModemPins(instance: number, options?: SerialProxyAwaitOptions): Promise<number> {
+
+    options?.signal?.throwIfAborted();
+
+    const connection = requireConnection(this.host.connectionScope(), "serial.getModemPins()");
 
     if(this.modemPinsCorrelator.pending(instance)) {
 
@@ -361,21 +369,20 @@ export class SerialProxyApi implements SubscriptionLifecycle {
       { fieldNumber: 1, value: instance, wireType: WireType.VARINT }
     ];
 
+    // The composite is bound ahead of the send, over the connection read before it, so a teardown the send itself triggers still ends the wait.
+    using request = composeRequestSignal(connection, { signal: options?.signal });
+
     this.host.send(MessageType.SERIAL_PROXY_GET_MODEM_PINS_REQUEST, encodeProtoFields(fields));
 
-    return this.modemPinsCorrelator.await(instance, {
-
-      ...((options?.signal !== undefined) && { signal: options.signal }),
-      timeoutMs: options?.timeoutMs ?? DEFAULT_SERIAL_REQUEST_TIMEOUT_MS
-    });
+    return await this.modemPinsCorrelator.await(instance, { signal: request.signal, timeoutMs: options?.timeoutMs ?? DEFAULT_SERIAL_REQUEST_TIMEOUT_MS });
   }
 
   /**
    * Flush the TX buffer for an instance. Sends `SerialProxyRequest(FLUSH)` and awaits the matching `SerialProxyRequestResponse`, correlated by the `instance` index.
    * Blocks until the device confirms drain (status `OK` / `ASSUMED_SUCCESS`) or fails out (`ERROR` / `TIMEOUT` / `NOT_SUPPORTED`).
    *
-   * @remarks Concurrent calls for the same instance throw {@link ConnectionError} with code `FLUSH_IN_FLIGHT`. The composed signal layers the caller's optional
-   * `AbortSignal` over the timeout via `AbortSignal.any`; the default timeout is 5000ms.
+   * @remarks Concurrent calls for the same instance throw {@link ConnectionError} with code `FLUSH_IN_FLIGHT`. The wait follows the caller's optional `AbortSignal`
+   * and the connection the request was issued on, and the correlator holds the timeout; the default timeout is 5000ms.
    *
    * Usage:
    *
@@ -384,25 +391,30 @@ export class SerialProxyApi implements SubscriptionLifecycle {
    * @param instance - Zero-based instance index.
    * @param options - Optional cancellation signal and custom timeout (default 5000ms).
    * @returns A promise that resolves with the {@link SerialProxyFlushResult}. Consumers switch on `status` to distinguish success from failure.
+   * @throws {NotConnectedError} (`CONNECT_IN_PROGRESS`) when the call is issued while a manual connect has not yet settled or the automatic reconnect is active, and
+   * (`NOT_CONNECTED`) when it is issued with no connection otherwise. Nothing is sent, and this check runs before the in-flight check.
    * @throws ConnectionError with code `FLUSH_IN_FLIGHT` when another await for the same instance is still pending.
-   * @throws DOMException with name `AbortError` on either timeout or caller-signal abort. `Correlator.await` manufactures the timeout error itself; it
-   * does not propagate {@link AbortSignal.timeout}'s native `TimeoutError`.
-   *
+   * @throws {ConnectionLostError} when the connection the request was issued on is torn down before the device replies.
+   * @throws The signal's reason, as it is, when `options.signal` aborts, including when it was already aborted at call time, and the timeout's `TimeoutError` when
+   * the reply outlasts `options.timeoutMs`.
    */
   public async flush(instance: number, options?: SerialProxyAwaitOptions): Promise<SerialProxyFlushResult> {
+
+    options?.signal?.throwIfAborted();
+
+    const connection = requireConnection(this.host.connectionScope(), "serial.flush()");
 
     if(this.flushCorrelator.pending(instance)) {
 
       throw new ConnectionError("Serial proxy flush is already in flight for instance " + String(instance) + ".", "FLUSH_IN_FLIGHT");
     }
 
+    // The composite is bound ahead of the send, over the connection read before it, so a teardown the send itself triggers still ends the wait.
+    using request = composeRequestSignal(connection, { signal: options?.signal });
+
     this.sendRequest(instance, SerialProxyRequestType.FLUSH);
 
-    return this.flushCorrelator.await(instance, {
-
-      ...((options?.signal !== undefined) && { signal: options.signal }),
-      timeoutMs: options?.timeoutMs ?? DEFAULT_SERIAL_REQUEST_TIMEOUT_MS
-    });
+    return await this.flushCorrelator.await(instance, { signal: request.signal, timeoutMs: options?.timeoutMs ?? DEFAULT_SERIAL_REQUEST_TIMEOUT_MS });
   }
 
   /**

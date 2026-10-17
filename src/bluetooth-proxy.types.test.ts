@@ -154,9 +154,9 @@ describe("BluetoothScannerStateData - field types", () => {
   });
 });
 
-// Swallow any rejected promise quietly. Many of these typing tests issue calls that the real implementation parks awaiting a response that never arrives; the
-// `@ts-expect-error` annotations also produce calls that would reject with a type-incompat runtime error. Both paths are irrelevant to typecheck and would otherwise
-// leak as unhandled-rejection warnings. The compiler verifies the surface; the runtime here is incidental.
+// Swallow any rejected promise quietly. Many of these typing tests issue awaiting calls on a client that never connected, which reject at once with
+// `NotConnectedError`; the `@ts-expect-error` annotations also produce calls that would reject with a type-incompat runtime error. These rejections are irrelevant
+// to typecheck and would otherwise leak as unhandled-rejection warnings. The compiler verifies the surface; the runtime here is incidental.
 // eslint-disable-next-line @typescript-eslint/no-invalid-void-type -- the type-test settle helper deliberately widens to `T | void` to model the catch-swallowed branch.
 const settle = async <T>(promise: Promise<T>): Promise<T | void> => promise.catch((): void => { /* */ });
 

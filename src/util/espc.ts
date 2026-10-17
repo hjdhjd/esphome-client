@@ -14,7 +14,7 @@
  * @module util/espc
  */
 
-import { CliError, isUserFacingError } from "./cli-error.ts";
+import { CliError, isUserFacingError, translateConnectFailure } from "./cli-error.ts";
 import type { ClientEventsMap, DeviceInfo, EspHomeClientOptions } from "../esphome-client.ts";
 import type { CommandFor, Entity, EntityType, TelemetryEvent } from "../schemas/index.ts";
 import type { EspHomeLogging, Nullable } from "../types.ts";
@@ -826,8 +826,9 @@ async function createClient(options: ParsedOptions, printer: Printer): Promise<E
     }
   });
 
-  // Connect with a 30 second deadline. connect() returns a promise that resolves on the "connect" event and rejects on "disconnect" or signal abort.
-  await client.connect({ signal: AbortSignal.timeout(30000) });
+  // Connect with a 30 second deadline. A connect that runs out the deadline rejects with the platform TimeoutError, which the translation reports as a failure
+  // naming the host rather than as an internal bug.
+  await translateConnectFailure(options.host, client.connect({ signal: AbortSignal.timeout(30000) }));
 
   return client;
 }

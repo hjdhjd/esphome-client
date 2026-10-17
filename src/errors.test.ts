@@ -3,13 +3,13 @@
  * errors.test.ts: Unit tests for the typed error hierarchy.
  */
 import {
-  AuthenticationError, BackpressureError, BufferOverflowError, CameraStreamClosedError, ConfigurationError, ConnectionClosedByPeerError, ConnectionError,
+  AuthenticationError, BackpressureError, BufferOverflowError, ConfigurationError, ConnectionClosedByPeerError, ConnectionError, ConnectionLostError,
   ConnectionRefusedError, ConnectionTimeoutError, DecodingError, DecryptionFailedError, EncodingError, EncryptionKeyInvalidError, EncryptionKeyMissingError,
   EncryptionRequiredError, EspHomeError, FrameTooLargeError, HandshakeError, HeartbeatStalledError, IncompatibleApiVersionError, MalformedVarintError,
-  MessageTooManyFieldsError, NegotiationFailedError, NoiseHandshakeError, NoiseHandshakeTimeoutError, NotConnectedError, PeerClosedDuringNoiseError, PermanentError,
-  PlaintextHandshakeError, ProtocolError, UnknownEntityTypeError, UnknownMessageTypeError, UnsupportedCapabilityError
+  MessageTooManyFieldsError, NegotiationFailedError, NoiseHandshakeError, NotConnectedError, PeerClosedDuringNoiseError, PermanentError, PlaintextHandshakeError,
+  ProtocolError, UnknownEntityTypeError, UnknownMessageTypeError, UnsupportedCapabilityError
 } from "./errors.ts";
-import type { CameraStreamClosedErrorCode, ConfigurationErrorCode, NoiseHandshakeErrorCode } from "./errors.ts";
+import type { ConfigurationErrorCode, NoiseHandshakeErrorCode } from "./errors.ts";
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 
@@ -81,14 +81,6 @@ describe("Error hierarchy - instanceof checks", () => {
     assert.equal(err.code, "AUTH_FAILED");
   });
 
-  test("NoiseHandshakeTimeoutError extends NoiseHandshakeError", () => {
-
-    const err = new NoiseHandshakeTimeoutError("x", "HANDSHAKE_TIMEOUT");
-
-    assert.equal(err instanceof NoiseHandshakeTimeoutError, true);
-    assert.equal(err instanceof NoiseHandshakeError, true);
-  });
-
   test("PeerClosedDuringNoiseError extends NoiseHandshakeError", () => {
 
     const err = new PeerClosedDuringNoiseError("x", "PEER_CLOSED_NOISE");
@@ -120,6 +112,18 @@ describe("Error hierarchy - instanceof checks", () => {
       assert.equal(e instanceof ConnectionError, true, e.constructor.name + " must extend ConnectionError");
       assert.equal(e instanceof PermanentError, false, e.constructor.name + " is recoverable; must NOT be a PermanentError");
     }
+  });
+
+  test("ConnectionLostError extends ConnectionError and carries its code and its cause", () => {
+
+    const fault = new Error("Synthetic transport fault.");
+    const err = new ConnectionLostError("The connection ended before the request completed.", "CONNECTION_LOST", { cause: fault });
+
+    assert.equal(err instanceof ConnectionLostError, true);
+    assert.equal(err instanceof ConnectionError, true, "a lost connection belongs to the connection family");
+    assert.equal(err instanceof PermanentError, false, "a lost connection is not a permanent failure");
+    assert.equal(err.code, "CONNECTION_LOST");
+    assert.equal(err.cause, fault, "the cause carries what ended the connection");
   });
 
   test("PlaintextHandshakeError extends HandshakeError", () => {
@@ -181,56 +185,6 @@ describe("BackpressureError", () => {
   });
 });
 
-describe("CameraStreamClosedError", () => {
-
-  test("stores the cameraId", () => {
-
-    const err = new CameraStreamClosedError("stream closed", "STREAM_CLOSED", "camera-front_door");
-
-    assert.equal(err.cameraId, "camera-front_door");
-  });
-
-  test("uses the STREAM_CLOSED code as both the tag and base-class storage", () => {
-
-    const err = new CameraStreamClosedError("x", "STREAM_CLOSED", "camera-x");
-
-    assert.equal(err.code, "STREAM_CLOSED");
-  });
-
-  test("preserves the cause via standard ErrorOptions", () => {
-
-    const inner = new Error("inner");
-    const wrapped: Error = new CameraStreamClosedError("x", "STREAM_CLOSED", "camera-x", { cause: inner });
-
-    assert.equal(wrapped.cause, inner);
-  });
-
-  test("climbs the inheritance chain to EspHomeError but NOT to ConnectionError or PermanentError", () => {
-
-    // Operational standalone: it's neither a connection-family failure (it's about an in-flight bus stream) nor a permanent-configuration failure (it's recoverable
-    // on the next snapshot). Mirrors the BackpressureError shape.
-    const err = new CameraStreamClosedError("x", "STREAM_CLOSED", "camera-x");
-
-    assert.equal(err instanceof CameraStreamClosedError, true);
-    assert.equal(err instanceof EspHomeError, true);
-    assert.equal(err instanceof Error, true);
-    assert.equal(err instanceof ConnectionError, false, "stream-closed is not a transport-level connection error");
-    assert.equal(err instanceof PermanentError, false, "stream-closed is recoverable; consumer can retry the snapshot");
-  });
-
-  test("exposes the CameraStreamClosedErrorCode discriminated union for pattern-matching", () => {
-
-    const codes: readonly CameraStreamClosedErrorCode[] = ["STREAM_CLOSED"];
-
-    for(const code of codes) {
-
-      const err = new CameraStreamClosedError("x", code, "camera-x");
-
-      assert.equal(err.code, code);
-    }
-  });
-});
-
 describe("Class-name preservation", () => {
 
   test("each subclass exposes its own class name (constructor.name pattern)", () => {
@@ -243,10 +197,10 @@ describe("Class-name preservation", () => {
       [ new AuthenticationError("x"), "AuthenticationError" ],
       [ new ConnectionTimeoutError("x"), "ConnectionTimeoutError" ],
       [ new HeartbeatStalledError("x"), "HeartbeatStalledError" ],
+      [ new ConnectionLostError("x"), "ConnectionLostError" ],
       [ new MalformedVarintError("x"), "MalformedVarintError" ],
       [ new EncryptionRequiredError("x"), "EncryptionRequiredError" ],
-      [ new BackpressureError("x", 1), "BackpressureError" ],
-      [ new CameraStreamClosedError("x", "STREAM_CLOSED", "camera-x"), "CameraStreamClosedError" ]
+      [ new BackpressureError("x", 1), "BackpressureError" ]
     ];
 
     for(const [ instance, expectedName ] of cases) {
@@ -276,6 +230,7 @@ describe("Per-class edge enumeration", () => {
     [ "ConnectionRefusedError", ConnectionRefusedError, { permanent: false } ],
     [ "ConnectionClosedByPeerError", ConnectionClosedByPeerError, { permanent: false } ],
     [ "HeartbeatStalledError", HeartbeatStalledError, { permanent: false } ],
+    [ "ConnectionLostError", ConnectionLostError, { permanent: false } ],
     [ "IncompatibleApiVersionError", IncompatibleApiVersionError, { permanent: true } ],
     [ "NotConnectedError", NotConnectedError, { permanent: false } ],
     [ "EncryptionKeyMissingError", EncryptionKeyMissingError, { permanent: true } ],
@@ -333,7 +288,7 @@ describe("Per-class edge enumeration", () => {
   test("NoiseHandshakeError carries a tagged NoiseHandshakeErrorCode", () => {
 
     const codes: readonly NoiseHandshakeErrorCode[] = [
-      "AUTH_FAILED", "CT_TOO_SHORT", "HANDSHAKE_COMPLETE", "HANDSHAKE_TIMEOUT", "INVALID_PSK_LENGTH", "MISSING_KEYS", "MSG_TOO_LONG",
+      "AUTH_FAILED", "CT_TOO_SHORT", "HANDSHAKE_COMPLETE", "INVALID_PSK_LENGTH", "MISSING_KEYS", "MSG_TOO_LONG",
       "NOT_INITIALIZED", "PEER_CLOSED_NOISE", "PEER_PLAINTEXT_DURING_NOISE", "TRUNCATED_E", "UNSUPPORTED_TOKEN"
     ];
 
@@ -352,8 +307,8 @@ describe("Per-class edge enumeration", () => {
   test("ConfigurationError carries a tagged ConfigurationErrorCode and round-trips its cause", () => {
 
     const codes: readonly ConfigurationErrorCode[] = [
-      "AWAIT_STREAM_CLOSED", "COMMAND_UNSUPPORTED", "ENUM_VALUE_UNKNOWN", "EXTRA_SCHEMA_OVERRIDES_BUILTIN", "MALFORMED_ENTITY_ID", "SCHEMA_MISSING_DECODE_CALLBACK",
-      "SCHEMA_UNKNOWN", "UNKNOWN_ENTITY_ID", "VALUE_OUT_OF_RANGE"
+      "COMMAND_UNSUPPORTED", "ENUM_VALUE_UNKNOWN", "EXTRA_SCHEMA_OVERRIDES_BUILTIN", "MALFORMED_ENTITY_ID", "SCHEMA_MISSING_DECODE_CALLBACK", "SCHEMA_UNKNOWN",
+      "UNKNOWN_ENTITY_ID", "VALUE_OUT_OF_RANGE"
     ];
     const inner = new Error("inner");
 
@@ -368,18 +323,6 @@ describe("Per-class edge enumeration", () => {
       assert.equal(err.code, code);
       assert.equal(err.cause, inner);
     }
-  });
-
-  test("NoiseHandshakeTimeoutError climbs to NoiseHandshakeError and HandshakeError and ConnectionError", () => {
-
-    const err = new NoiseHandshakeTimeoutError("x", "HANDSHAKE_TIMEOUT");
-
-    assert.equal(err instanceof NoiseHandshakeTimeoutError, true);
-    assert.equal(err instanceof NoiseHandshakeError, true);
-    assert.equal(err instanceof HandshakeError, true);
-    assert.equal(err instanceof ConnectionError, true);
-    assert.equal(err instanceof EspHomeError, true);
-    assert.equal(err.code, "HANDSHAKE_TIMEOUT");
   });
 
   test("PeerClosedDuringNoiseError climbs to NoiseHandshakeError and HandshakeError and ConnectionError", () => {
@@ -439,28 +382,6 @@ describe("Per-class edge enumeration", () => {
     assert.equal(wrapped.cause, inner);
   });
 
-  test("CameraStreamClosedError climbs the inheritance chain to Error and EspHomeError without extending ConnectionError or PermanentError", () => {
-
-    const err = new CameraStreamClosedError("x", "STREAM_CLOSED", "camera-front");
-
-    assert.equal(err instanceof CameraStreamClosedError, true);
-    assert.equal(err instanceof EspHomeError, true);
-    assert.equal(err instanceof Error, true);
-    assert.equal(err instanceof ConnectionError, false, "operational, not transport-level");
-    assert.equal(err instanceof PermanentError, false, "recoverable; consumer can retry");
-    assert.equal(err.name, "CameraStreamClosedError");
-    assert.equal(err.code, "STREAM_CLOSED");
-    assert.equal(err.cameraId, "camera-front");
-  });
-
-  test("CameraStreamClosedError preserves the cause", () => {
-
-    const inner = new Error("inner");
-    const wrapped: Error = new CameraStreamClosedError("x", "STREAM_CLOSED", "camera-x", { cause: inner });
-
-    assert.equal(wrapped.cause, inner);
-  });
-
   test("PermanentError is abstract - cannot be subclassed without inheritance", () => {
 
     // PermanentError cannot be constructed directly - its subclasses surface the marker.
@@ -493,7 +414,6 @@ describe("Per-class edge enumeration", () => {
       new HandshakeError("x"),
       new PlaintextHandshakeError("x"),
       new NoiseHandshakeError("x", "AUTH_FAILED"),
-      new NoiseHandshakeTimeoutError("x", "HANDSHAKE_TIMEOUT"),
       new PeerClosedDuringNoiseError("x", "PEER_CLOSED_NOISE")
     ];
 

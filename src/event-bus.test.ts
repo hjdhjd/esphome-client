@@ -6,6 +6,7 @@ import { describe, test } from "node:test";
 import { EventBus } from "./event-bus.ts";
 import assert from "node:assert/strict";
 import { setTimeout as delay } from "node:timers/promises";
+import { getEventListeners } from "node:events";
 
 interface TestMap {
 
@@ -244,7 +245,83 @@ describe("EventBus.once", () => {
     const outcome = await Promise.race([ oncePromise.then(() => settled, () => settled), guard ]);
 
     assert.equal(outcome, settled, "dispose() must settle the pending once() promise rather than leave it hanging");
-    await assert.rejects(oncePromise, { name: "AbortError" });
+    await assert.rejects(oncePromise, (err: unknown): boolean => err === (bus as unknown as { disposeController: AbortController }).disposeController.signal.reason);
+  });
+
+  test("rejects with the caller's reason as it is: an Error by identity, a string as itself", async () => {
+
+    using bus = new EventBus<TestMap>();
+    const errorController = new AbortController();
+    const stringController = new AbortController();
+    const reason = new Error("The caller cancelled.");
+    const byError = bus.once("greet", { signal: errorController.signal });
+    const byString = bus.once("greet", { signal: stringController.signal });
+
+    errorController.abort(reason);
+    stringController.abort("caller-string");
+
+    await assert.rejects(byError, (err: unknown): boolean => err === reason);
+    await assert.rejects(byString, (err: unknown): boolean => err === "caller-string");
+  });
+
+  test("rejects at once with the reason of a signal already aborted when it is handed in", async () => {
+
+    using bus = new EventBus<TestMap>();
+    const controller = new AbortController();
+    const reason = new Error("Cancelled before the call.");
+
+    controller.abort(reason);
+
+    // The race bounds the check: a once that parked on the already-aborted signal would leave the delay to settle the race, and the assertion would miss its rejection.
+    await assert.rejects(Promise.race([ bus.once("greet", { signal: controller.signal }), delay(100) ]), (err: unknown): boolean => err === reason);
+  });
+
+  test("rejects with null when its caller signal aborts mid-flight with null", async () => {
+
+    using bus = new EventBus<TestMap>();
+    const controller = new AbortController();
+    const promise = bus.once("greet", { signal: controller.signal });
+
+    controller.abort(null);
+
+    await assert.rejects(promise, (err: unknown): boolean => err === null);
+  });
+
+  test("a once settled by an emit, a caller abort, or a dispose leaves no listener on its caller's signal or on the bus's dispose signal", async () => {
+
+    const settles: readonly (readonly [string, boolean, (bus: EventBus<TestMap>, controller: AbortController) => void])[] = [
+
+      [ "emit", true, (bus: EventBus<TestMap>): void => { bus.emit("greet", "hi"); } ],
+      [ "caller abort", true, (_bus: EventBus<TestMap>, controller: AbortController): void => { controller.abort(); } ],
+      [ "dispose", true, (bus: EventBus<TestMap>): void => { bus.dispose(); } ],
+      [ "emit with no caller signal", false, (bus: EventBus<TestMap>): void => { bus.emit("greet", "hi"); } ]
+    ];
+
+    for(const [ label, withSignal, settle ] of settles) {
+
+      const bus = new EventBus<TestMap>();
+      const disposeSignal = (bus as unknown as { disposeController: AbortController }).disposeController.signal;
+      const before = getEventListeners(disposeSignal, "abort").length;
+      const controller = new AbortController();
+      const promise = bus.once("greet", withSignal ? { signal: controller.signal } : undefined);
+
+      assert.equal(getEventListeners(disposeSignal, "abort").length, before + 1, label + ": a pending once follows the dispose signal");
+      assert.equal(getEventListeners(controller.signal, "abort").length, withSignal ? 1 : 0, label + ": a pending once follows its caller's signal");
+
+      settle(bus, controller);
+
+      if(label === "dispose") {
+
+        await assert.rejects(promise, (err: unknown): boolean => err === disposeSignal.reason);
+      } else {
+
+        await promise.catch((): void => undefined);
+      }
+
+      assert.equal(getEventListeners(controller.signal, "abort").length, 0, label + ": a settled once must leave no listener on its caller's signal");
+      assert.equal(getEventListeners(disposeSignal, "abort").length, before, label + ": a settled once must leave the dispose signal's listeners as it found them");
+      bus.dispose();
+    }
   });
 });
 
@@ -563,6 +640,38 @@ describe("EventBus.stream terminal contract", () => {
 
     await assert.rejects(parked, { name: "AbortError" });
     assert.deepEqual(await iter.next(), { done: true, value: undefined });
+  });
+
+  test("an abort with a string reason rejects with that string, whether it finds a next() parked or the signal was aborted before the stream was built", async () => {
+
+    using bus = new EventBus<TestMap>();
+    const controller = new AbortController();
+    const parked = bus.stream("number", { signal: controller.signal })[Symbol.asyncIterator]().next();
+
+    controller.abort("caller-string");
+
+    await assert.rejects(parked, (err: unknown): boolean => err === "caller-string");
+
+    const preAborted = bus.stream("number", { signal: AbortSignal.abort("pre-string") })[Symbol.asyncIterator]();
+
+    await assert.rejects(preAborted.next(), (err: unknown): boolean => err === "pre-string");
+  });
+
+  test("a falsy reason stored while no next() is parked rejects the next next() with that reason, and every later next() resolves done", async () => {
+
+    using bus = new EventBus<TestMap>();
+
+    // Each reason is falsy, so a stored failure read by its truthiness would pass for a clean end.
+    for(const reason of [ null, "" ]) {
+
+      const controller = new AbortController();
+      const iter = bus.stream("number", { signal: controller.signal })[Symbol.asyncIterator]();
+
+      controller.abort(reason);
+
+      await assert.rejects(iter.next(), (err: unknown): boolean => err === reason);
+      assert.deepEqual(await iter.next(), { done: true, value: undefined }, "the failure surfaces from exactly one next()");
+    }
   });
 
   test("throw() runs onClose once, rejects with the supplied error, and leaves the stream ended", async () => {

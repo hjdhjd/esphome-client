@@ -547,7 +547,7 @@ describe("Transport.open - abort signal paths", () => {
     await assert.rejects(promise, (err) => err === reason);
   });
 
-  test("rejects with a synthesized DOMException AbortError when the signal's reason is not an Error", async () => {
+  test("rejects with the signal's reason as it is when the reason is not an Error", async () => {
 
     const ac = new AbortController();
     const mock = new MockSocket();
@@ -555,13 +555,7 @@ describe("Transport.open - abort signal paths", () => {
 
     ac.abort("not-an-error-string");
 
-    await assert.rejects(promise, (err) => {
-
-      assert.ok(err instanceof DOMException);
-      assert.equal(err.name, "AbortError");
-
-      return true;
-    });
+    await assert.rejects(promise, (err: unknown): boolean => err === "not-an-error-string");
   });
 
   test("late-firing the signal after a successful open does NOT destroy the socket (listener removed at connect)", async () => {
@@ -1215,14 +1209,14 @@ describe("Transport.firstByte", () => {
     transport[Symbol.dispose]();
   });
 
-  test("rejects when the supplied signal aborts while parked waiting for the first byte", async () => {
+  test("rejects with a string reason as it is when the supplied signal aborts while parked waiting for the first byte", async () => {
 
     const mock = new MockSocket();
     const transport = await openTransport(mock);
     const ac = new AbortController();
     const promise = transport.firstByte(ac.signal);
 
-    ac.abort();
+    ac.abort("first-byte-cancelled");
 
     await assert.rejects(promise, (err: unknown): boolean => err === ac.signal.reason);
 
@@ -1323,7 +1317,7 @@ describe("Transport.nextNoiseHandshakeFrame", () => {
     transport[Symbol.dispose]();
   });
 
-  test("rejects when the signal aborts while parked", async () => {
+  test("rejects with a string reason as it is when the signal aborts while parked", async () => {
 
     const mock = new MockSocket();
     const transport = await openTransport(mock);
@@ -1333,7 +1327,7 @@ describe("Transport.nextNoiseHandshakeFrame", () => {
     const ac = new AbortController();
     const promise = transport.nextNoiseHandshakeFrame(ac.signal);
 
-    ac.abort();
+    ac.abort("handshake-frame-cancelled");
 
     await assert.rejects(promise, (err: unknown): boolean => err === ac.signal.reason);
 

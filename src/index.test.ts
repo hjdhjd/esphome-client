@@ -18,13 +18,14 @@ describe("Public entry-point re-exports", () => {
     assert.deepEqual(Object.keys(publicApi).sort(), [
 
       "AlarmControlPanelCommand", "AlarmControlPanelState", "AuthenticationError", "BackpressureError", "BluetoothScannerMode", "BluetoothScannerState",
-      "BufferOverflowError", "CameraStreamClosedError", "CipherState", "ClimateAction", "ClimateFanMode", "ClimateFeature", "ClimateMode", "ClimatePreset",
-      "ClimateSwingMode", "ColorMode", "ConfigurationError", "ConnectionClosedByPeerError", "ConnectionError", "ConnectionRefusedError", "ConnectionTimeoutError",
+      "BufferOverflowError", "CipherState", "ClimateAction", "ClimateFanMode", "ClimateFeature", "ClimateMode", "ClimatePreset",
+      "ClimateSwingMode", "ColorMode", "ConfigurationError", "ConnectionClosedByPeerError", "ConnectionError", "ConnectionLostError", "ConnectionRefusedError",
+      "ConnectionTimeoutError",
       "CoverOperation", "DecodingError", "DecryptionFailedError", "ENTITY_SCHEMAS", "ESPHOME_NOISE_PROLOGUE", "EncodingError", "EncryptionKeyInvalidError",
       "EncryptionKeyMissingError", "EncryptionRequiredError", "EntityCategory", "EspHomeClient", "EspHomeError", "FanDirection", "FrameTooLargeError", "HandshakeError",
       "HandshakeState", "HealthState", "HeartbeatStalledError", "IncompatibleApiVersionError", "InfraredCapabilityFlags", "LockCommand", "LockState", "LogLevel",
       "MalformedVarintError", "MediaPlayerCommand", "MediaPlayerFormatPurpose", "MediaPlayerState", "MessageTooManyFieldsError", "NOISE_DH_LEN", "NOISE_MAX_MESSAGE_LEN",
-      "NOISE_PSK_LEN", "NegotiationFailedError", "NoiseHandshakeError", "NoiseHandshakeTimeoutError", "NotConnectedError", "NumberMode", "PeerClosedDuringNoiseError",
+      "NOISE_PSK_LEN", "NegotiationFailedError", "NoiseHandshakeError", "NotConnectedError", "NumberMode", "PeerClosedDuringNoiseError",
       "PermanentError", "PlaintextHandshakeError", "ProtocolError", "RadioFrequencyCapabilityFlags", "RadioFrequencyModulation", "SensorStateClass",
       "SerialProxyLineStateFlags", "SerialProxyParity", "SerialProxyPortType", "SerialProxyRequestType", "SerialProxyStatus", "ServiceArgType", "TemperatureUnit",
       "TextMode", "TruncatedMessageError", "UnknownEntityTypeError", "UnknownMessageTypeError", "UnsupportedCapabilityError", "UpdateCommand", "ValveOperation",

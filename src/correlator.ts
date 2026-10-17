@@ -10,13 +10,12 @@ import { ConnectionError } from "./errors.ts";
  *
  * @remarks A {@link Correlator} owns a `Map` of pending awaits keyed by a serialised form of `K`. This primitive is the single source of truth for issuing,
  * awaiting, resolving, timing out, and aborting correlated requests across the library. The Map entry's presence is the source of truth for whether an await
- * is in flight - there is no separate `settled` flag, because the moment a key is settled (resolve, reject, timeout, abort, or {@link Correlator.rejectAll})
- * the entry is deleted.
+ * is in flight - there is no separate `settled` flag, because the moment a key is settled (resolve, reject, timeout, or abort) the entry is deleted.
  *
  * Three semantic guarantees the primitive provides that ad-hoc resolvers do not:
  *
- * 1. **Listener cleanup is automatic.** Every await composes its abort sources (`AbortSignal.any` over the optional timeout and the optional user signal) and detaches
- *    the abort listener the moment the entry settles via any path. No listener-on-long-lived-signal leaks.
+ * 1. **Listener cleanup is automatic.** Every await follows its abort sources, the optional timeout and the optional user signal, through one listener that it removes
+ *    from every source the moment the entry settles via any path, so a wait leaves nothing behind on a signal that outlives it.
  * 2. **In-flight guard is uniform.** A second {@link Correlator.await} for the same key throws {@link ConnectionError} with code `"CORRELATOR_KEY_IN_FLIGHT"`. Hosts
  *    that want their own error code call {@link Correlator.pending} first and throw the host-specific error before invoking `await`.
  * 3. **Stray responses are observable.** {@link Correlator.resolve} and {@link Correlator.reject} return a boolean indicating whether a pending await was settled. A
@@ -39,7 +38,7 @@ import { ConnectionError } from "./errors.ts";
  *
  * } catch(err) {
  *
- *   if((err instanceof DOMException) && (err.name === "AbortError")) {
+ *   if((err instanceof DOMException) && (err.name === "TimeoutError")) {
  *
  *     log.debug("Graceful disconnect timed out; tearing down anyway.");
  *
@@ -96,7 +95,7 @@ export class Correlator<T, K = string> {
 
   /**
    * Begin awaiting a correlated response for `key`. The returned promise resolves when {@link Correlator.resolve} is later called for the matching key, and rejects on
-   * timeout, abort, {@link Correlator.reject}, or {@link Correlator.rejectAll}.
+   * timeout, abort, or {@link Correlator.reject}.
    *
    * @param key - The correlation key. Serialised via {@link CorrelatorOptions.keyToString} for the Map lookup.
    * @param options - Optional timeout and user-supplied abort signal. When neither is supplied, the await waits indefinitely for a {@link Correlator.resolve} or
@@ -104,14 +103,15 @@ export class Correlator<T, K = string> {
    *
    * @returns A promise that resolves with the value passed to {@link Correlator.resolve}.
    *
-   * @throws Immediately - the returned promise rejects in the synchronous prelude (before any timeout is armed), via `signal.throwIfAborted()`, when `options.signal`
-   * is already aborted at call time, mirroring the platform's `events.once` contract.
+   * @throws Immediately - the returned promise rejects in the synchronous prelude (before any timeout is armed), via `signal.throwIfAborted()`, with `options.signal`'s
+   * reason when the signal is already aborted at call time.
    * @throws Immediately - the returned promise rejects in the synchronous prelude with a {@link ConnectionError} carrying code `"CORRELATOR_KEY_IN_FLIGHT"` when
    * another await for the same serialised key is still pending. Hosts that want a host-specific code call {@link Correlator.pending} first and throw their own error
    * before invoking this method.
-   * @throws Asynchronously - a `DOMException` with `name === "AbortError"` when the timeout elapses. When the user signal aborts, the promise rejects with
-   * `signal.reason` (typically an `AbortError`, or the custom reason passed to `AbortController.abort(reason)`).
-   * @throws Asynchronously - the reason supplied to {@link Correlator.reject} or {@link Correlator.rejectAll}.
+   * @throws Asynchronously - the timeout signal's own `TimeoutError`, a `DOMException` with `name === "TimeoutError"`, when the timeout elapses. When the user signal
+   * aborts, the promise rejects with `signal.reason` as it is (typically an `AbortError`, or the custom reason passed to `AbortController.abort(reason)`), and a user
+   * abort that lands in the same tick as the timeout wins.
+   * @throws Asynchronously - the reason supplied to {@link Correlator.reject}.
    */
   public async await(key: K, options?: CorrelatorAwaitOptions): Promise<T> {
 
@@ -126,72 +126,57 @@ export class Correlator<T, K = string> {
     }
 
     const { promise, reject, resolve } = Promise.withResolvers<T>();
-
-    // Compose every available abort source so a single listener observes whichever fires first. We track the user signal separately because we propagate its `reason`
-    // verbatim on user-driven aborts; the timeout case manufactures its own AbortError so the message is precise about the duration.
     const userSignal = options?.signal;
-    const timeoutMs = options?.timeoutMs;
-    const signals: AbortSignal[] = [];
+    const timeoutSignal = (options?.timeoutMs !== undefined) ? AbortSignal.timeout(options.timeoutMs) : undefined;
 
-    if(timeoutMs !== undefined) {
-
-      signals.push(AbortSignal.timeout(timeoutMs));
-    }
-
-    if(userSignal !== undefined) {
-
-      signals.push(userSignal);
-    }
-
-    // No abort source - the await waits forever for an out-of-band settle. We still need a PendingEntry so resolve/reject can find us.
-    if(signals.length === 0) {
+    // No abort source - a wait with neither a signal nor a timeout settles only by a resolve or a reject for its key, which is why every client wait passes a signal.
+    // We still need a PendingEntry so resolve/reject can find us.
+    if((userSignal === undefined) && (timeoutSignal === undefined)) {
 
       this.entries.set(serialKey, { reject, resolve });
 
       return promise;
     }
 
-    // We always run the inputs through `AbortSignal.any` even when there is only one. The composite is a fresh signal we own, so any internal listener cleanup never
-    // touches the long-lived signal the caller supplied; it also keeps the abort path uniform across single- and multi-source cases.
-    const composedSignal = AbortSignal.any(signals);
-
+    // One listener follows each source and rejects with the reason of the source that ended the wait, unwrapped: the caller's own reason, or the timeout signal's
+    // `TimeoutError`. The caller's signal is read first, so a caller abort landing in the same tick as the timeout still wins.
     const onAbort = (): void => {
 
-      // Map presence is the source of truth. If we are no longer in the map, another path (resolve, reject, rejectAll) already settled the promise.
+      // Map presence is the source of truth. If we are no longer in the map, another path (resolve or reject) already settled the promise.
       if(this.entries.get(serialKey) !== entry) {
 
         return;
       }
 
       this.entries.delete(serialKey);
-
-      if(userSignal?.aborted) {
-
-        reject(userSignal.reason);
-
-        return;
-      }
-
-      reject(new DOMException("Correlator await for key " + JSON.stringify(serialKey) + " timed out after " + String(timeoutMs) + " ms.", "AbortError"));
+      entry.reject(userSignal?.aborted ? userSignal.reason : timeoutSignal?.reason);
     };
 
-    composedSignal.addEventListener("abort", onAbort, { once: true });
+    // We follow each source directly rather than through an `AbortSignal.any` composite: on the Node 22 line a composite stays registered on a long-lived source,
+    // such as a caller's signal or the connection's, until that source is collected. The entry's resolve/reject wrappers remove the listener from every source, so the
+    // wait leaves nothing behind on any of them the moment it settles via any path.
+    const detach = (): void => {
 
-    // The entry's resolve/reject wrappers detach the abort listener so the composed signal becomes GC-eligible the moment the entry settles via any path.
+      userSignal?.removeEventListener("abort", onAbort);
+      timeoutSignal?.removeEventListener("abort", onAbort);
+    };
+
     const entry: PendingEntry<T> = {
 
       reject: (reason: unknown): void => {
 
-        composedSignal.removeEventListener("abort", onAbort);
+        detach();
         reject(reason);
       },
       resolve: (value: T): void => {
 
-        composedSignal.removeEventListener("abort", onAbort);
+        detach();
         resolve(value);
       }
     };
 
+    userSignal?.addEventListener("abort", onAbort, { once: true });
+    timeoutSignal?.addEventListener("abort", onAbort, { once: true });
     this.entries.set(serialKey, entry);
 
     return promise;
@@ -243,31 +228,6 @@ export class Correlator<T, K = string> {
     entry.reject(reason);
 
     return true;
-  }
-
-  /**
-   * Reject every pending await. Hosts call this at lifecycle boundaries (transport teardown, connection reset) so an in-flight correlator cannot leak across
-   * connection epochs.
-   *
-   * @param reason - The rejection reason. Propagated verbatim to every awaiter.
-   */
-  public rejectAll(reason: unknown): void {
-
-    if(this.entries.size === 0) {
-
-      return;
-    }
-
-    // Snapshot entries before iteration: each `entry.reject` runs synchronously and would not normally mutate the map (we delete first), but a snapshot is the safer
-    // pattern for any future evolution where the rejector closure touches the map.
-    const snapshot = Array.from(this.entries.values());
-
-    this.entries.clear();
-
-    for(const entry of snapshot) {
-
-      entry.reject(reason);
-    }
   }
 
   /**
@@ -329,7 +289,7 @@ export interface CorrelatorAwaitOptions {
   signal?: AbortSignal;
 
   /**
-   * Optional timeout in milliseconds. When elapsed, the await rejects with a `DOMException` of `name === "AbortError"`.
+   * Optional timeout in milliseconds. When elapsed, the await rejects with the timeout signal's own `TimeoutError`, a `DOMException` of `name === "TimeoutError"`.
    */
   timeoutMs?: number;
 }

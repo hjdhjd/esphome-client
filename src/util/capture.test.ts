@@ -8,13 +8,17 @@
  * RecordingTransport tee (it copies every inbound message while delegating), and PII scrubbing. The end-to-end record-through-replay drive lives in
  * test/e2e/capture.test.ts, where the simulator scenarios provide validated wire fixtures.
  */
-import { RecordingTransport, decodeCaptureFrames, encodeCaptureFrames, replayCaptureFrames, scrubDeviceInfo } from "./capture.ts";
+import { RecordingTransport, decodeCaptureFrames, encodeCaptureFrames, recordCapture, replayCaptureFrames, scrubDeviceInfo } from "./capture.ts";
 import { describe, test } from "node:test";
 import { CliError } from "./cli-error.ts";
 import type { DeviceInfo } from "../esphome-client.ts";
+import { EspHomeClient } from "../esphome-client.ts";
 import type { InboundMessage } from "../transport.ts";
+import { MessageType } from "../protocol/message-types.ts";
 import { MockTransport } from "../testing/mock-transport.ts";
 import assert from "node:assert/strict";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 
 describe("capture frame codec", () => {
 
@@ -80,6 +84,47 @@ describe("capture replay refusal", () => {
 
     // A capture that cannot drive discovery is the user's to re-record, so the refusal is the CLI's user-facing error class and names the missing frame.
     await assert.rejects(replayCaptureFrames([{ payload: Buffer.from([1]), type: 2 }]), { constructor: CliError, message: /no LIST_ENTITIES_DONE_RESPONSE frame/ });
+  });
+});
+
+describe("capture connect timeouts", () => {
+
+  test("a recording whose connect times out rejects with a CliError naming the host once the construction retries are spent", async (t) => {
+
+    const timeout = new DOMException("The operation was aborted due to timeout.", "TimeoutError");
+    const connect = t.mock.method(EspHomeClient.prototype, "connect", (): Promise<void> => Promise.reject(timeout));
+    const startedAt = Date.now();
+
+    // The connect fails before the capture window opens, so nothing is written to the output path.
+    await assert.rejects(recordCapture({ host: "192.0.2.1", outputPath: join(tmpdir(), "esphome-capture-timeout.bin") }), (error: unknown): boolean => {
+
+      assert.ok(error instanceof CliError, "a timed-out recording connect must reach the bin as a user-facing CliError");
+      assert.match(error.message, /192\.0\.2\.1/, "the failure must name the host");
+      assert.equal(error.cause, timeout, "the failure must carry the TimeoutError as its cause");
+
+      return true;
+    });
+
+    // The default construction budget retries the connect with a growing backoff between attempts, so the recording reports the timeout only once that backoff is
+    // waited out.
+    assert.equal(connect.mock.callCount(), 4, "the recording must spend the default construction retries before it reports the timeout");
+    assert.ok((Date.now() - startedAt) < 8000, "the recording must report the timeout once the backoff is waited out rather than hang");
+  });
+
+  test("a replay whose connect times out rejects with a CliError naming the replay host", async (t) => {
+
+    const timeout = new DOMException("The operation was aborted due to timeout.", "TimeoutError");
+
+    t.mock.method(EspHomeClient.prototype, "connect", (): Promise<void> => Promise.reject(timeout));
+
+    await assert.rejects(replayCaptureFrames([{ payload: Buffer.alloc(0), type: MessageType.LIST_ENTITIES_DONE_RESPONSE }]), (error: unknown): boolean => {
+
+      assert.ok(error instanceof CliError, "a timed-out replay connect must reach the bin as a user-facing CliError");
+      assert.match(error.message, /replay/, "the failure must name the replay host");
+      assert.equal(error.cause, timeout, "the failure must carry the TimeoutError as its cause");
+
+      return true;
+    });
   });
 });
 

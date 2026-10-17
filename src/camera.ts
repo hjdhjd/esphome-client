@@ -22,10 +22,11 @@
 import { EMPTY, ReissuableSubscription } from "./reissuable-subscription.ts";
 import type { EventBus, StreamOptions } from "./event-bus.ts";
 import { MessageType, WireType } from "./protocol/index.ts";
+import { composeRequestSignal, requireConnection } from "./connection-scope.ts";
 import { Buffer } from "node:buffer";
 import type { CameraEvent } from "./schemas/index.ts";
-import { CameraStreamClosedError } from "./errors.ts";
 import type { ClientEventsMap } from "./esphome-client.ts";
+import type { ConnectionScope } from "./connection-scope.ts";
 import type { EntityId } from "./entity-id.ts";
 import type { EspHomeLogging } from "./types.ts";
 import type { ProtoField } from "./protocol/codec.ts";
@@ -34,15 +35,25 @@ import type { SubscriptionLifecycle } from "./reissuable-subscription.ts";
 import { encodeProtoFields } from "./protocol/codec.ts";
 
 /**
- * Narrow interface the host implements for the camera sub-API: the bus (for the snapshot and stream subscriptions), a logger, the telemetry publish hook for reassembled
- * images, and the frame-and-send hook. The per-id filter branches on the branded entity id stamped on every `camera` event, so no friendly-name resolver hook is
- * required.
+ * Default timeout in milliseconds applied to {@link CameraApi.snapshot} when the caller omits `timeoutMs`: long enough for a multi-packet image on a busy device,
+ * short enough that a camera that never answers does not hold the caller for long.
+ */
+const DEFAULT_SNAPSHOT_TIMEOUT_MS = 5000;
+
+/**
+ * Narrow interface the host implements for the camera sub-API: the bus (for the snapshot and stream subscriptions), the connection scope, a logger, the telemetry
+ * publish hook for reassembled images, and the frame-and-send hook. The per-id filter branches on the branded entity id stamped on every `camera` event, so no
+ * friendly-name resolver hook is required.
  *
  * @internal
  */
 export interface CameraHost {
 
   readonly bus: EventBus<ClientEventsMap>;
+
+  /** The connection a request issued at this moment would travel on, as {@link ConnectionScope} documents. */
+  connectionScope(): ConnectionScope;
+
   readonly log: EspHomeLogging;
 
   /**
@@ -130,7 +141,8 @@ export class CameraApi implements SubscriptionLifecycle {
    * Capture one image. Sends `CAMERA_IMAGE_REQUEST(single=true)` and resolves with the reassembled image when the device replies.
    *
    * @remarks Subscribes to the `camera` bus channel before sending the request so a fast device cannot beat the listener. The default timeout is 5000ms; supply
-   * `options.timeoutMs` to override. The composed signal layers the caller's optional `AbortSignal` over the timeout via {@link AbortSignal.any}.
+   * `options.timeoutMs` to override. The wait follows the caller's optional `AbortSignal`, the timeout, and the connection the request was issued on, and rejects
+   * with the reason of whichever ends it first.
    *
    * Usage:
    *
@@ -138,25 +150,24 @@ export class CameraApi implements SubscriptionLifecycle {
    *
    * @param options - Optional cancellation signal and custom timeout (default 5000ms).
    * @returns A promise that resolves with the captured image as a Buffer.
-   * @throws Asynchronously - a `DOMException` with name `TimeoutError` when {@link AbortSignal.timeout} fires. When the caller's `options.signal` aborts, the promise
-   * rejects with the signal's reason verbatim (typically an `AbortError` DOMException, or the custom reason passed to `AbortController.abort(reason)`).
-   * @throws {@link CameraStreamClosedError} with code `STREAM_CLOSED` when the bus stream closes without yielding an image for this camera (typically the
-   * transport disconnected mid-snapshot). The error carries the branded {@link CameraStreamClosedError.cameraId} so consumers awaiting multiple cameras can
-   * correlate the rejection.
-   *
+   * @throws {NotConnectedError} (`CONNECT_IN_PROGRESS`) when the call is issued while a manual connect has not yet settled or the automatic reconnect is active, and
+   * (`NOT_CONNECTED`) when it is issued with no connection otherwise. No stream opens and nothing is sent.
+   * @throws {ConnectionLostError} when the connection the request was issued on is torn down before an image arrives.
+   * @throws The signal's reason, as it is, when `options.signal` aborts, including when it was already aborted at call time, and the timeout's `TimeoutError` when no
+   * image arrives within `options.timeoutMs`.
+   * @throws Error when the event bus ends the wait before an image arrives, which the client's own connection lifecycle never causes: the bus lives as long as the
+   * client.
    */
   public async snapshot(options?: { signal?: AbortSignal; timeoutMs?: number }): Promise<Buffer> {
 
-    const timeoutMs = options?.timeoutMs ?? 5000;
-    const sources: AbortSignal[] = [AbortSignal.timeout(timeoutMs)];
+    options?.signal?.throwIfAborted();
 
-    if(options?.signal) {
+    const connection = requireConnection(this.host.connectionScope(), "camera.snapshot()");
 
-      sources.push(options.signal);
-    }
+    // The composite is bound before the stream opens and released when the snapshot settles, so its listeners never outlive the wait.
+    using request = composeRequestSignal(connection, { signal: options?.signal, timeoutMs: options?.timeoutMs ?? DEFAULT_SNAPSHOT_TIMEOUT_MS });
 
-    const composedSignal = AbortSignal.any(sources);
-    const stream = this.host.bus.stream("camera", { signal: composedSignal });
+    const stream = this.host.bus.stream("camera", { signal: request.signal });
 
     // Issue the request after subscribing so a fast device cannot beat our listener.
     this.sendCameraImageRequest({ single: true, stream: false });
@@ -172,7 +183,8 @@ export class CameraApi implements SubscriptionLifecycle {
       }
     }
 
-    throw new CameraStreamClosedError("Camera snapshot stream ended before an image arrived for " + this.id + ".", "STREAM_CLOSED", this.id);
+    // The timeout, the caller's signal, and the connection each reject through the iterator, so the loop ends here only when the event bus itself ended the stream.
+    throw new Error("camera.snapshot(): the event bus ended the wait before an image arrived for " + this.id + ".");
   }
 
   /**

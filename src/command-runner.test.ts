@@ -4,17 +4,19 @@
  */
 import type { ClientMetrics, Nullable } from "./types.ts";
 import type { CommandAndAwaitable, CommandHost } from "./command-runner.ts";
+import { ConfigurationError, NotConnectedError } from "./errors.ts";
 import { DEFAULT_COMMAND_AWAIT_TIMEOUT_MS, runCommand, runCommandAndAwait } from "./command-runner.ts";
 import { describe, test } from "node:test";
 import type { Buffer } from "node:buffer";
 import type { ClientEventsMap } from "./esphome-client.ts";
-import { ConfigurationError } from "./errors.ts";
+import type { ConnectionScope } from "./connection-scope.ts";
 import { ENTITY_SCHEMAS } from "./schemas/index.ts";
 import type { EntityId } from "./entity-id.ts";
 import type { EntitySchema } from "./schemas/index.ts";
 import { EventBus } from "./event-bus.ts";
 import { MessageType } from "./protocol/message-types.ts";
 import assert from "node:assert/strict";
+import { connectionLostError } from "./connection-scope.ts";
 import { entityId } from "./entity-id.ts";
 
 // Recording logger captures each level so tests can assert on the malformed-id warn, the encode-failure warns, the sendEntityCommand debug line, and the
@@ -65,7 +67,8 @@ interface CapturedMetric {
 }
 
 // Build a CommandHost with optional overrides. The default host knows nothing (keyForId returns null, deviceIdForKey returns undefined, send is a no-op). Each test
-// composes the parts it cares about.
+// composes the parts it cares about. The connection lives in a closure, starting attached, so a test aborts it to stand for a teardown, sets it to `null` to stand
+// for no transport, and installs a fresh controller for the next connection; a spread copy of the host reads the same controller.
 interface MockHostBundle {
 
   bus: EventBus<ClientEventsMap>;
@@ -73,6 +76,7 @@ interface MockHostBundle {
   host: CommandHost;
   logger: RecordingLogger;
   metrics: CapturedMetric[];
+  setConnection: (controller: Nullable<AbortController>) => void;
 }
 
 interface MockHostOverrides {
@@ -100,9 +104,12 @@ const mockHost = (overrides: MockHostOverrides = {}): MockHostBundle => {
     };
   })();
 
+  let connection: Nullable<AbortController> = new AbortController();
+
   const host: CommandHost = {
 
     bus,
+    connectionScope: (): ConnectionScope => ((connection === null) ? { kind: "none" } : { kind: "attached", signal: connection.signal }),
     deviceIdForKey: overrides.deviceIdForKey ?? ((): number | undefined => undefined),
     keyForId: overrides.keyForId ?? ((): Nullable<number> => null),
     log: logger,
@@ -111,7 +118,7 @@ const mockHost = (overrides: MockHostOverrides = {}): MockHostBundle => {
     send: overrides.send ?? ((type: number, payload: Buffer): void => { frames.push({ payload, type }); })
   };
 
-  return { bus, frames, host, logger, metrics: recordedMetrics };
+  return { bus, frames, host, logger, metrics: recordedMetrics, setConnection: (controller: Nullable<AbortController>): void => { connection = controller; } };
 };
 
 // Bend the brand to mint a structurally-malformed branded id without going through the runtime mint (which always produces a well-formed `<type>-<objectId>` string).
@@ -561,7 +568,7 @@ describe("runCommandAndAwait - typed error paths", () => {
     );
   });
 
-  test("throws ConfigurationError(AWAIT_STREAM_CLOSED) when the bus is disposed before a matching event arrives", async () => {
+  test("rejects with a plain Error naming the bus when the bus is disposed before a matching event arrives", async () => {
 
     const bus = new EventBus<ClientEventsMap>();
     const bundle = mockHost({
@@ -575,9 +582,11 @@ describe("runCommandAndAwait - typed error paths", () => {
       }
     });
 
+    // Only the bus ending the stream reaches the runner's tail, which no connection lifecycle causes, so the rejection carries no public class or code. The object
+    // form's exact constructor refuses any EspHomeError subclass.
     await assert.rejects(
       runCommandAndAwait(bundle.host, entityId("switch", "x"), { state: true }),
-      { code: "AWAIT_STREAM_CLOSED", constructor: ConfigurationError }
+      { constructor: Error, message: /^commandAndAwait\(\): the event bus ended the wait before a matching state event arrived\.$/ }
     );
   });
 });
@@ -659,7 +668,7 @@ describe("runCommandAndAwait - abort + timeout boundaries", () => {
     );
   });
 
-  test("rejects when a pre-aborted caller signal is supplied", async () => {
+  test("rejects when a pre-aborted caller signal is supplied, with its reason as it is, sending nothing and counting nothing", async () => {
 
     const bus = new EventBus<ClientEventsMap>();
     const bundle = mockHost({ bus, keyForId: (): number => 1 });
@@ -669,8 +678,20 @@ describe("runCommandAndAwait - abort + timeout boundaries", () => {
 
     await assert.rejects(
       runCommandAndAwait(bundle.host, entityId("switch", "x"), { state: true }, { signal: controller.signal, timeoutMs: 5000 }),
-      Error
+      (err: unknown): boolean => err === controller.signal.reason
     );
+
+    // A reason that is no Error comes back as itself too.
+    const stringController = new AbortController();
+
+    stringController.abort("preaborted");
+
+    await assert.rejects(
+      runCommandAndAwait(bundle.host, entityId("switch", "x"), { state: true }, { signal: stringController.signal, timeoutMs: 5000 }),
+      (err: unknown): boolean => err === "preaborted"
+    );
+    assert.equal(bundle.frames.length, 0, "a pre-aborted command sends no frame");
+    assert.equal(bundle.metrics.filter((m) => m.name === "entity.commands.sent").length, 0, "a pre-aborted command counts no send");
   });
 
   test("aborts mid-stream when the caller's signal fires after the subscribe but before any event matches", async () => {
@@ -678,12 +699,13 @@ describe("runCommandAndAwait - abort + timeout boundaries", () => {
     const bus = new EventBus<ClientEventsMap>();
     const bundle = mockHost({ bus, keyForId: (): number => 1 });
     const controller = new AbortController();
+    const reason = new Error("user-cancelled");
 
-    setTimeout((): void => { controller.abort(new Error("user-cancelled")); }, 25);
+    setTimeout((): void => { controller.abort(reason); }, 25);
 
     await assert.rejects(
       runCommandAndAwait(bundle.host, entityId("switch", "x"), { state: true }, { signal: controller.signal, timeoutMs: 5000 }),
-      Error
+      (err: unknown): boolean => err === reason
     );
   });
 
@@ -702,6 +724,45 @@ describe("runCommandAndAwait - abort + timeout boundaries", () => {
 
     // Sanity: the rejection happened within a generous wall-clock budget around the configured 30ms.
     assert.ok(elapsed < 1000, "timeout fired in <1s");
+  });
+});
+
+// The connection scope: admission before anything else, and a teardown ending the wait.
+
+describe("runCommandAndAwait - connection admission and teardown", () => {
+
+  test("a teardown of the connection rejects a pending wait with the connection-lost error it was aborted with", async () => {
+
+    const bus = new EventBus<ClientEventsMap>();
+    const bundle = mockHost({ bus, keyForId: (): number => 1 });
+    const connection = new AbortController();
+    const lost = connectionLostError();
+
+    bundle.setConnection(connection);
+
+    const pending = runCommandAndAwait(bundle.host, entityId("switch", "x"), { state: true }, { timeoutMs: 1000 });
+
+    connection.abort(lost);
+
+    await assert.rejects(pending, (err: unknown): boolean => err === lost);
+  });
+
+  test("a call with no connection is refused with NOT_CONNECTED ahead of validation, opening no stream, sending nothing, and counting nothing", async () => {
+
+    const bus = new EventBus<ClientEventsMap>();
+    const bundle = mockHost({ bus, keyForId: (): number => 1 });
+
+    bundle.setConnection(null);
+
+    const pending = runCommandAndAwait(bundle.host, entityId("switch", "x"), { state: true }, { timeoutMs: 1000 });
+
+    assert.equal(bus.listenerCount("switch"), 0, "a refused command must not open the state stream");
+    await assert.rejects(pending, { code: "NOT_CONNECTED", constructor: NotConnectedError });
+
+    // The admission runs ahead of validation, so a malformed id reports the missing connection rather than the id.
+    await assert.rejects(runCommandAndAwait(bundle.host, malformedId<"light">("nodash"), { state: true }), { code: "NOT_CONNECTED", constructor: NotConnectedError });
+    assert.equal(bundle.frames.length, 0, "a refused command sends no frame");
+    assert.equal(bundle.metrics.filter((m) => m.name === "entity.commands.sent").length, 0, "a refused command counts no send");
   });
 });
 
@@ -965,6 +1026,7 @@ describe("command-runner - public boundary surface", () => {
     const host: CommandHost = {
 
       bus: new EventBus<ClientEventsMap>(),
+      connectionScope: (): ConnectionScope => ({ kind: "none" }),
       deviceIdForKey: (): undefined => undefined,
       keyForId: (): null => null,
       log: { debug: (): void => { /* no-op */ }, error: (): void => { /* no-op */ }, info: (): void => { /* no-op */ }, warn: (): void => { /* no-op */ } },
@@ -981,6 +1043,7 @@ describe("command-runner - public boundary surface", () => {
     const host: CommandHost = {
 
       bus: new EventBus<ClientEventsMap>(),
+      connectionScope: (): ConnectionScope => ({ kind: "none" }),
       deviceIdForKey: (): undefined => undefined,
       keyForId: (): number => 1,
       log: { debug: (): void => { /* no-op */ }, error: (): void => { /* no-op */ }, info: (): void => { /* no-op */ }, warn: (): void => { /* no-op */ } },

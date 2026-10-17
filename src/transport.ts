@@ -636,95 +636,92 @@ export class Transport implements TransportLike {
   }
 
   /**
-   * Establish the TCP connection. Called once by {@link Transport.open}.
+   * Establish the TCP connection. Called once by {@link Transport.open}. An abort rejects with the signal's reason as it is, whatever its type.
    */
   private async connect(signal?: AbortSignal): Promise<void> {
 
     signal?.throwIfAborted();
 
-    return new Promise<void>((resolve, reject) => {
+    const { promise, resolve, reject }: PromiseWithResolvers<void> = Promise.withResolvers();
+    const factory = this.options.socketFactory ?? ((p): Socket => createConnection({ host: p.host, port: p.port }));
+    const socket = factory({ host: this.options.host, port: this.options.port });
+    let settled = false;
 
-      const factory = this.options.socketFactory ?? ((p): Socket => createConnection({ host: p.host, port: p.port }));
-      const socket = factory({ host: this.options.host, port: this.options.port });
-      let settled = false;
+    const onConnect = (): void => {
 
-      const onConnect = (): void => {
+      if(settled) {
 
-        if(settled) {
+        return;
+      }
 
-          return;
-        }
+      settled = true;
+      signal?.removeEventListener("abort", onAbort);
 
-        settled = true;
-        signal?.removeEventListener("abort", onAbort);
+      // Detach the connect-attempt error listener before installing the long-lived listeners. It is a `.once` that never fired, so without this it would linger on the
+      // live socket for the connection's lifetime alongside the error listener attachSocketListeners adds - two error listeners for one socket. Symmetric with the
+      // abort-listener removal above; tearDownSocket's removeAllListeners is the backstop, but a set-once-never-cleared listener is the hygiene defect we avoid.
+      socket.removeListener("error", onError);
 
-        // Detach the connect-attempt error listener before installing the long-lived listeners. It is a `.once` that never fired, so without this it would linger on the
-        // live socket for the connection's lifetime alongside the error listener attachSocketListeners adds - two error listeners for one socket. Symmetric with the
-        // abort-listener removal above; tearDownSocket's removeAllListeners is the backstop, but a set-once-never-cleared listener is the hygiene defect we avoid.
-        socket.removeListener("error", onError);
+      this.socket = socket;
+      this.attachSocketListeners(socket);
 
-        this.socket = socket;
-        this.attachSocketListeners(socket);
+      this.options.log.debug("Transport connected to " + formatHostPort(this.options.host, this.options.port) + ".");
+      resolve();
+    };
 
-        this.options.log.debug("Transport connected to " + formatHostPort(this.options.host, this.options.port) + ".");
-        resolve();
-      };
+    const onError = (err: NodeJS.ErrnoException): void => {
 
-      const onError = (err: NodeJS.ErrnoException): void => {
+      if(settled) {
 
-        if(settled) {
+        return;
+      }
 
-          return;
-        }
+      settled = true;
+      socket.destroy();
+      signal?.removeEventListener("abort", onAbort);
 
-        settled = true;
-        socket.destroy();
-        signal?.removeEventListener("abort", onAbort);
+      // Map well-known errno codes to typed errors with cause chain.
+      const message = "Connection to " + formatHostPort(this.options.host, this.options.port) + " failed";
 
-        // Map well-known errno codes to typed errors with cause chain.
-        const message = "Connection to " + formatHostPort(this.options.host, this.options.port) + " failed";
+      switch(err.code) {
 
-        switch(err.code) {
+        case "ECONNREFUSED":
 
-          case "ECONNREFUSED":
-
-            reject(new ConnectionRefusedError(message + ": connection refused.", "ECONNREFUSED", { cause: err }));
-
-            return;
-
-          case "ETIMEDOUT":
-
-            reject(new ConnectionTimeoutError(message + ": connection timed out.", "ETIMEDOUT", { cause: err }));
-
-            return;
-
-          default:
-
-            reject(new ConnectionRefusedError(message + ": " + (err.code ?? err.message) + ".", err.code ?? "ECONNERR", { cause: err }));
-
-            return;
-        }
-      };
-
-      const onAbort = (): void => {
-
-        if(settled) {
+          reject(new ConnectionRefusedError(message + ": connection refused.", "ECONNREFUSED", { cause: err }));
 
           return;
-        }
 
-        settled = true;
-        socket.destroy();
+        case "ETIMEDOUT":
 
-        const reason = signal?.reason instanceof Error ? signal.reason : new DOMException("Aborted", "AbortError");
+          reject(new ConnectionTimeoutError(message + ": connection timed out.", "ETIMEDOUT", { cause: err }));
 
-        reject(reason);
-      };
+          return;
 
-      socket.once("connect", onConnect);
-      socket.once("error", onError);
-      signal?.addEventListener("abort", onAbort, { once: true });
-    });
+        default:
+
+          reject(new ConnectionRefusedError(message + ": " + (err.code ?? err.message) + ".", err.code ?? "ECONNERR", { cause: err }));
+
+          return;
+      }
+    };
+
+    const onAbort = (): void => {
+
+      if(settled) {
+
+        return;
+      }
+
+      settled = true;
+      socket.destroy();
+      reject(signal?.reason);
+    };
+
+    socket.once("connect", onConnect);
+    socket.once("error", onError);
+    signal?.addEventListener("abort", onAbort, { once: true });
+
+    return promise;
   }
 
   /**
@@ -1164,8 +1161,6 @@ export class Transport implements TransportLike {
    */
   private cancelAwaiter<T>(awaiter: Awaiter<T>): void {
 
-    const reason = awaiter.signal?.reason instanceof Error ? awaiter.signal.reason : new DOMException("Aborted", "AbortError");
-
     if((this.firstByteAwaiter as unknown) === awaiter) {
 
       this.firstByteAwaiter = null;
@@ -1181,7 +1176,7 @@ export class Transport implements TransportLike {
       this.messageAwaiter = null;
     }
 
-    awaiter.reject(reason);
+    awaiter.reject(awaiter.signal?.reason);
   }
 
   /**

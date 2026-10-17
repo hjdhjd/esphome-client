@@ -5,8 +5,29 @@
 import { describe, test } from "node:test";
 import { ConnectionError } from "./errors.ts";
 import { Correlator } from "./correlator.ts";
+import type { TestContext } from "node:test";
 import assert from "node:assert/strict";
 import { setTimeout as delay } from "node:timers/promises";
+import { getEventListeners } from "node:events";
+
+// Capture every signal `AbortSignal.timeout` builds during the test, delegating to the platform so each captured signal fires as a real one would. The test's mock
+// context restores the platform method when the test ends.
+function captureTimeoutSignals(t: TestContext): AbortSignal[] {
+
+  const captured: AbortSignal[] = [];
+  const platformTimeout = AbortSignal.timeout.bind(AbortSignal);
+
+  t.mock.method(AbortSignal, "timeout", (milliseconds: number): AbortSignal => {
+
+    const signal = platformTimeout(milliseconds);
+
+    captured.push(signal);
+
+    return signal;
+  });
+
+  return captured;
+}
 
 describe("Correlator - basic correlation", () => {
 
@@ -133,19 +154,25 @@ describe("Correlator - in-flight guard", () => {
 
 describe("Correlator - timeout and abort", () => {
 
-  test("await rejects with AbortError when the timeout elapses", async () => {
+  test("await rejects with the timeout signal's own TimeoutError when the timeout elapses", async (t) => {
 
+    const captured = captureTimeoutSignals(t);
     const correlator = new Correlator<string>();
+    const start = performance.now();
     const promise = correlator.await("k", { timeoutMs: 20 });
+    const timeoutSignal = captured.at(-1);
 
-    await assert.rejects(promise, (err: unknown) => {
+    assert.ok(timeoutSignal, "the await must build its timeout through AbortSignal.timeout");
 
-      assert.ok(err instanceof DOMException, "rejection must be a DOMException");
-      assert.equal((err).name, "AbortError");
-      assert.match((err).message, /timed out after 20 ms/);
+    await assert.rejects(promise, (err: unknown): boolean => err === timeoutSignal.reason);
 
-      return true;
-    });
+    const elapsed = performance.now() - start;
+
+    assert.equal((timeoutSignal.reason as DOMException).name, "TimeoutError", "the reason is the platform's own TimeoutError");
+
+    // The identity above holds for a timeout of any duration, so this bound is what ties the rejection to the timeout the await asked for: it leaves far more room
+    // than scheduling jitter needs, and a timeout built with a duration above it fails the row.
+    assert.ok(elapsed < 500, "the requested timeout, not a slower one, must end the wait - observed " + String(elapsed) + " ms");
 
     // The slot must be released so a subsequent await is permitted.
     assert.equal(correlator.pending("k"), false);
@@ -159,8 +186,49 @@ describe("Correlator - timeout and abort", () => {
 
     controller.abort();
 
-    await assert.rejects(promise, { name: "AbortError" }, "user abort must reject with an AbortError");
+    await assert.rejects(promise, (err: unknown): boolean => err === controller.signal.reason);
     assert.equal(correlator.pending("k"), false);
+  });
+
+  test("await rejects with a caller's string reason as it is", async () => {
+
+    const correlator = new Correlator<string>();
+    const controller = new AbortController();
+    const promise = correlator.await("k", { signal: controller.signal, timeoutMs: 1000 });
+
+    controller.abort("caller-string");
+
+    await assert.rejects(promise, (err: unknown): boolean => err === "caller-string");
+  });
+
+  test("an entry settled by resolve, by reject, by a caller abort, or by its timeout leaves no listener on its caller's signal or its timeout signal", async (t) => {
+
+    const captured = captureTimeoutSignals(t);
+    const correlator = new Correlator<string>();
+    const settles: readonly (readonly [string, (controller: AbortController) => void])[] = [
+
+      [ "resolve", (): void => { correlator.resolve("k", "value"); } ],
+      [ "reject", (): void => { correlator.reject("k", new Error("Rejected.")); } ],
+      [ "caller abort", (controller: AbortController): void => { controller.abort(); } ],
+      [ "timeout", (): void => { /* The 20 ms timeout settles the entry. */ } ]
+    ];
+
+    for(const [ label, settle ] of settles) {
+
+      const controller = new AbortController();
+      const promise = correlator.await("k", { signal: controller.signal, timeoutMs: (label === "timeout") ? 20 : 60000 });
+      const timeoutSignal = captured.at(-1);
+
+      assert.ok(timeoutSignal, label + ": the await must build its timeout through AbortSignal.timeout");
+      assert.equal(getEventListeners(controller.signal, "abort").length, 1, label + ": a pending entry follows its caller's signal");
+      assert.equal(getEventListeners(timeoutSignal, "abort").length, 1, label + ": a pending entry follows its timeout signal");
+
+      settle(controller);
+      await promise.catch((): void => undefined);
+
+      assert.equal(getEventListeners(controller.signal, "abort").length, 0, label + ": a settled entry must leave no listener on its caller's signal");
+      assert.equal(getEventListeners(timeoutSignal, "abort").length, 0, label + ": a settled entry must leave no listener on its timeout signal");
+    }
   });
 
   test("await propagates a custom abort reason from AbortController.abort(reason)", async () => {
@@ -230,45 +298,6 @@ describe("Correlator - timeout and abort", () => {
 
     correlator.resolve("k", "late");
     assert.equal(await promise, "late");
-  });
-});
-
-describe("Correlator - rejectAll", () => {
-
-  test("rejectAll rejects every pending await with the same reason", async () => {
-
-    const correlator = new Correlator<string>();
-    const p1 = correlator.await("a");
-    const p2 = correlator.await("b");
-    const reason = new Error("connection reset");
-
-    correlator.rejectAll(reason);
-
-    await assert.rejects(p1, (err: unknown) => err === reason);
-    await assert.rejects(p2, (err: unknown) => err === reason);
-    assert.equal(correlator.size, 0, "rejectAll must clear the entries map");
-  });
-
-  test("rejectAll on an empty correlator is a no-op", () => {
-
-    const correlator = new Correlator<string>();
-
-    assert.doesNotThrow(() => correlator.rejectAll(new Error("noise")));
-    assert.equal(correlator.size, 0);
-  });
-
-  test("a key released by rejectAll can be awaited again immediately", async () => {
-
-    const correlator = new Correlator<string>();
-    const first = correlator.await("k");
-
-    correlator.rejectAll(new Error("reset"));
-    await assert.rejects(first);
-
-    const second = correlator.await("k");
-
-    correlator.resolve("k", "fresh");
-    assert.equal(await second, "fresh");
   });
 });
 
@@ -371,7 +400,7 @@ describe("Correlator - util.inspect hook", () => {
     assert.match(empty, /Correlator/);
     assert.match(empty, /"pending":0/);
 
-    // Attach catch handlers so the pending awaits do not surface as unhandled rejections when `rejectAll` settles them at the end of the test.
+    // Attach catch handlers so the pending awaits do not surface as unhandled rejections when the cleanup at the end of the test rejects them.
     correlator.await("a").catch((): void => { /* swallowed for inspection-only test */ });
     correlator.await("b").catch((): void => { /* swallowed for inspection-only test */ });
 
@@ -382,7 +411,8 @@ describe("Correlator - util.inspect hook", () => {
     assert.match(populated, /"b"/);
 
     // Clear the pending awaits so the test does not leave dangling promises.
-    correlator.rejectAll(new Error("test cleanup"));
+    correlator.reject("a", new Error("test cleanup"));
+    correlator.reject("b", new Error("test cleanup"));
   });
 
   test("inspect output truncates the keys list past eight entries", () => {
@@ -402,6 +432,9 @@ describe("Correlator - util.inspect hook", () => {
     assert.match(output, /"pending":12/);
     assert.match(output, /\+4 more/);
 
-    correlator.rejectAll(new Error("test cleanup"));
+    for(let i = 0; i < 12; i++) {
+
+      correlator.reject("k" + String(i), new Error("test cleanup"));
+    }
   });
 });

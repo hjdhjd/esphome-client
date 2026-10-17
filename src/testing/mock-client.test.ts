@@ -2,7 +2,7 @@
  *
  * mock-client.test.ts: Helper-coverage-parity tests for the MockClient consumer-test double.
  */
-import { ConfigurationError, ConnectionError } from "../errors.ts";
+import { ConfigurationError, ConnectionError, ConnectionLostError, NotConnectedError } from "../errors.ts";
 import { HealthState, isConnectionLive } from "../health.ts";
 import { InfraredCapabilityFlags, LogLevel, RadioFrequencyCapabilityFlags, SerialProxyPortType } from "../api-constants.ts";
 import { describe, test } from "node:test";
@@ -12,6 +12,7 @@ import { ENTITY_SCHEMAS } from "../schemas/index.ts";
 import type { EncodeResult } from "../command-pipeline.ts";
 import type { Entity } from "../schemas/index.ts";
 import type { EntityId } from "../entity-id.ts";
+import type { LifecycleEvent } from "../lifecycle.ts";
 import { MOCK } from "./recording-mock.ts";
 import { MockClient } from "./mock-client.ts";
 import assert from "node:assert/strict";
@@ -585,6 +586,36 @@ describe("MockClient.setConnected health record", () => {
 
     assert.equal(client.health().state, HealthState.CONNECTED);
     assert.equal(client.health().consecutiveStalls, 2, "the next connect must carry the count until inbound activity resets it");
+  });
+});
+
+describe("MockClient.setConnected encryption on its announcements", () => {
+
+  test("a connect listener that disconnects the mock leaves the lifecycle connect event reporting the session's encryption, after the disconnect's own events", () => {
+
+    const client = new MockClient();
+    const order: string[] = [];
+    let lifecycleConnect: LifecycleEvent | undefined;
+
+    client.setEncrypted(true);
+    client.on("connect", (): void => { client.disconnect(); });
+    client.on("disconnect", (): void => { order.push("disconnect"); });
+    client.on("lifecycle", (event: LifecycleEvent): void => {
+
+      order.push("lifecycle:" + event.kind);
+
+      if(event.kind === "connect") {
+
+        lifecycleConnect = event;
+      }
+    });
+
+    client.setConnected(true);
+
+    // The real client emits its lifecycle connect from the session it attached after a connect listener's teardown, so the disconnect's own events come first and the
+    // connect event still reports the encryption that session had.
+    assert.deepEqual(order, [ "lifecycle:disconnect", "disconnect", "lifecycle:connect" ]);
+    assert.deepEqual(lifecycleConnect, { encrypted: true, kind: "connect" });
   });
 });
 
@@ -1226,6 +1257,7 @@ describe("MockClient.commandAndAwait", () => {
     const id = entityId("light", "kitchen");
 
     client.populateEntities([mockEntity("light", "kitchen")]);
+    client.setConnected(true);
 
     const awaited = client.commandAndAwait(id, { state: true });
 
@@ -1243,18 +1275,22 @@ describe("MockClient.commandAndAwait", () => {
     const id = entityId("light", "kitchen");
 
     client.populateEntities([mockEntity("light", "kitchen")]);
+    client.setConnected(true);
 
     const controller = new AbortController();
-    const awaited = client.commandAndAwait(id, { state: true }, { signal: controller.signal });
+    const reason = new Error("caller");
+    const awaited = client.commandAndAwait(id, { state: true }, { signal: controller.signal, timeoutMs: 5000 });
 
-    controller.abort();
+    controller.abort(reason);
 
-    await assert.rejects(awaited, (err: unknown): boolean => err === controller.signal.reason);
+    await assert.rejects(awaited, (err: unknown): boolean => err === reason);
   });
 
   test("rejects with a ConfigurationError for an unregistered entity id", async () => {
 
     const client = new MockClient();
+
+    client.setConnected(true);
 
     await assert.rejects(client.commandAndAwait(entityId("light", "absent"), { state: true }), (err: unknown) => {
 
@@ -1269,6 +1305,7 @@ describe("MockClient.commandAndAwait", () => {
     const client = new MockClient();
 
     client.populateEntities([mockEntity("climate", "thermostat")]);
+    client.setConnected(true);
 
     // A malformed id is never registered either, so the code shows the order: the malformed check runs before the registry lookup, as in the real runner. The
     // timeout is generous, so a refusal that fell through to the await would reject with the timeout's TimeoutError instead.
@@ -1292,6 +1329,7 @@ describe("MockClient.commandAndAwait", () => {
     const bus = (client as unknown as { bus: { listenerCount: (event: string) => number } }).bus;
 
     client.populateEntities([mockEntity("climate", "thermostat")]);
+    client.setConnected(true);
 
     // The timeout is generous: a refusal that fell through to the await would reject with the timeout's TimeoutError instead of the refusal code.
     const pending = client.commandAndAwait(id, { mode: "freze" } as never, { timeoutMs: 5000 });
@@ -1305,5 +1343,83 @@ describe("MockClient.commandAndAwait", () => {
       message: "commandAndAwait(): command for climate-thermostat refused before sending (ENUM_VALUE_UNKNOWN): field 'mode' received unknown enum value 'freze'."
     });
     assert.equal(client.commands.length, 0, "a refused command must not reach the command log");
+  });
+
+  test("on a mock never connected, refuses a registered, a malformed, and an unregistered id with NOT_CONNECTED and records nothing", async () => {
+
+    const client = new MockClient();
+
+    client.populateEntities([ mockEntity("light", "kitchen"), mockEntity("climate", "thermostat") ]);
+
+    // The admission runs ahead of the runner's validation, so each call reports the missing connection whatever its id would have reported.
+    await assert.rejects(client.commandAndAwait(entityId("light", "kitchen"), { state: true }, { timeoutMs: 1000 }),
+      { code: "NOT_CONNECTED", constructor: NotConnectedError });
+    await assert.rejects(client.commandAndAwait("thermostat" as unknown as EntityId<"climate">, { mode: "heat" }, { timeoutMs: 1000 }),
+      { code: "NOT_CONNECTED", constructor: NotConnectedError });
+    await assert.rejects(client.commandAndAwait(entityId("light", "absent"), { state: true }, { timeoutMs: 1000 }),
+      { code: "NOT_CONNECTED", constructor: NotConnectedError });
+    assert.equal(client.commands.length, 0, "a refused command must not reach the command log");
+  });
+
+  test("a call whose signal is already aborted rejects with that reason and records nothing", async () => {
+
+    const client = new MockClient();
+    const controller = new AbortController();
+    const reason = new Error("The caller gave up.");
+
+    client.populateEntities([mockEntity("light", "kitchen")]);
+    client.setConnected(true);
+    controller.abort(reason);
+
+    await assert.rejects(client.commandAndAwait(entityId("light", "kitchen"), { state: true }, { signal: controller.signal }), (err: unknown): boolean => err === reason);
+    assert.equal(client.commands.length, 0, "a pre-aborted command must not reach the command log");
+  });
+
+  // Each teardown the mock offers ends the session the way the real client's teardown does, so each rejects a pending command wait with the one connection-lost error
+  // it aborts the mock's connection scope with, read through the private field before the teardown runs.
+  const teardowns: readonly { name: string; run: (client: MockClient) => void }[] = [
+
+    { name: "disconnect()", run: (client: MockClient): void => { client.disconnect(); } },
+    { name: "setConnected(false)", run: (client: MockClient): void => { client.setConnected(false); } },
+    { name: "dispose", run: (client: MockClient): void => { client[Symbol.dispose](); } }
+  ];
+
+  for(const { name, run } of teardowns) {
+
+    test("a pending call rejects with the connection-lost error on " + name, async () => {
+
+      const client = new MockClient();
+      const id = entityId("light", "kitchen");
+
+      client.populateEntities([mockEntity("light", "kitchen")]);
+      client.setConnected(true);
+
+      const connection = (client as unknown as { connection: AbortController }).connection;
+      const awaited = client.commandAndAwait(id, { state: true }, { timeoutMs: 1000 });
+
+      run(client);
+
+      await assert.rejects(awaited, (err: unknown): boolean => {
+
+        assert.ok(err instanceof ConnectionLostError, "the teardown must reject the wait with a ConnectionLostError");
+        assert.equal(err, connection.signal.reason, "the wait must reject with the one error the teardown aborted the scope with");
+
+        return true;
+      });
+    });
+  }
+
+  test("a once() for connect registered while connected resolves on the next connect, since a teardown ends no once()", async () => {
+
+    const client = new MockClient();
+
+    client.setConnected(true);
+
+    const next = client.once("connect", { signal: AbortSignal.timeout(2000) });
+
+    client.setConnected(false);
+    client.setConnected(true);
+
+    assert.equal(await next, false);
   });
 });

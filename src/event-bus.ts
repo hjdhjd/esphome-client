@@ -57,7 +57,8 @@ export interface StreamOptions {
   highWaterMark?: number;
 
   /**
-   * Optional cancellation signal. Aborting causes the iterator to throw the abort reason on its next iteration and triggers cleanup of the underlying listener.
+   * Optional cancellation signal. Aborting causes the iterator to throw the signal's reason as it is, whatever its type, on its next iteration and triggers cleanup of
+   * the underlying listener.
    */
   signal?: AbortSignal;
 }
@@ -150,8 +151,8 @@ export class EventBus<EventMap extends object> {
 
   /**
    * Dispose controller. {@link dispose} aborts this controller so every pending {@link once} awaiter settles deterministically. Node's `events.once` promise only
-   * settles on the event firing or on a forwarded `AbortSignal` - `removeAllListeners` alone leaves it hanging. We forward this controller's signal into every
-   * `once` call (composed with the caller's optional signal via `AbortSignal.any`), so dispose rejects every otherwise-orphaned awaiter rather than wedging it.
+   * settles on the event firing or on a forwarded `AbortSignal` - `removeAllListeners` alone leaves it hanging. Every pending `once` call follows this controller's
+   * signal through a listener it removes when it settles, so dispose rejects every otherwise-orphaned awaiter with this controller's reason rather than wedging it.
    */
   private readonly disposeController: AbortController;
 
@@ -254,9 +255,10 @@ export class EventBus<EventMap extends object> {
   }
 
   /**
-   * Resolve on the next emission of `event`, reject when `options.signal` is aborted, or reject when the bus is disposed. Delegates to the platform's `events.once()`
-   * which handles signal composition and listener cleanup natively; we compose the caller's optional signal with the bus's internal dispose signal so a pending awaiter
-   * settles on dispose rather than hanging.
+   * Resolve on the next emission of `event`, or reject with the reason of whichever signal ended the wait, unwrapped: the caller's own reason when `options.signal`
+   * aborts, whatever its type, or the bus's dispose reason when the bus is disposed. Delegates the wait to the platform's `events.once()` and follows the caller's
+   * optional signal and the bus's dispose signal through listeners it removes when the wait settles, so a pending awaiter settles on dispose rather than hanging and
+   * leaves nothing behind on any signal it follows.
    *
    * @param event - The event name. Narrowed to keys of `EventMap`.
    * @param options - Optional cancellation signal.
@@ -274,25 +276,51 @@ export class EventBus<EventMap extends object> {
       throw new Error("EventBus is disposed.");
     }
 
-    // We forward the dispose signal alongside the caller's optional signal. Node's events.once settles only on the event firing or on a forwarded AbortSignal aborting -
-    // removeAllListeners does NOT settle it - so composing the dispose signal here is what lets dispose() reject an otherwise-orphaned awaiter. AbortSignal.any rejects
-    // with the reason of whichever signal aborts first, so a caller-supplied abort still surfaces its own reason and a dispose surfaces the typed dispose reason.
-    const signal = (options?.signal !== undefined) ? AbortSignal.any([ options.signal, this.disposeController.signal ]) : this.disposeController.signal;
-    const args = await eventsOnce(this.emitter, this.channel(event), { signal });
+    // A caller signal already aborted rejects with its reason as it is, the way the correlator's first statement does. The dispose signal cannot be aborted here,
+    // because dispose() sets the flag checked above before it aborts.
+    options?.signal?.throwIfAborted();
 
-    return args[0] as EventMap[K];
+    // Node's events.once settles only on the event firing or on its signal aborting - removeAllListeners does NOT settle it - so the wait needs a signal that dispose()
+    // aborts. We hand it a per-call controller that follows the caller's signal and the dispose signal through listeners removed in the finally below, rather than an
+    // `AbortSignal.any` composite, which on the Node 22 line stays registered on the bus-lifetime dispose signal until the bus is collected. Node rejects an aborted
+    // wait with its own `AbortError` wrapper, so we read the reason from the controller instead, which hands back a caller's reason of any type, `null` included.
+    const callerSignal = options?.signal;
+    const disposeSignal = this.disposeController.signal;
+    const controller = new AbortController();
+    const onCallerAbort = (): void => { controller.abort(callerSignal?.reason); };
+    const onDispose = (): void => { controller.abort(disposeSignal.reason); };
+
+    callerSignal?.addEventListener("abort", onCallerAbort, { once: true });
+    disposeSignal.addEventListener("abort", onDispose, { once: true });
+
+    try {
+
+      const args = await eventsOnce(this.emitter, this.channel(event), { signal: controller.signal });
+
+      return args[0] as EventMap[K];
+
+    } catch(error) {
+
+      // A wait the controller ended rejects with the controller's reason in place of Node's wrapper; any other failure passes through.
+      throw controller.signal.aborted ? controller.signal.reason : error;
+
+    } finally {
+
+      callerSignal?.removeEventListener("abort", onCallerAbort);
+      disposeSignal.removeEventListener("abort", onDispose);
+    }
   }
 
   /**
    * Async-iterable view of every emission of `event` for the lifetime of the iteration. Applies the backpressure policy from {@link StreamOptions}.
    *
    * The iterator ends on:
-   * - `options.signal` abort (rejects with the abort reason)
+   * - `options.signal` abort (rejects with the signal's reason as it is, whatever its type, a falsy one included)
    * - a `throw` backpressure overrun (rejects with {@link BackpressureError})
    * - {@link EventBus.dispose} (resolves cleanly)
    * - the consumer's `return()` or `throw()`, including a `break` out of `for await` (tears down the listener)
    *
-   * The iterator follows the async-generator contract at its end: items already queued drain first, a terminal error rejects exactly one `next()`, and every later
+   * The iterator follows the async-generator contract at its end: items already queued drain first, a terminal failure rejects exactly one `next()`, and every later
    * `next()` resolves done; `return()` and `throw()` discard the queue, and `throw()` rejects with the error it was given. The listener is attached when this method
    * returns, not on the first `next()`, so an abort, `return()`, or dispose releases it even when the iterator was never advanced.
    *
@@ -395,7 +423,7 @@ export class EventBus<EventMap extends object> {
 
     this.disposed = true;
 
-    // Aborting the dispose controller settles every pending `once()` awaiter: each forwarded its signal via AbortSignal.any, so the abort rejects the awaiter with the
+    // Aborting the dispose controller settles every pending `once()` awaiter: each follows this signal through a listener, so the abort rejects the awaiter with the
     // typed dispose reason below. This is the part removeAllListeners alone cannot do - Node's events.once promise does not settle when its listener is removed, only
     // when the event fires or a forwarded signal aborts. Active streams instead see the DISPOSE_CHANNEL control signal and resolve cleanly through their own teardown.
     this.disposeController.abort(new DOMException("EventBus disposed.", "AbortError"));
@@ -489,15 +517,16 @@ class BackpressureStream<In, Out> implements AsyncIterableIterator<Out> {
 
   /**
    * True once the stream has reached a terminal state (signal abort, backpressure failure, dispose, consumer `return()` or `throw()`). Once the queue and any pending
-   * error are spent, `next()` resolves `done`.
+   * failure are spent, `next()` resolves `done`.
    */
   private closed = false;
 
   /**
-   * Terminal error not yet surfaced to the consumer. The first `next()` after the queue drains rejects with it and clears it, so every later `next()` resolves done.
-   * A failure that finds a consumer parked in `next()` rejects that call directly and is never stored.
+   * Terminal failure not yet surfaced to the consumer. The first `next()` after the queue drains rejects with its reason and clears it, so every later `next()` resolves
+   * done. A failure that finds a consumer parked in `next()` rejects that call directly and is never stored. The reason sits inside a record because an abort reason
+   * can be any value, a falsy one included, so only the record's presence tells a stored failure from none.
    */
-  private error: Nullable<Error> = null;
+  private failure: Nullable<{ readonly reason: unknown }> = null;
 
   /**
    * Listener teardown plus the view's close hook. Runs exactly once, from whichever of `fail()` or `finish()` reaches the terminal state first; the `closed` guard in
@@ -539,12 +568,9 @@ class BackpressureStream<In, Out> implements AsyncIterableIterator<Out> {
         this.push(value);
       }
     };
-    const onAbort = (): void => {
-
-      const reason = signal?.reason instanceof Error ? signal.reason : new DOMException("Aborted", "AbortError");
-
-      this.fail(reason);
-    };
+    // The signal's reason reaches the consumer as it is, whatever its type, so a caller tells its own cancellation apart by identity...coercing a non-`Error` reason into
+    // a stand-in would hide the very value the caller aborted with.
+    const onAbort = (): void => { this.fail(signal?.reason); };
     const onDispose = (): void => { this.finish(); };
 
     emitter.on(eventName, onPayload);
@@ -620,7 +646,7 @@ class BackpressureStream<In, Out> implements AsyncIterableIterator<Out> {
   /**
    * Mark the stream as failed. A parked consumer is rejected with `reason` at once; otherwise the first `next()` after the queue drains rejects with it.
    */
-  private fail(reason: Error): void {
+  private fail(reason: unknown): void {
 
     if(this.closed) {
 
@@ -638,7 +664,7 @@ class BackpressureStream<In, Out> implements AsyncIterableIterator<Out> {
       reject(reason);
     } else {
 
-      this.error = reason;
+      this.failure = { reason };
     }
 
     this.cleanup();
@@ -669,13 +695,13 @@ class BackpressureStream<In, Out> implements AsyncIterableIterator<Out> {
   }
 
   /**
-   * Consumer-initiated end shared by `return()` and `throw()`. Discards the queue and any pending error, so every later `next()` resolves done the way an async
+   * Consumer-initiated end shared by `return()` and `throw()`. Discards the queue and any pending failure, so every later `next()` resolves done the way an async
    * generator's does once it has returned, and tears the stream down if it is still live.
    */
   private end(): void {
 
     this.queue.length = 0;
-    this.error = null;
+    this.failure = null;
     this.finish();
   }
 
@@ -695,14 +721,14 @@ class BackpressureStream<In, Out> implements AsyncIterableIterator<Out> {
       return { done: false, value };
     }
 
-    // A terminal error surfaces from exactly one call, then the stream reads as done.
-    if(this.error) {
+    // A terminal failure surfaces from exactly one call, then the stream reads as done. We test the record rather than its reason, so a falsy reason still rejects.
+    if(this.failure !== null) {
 
-      const error = this.error;
+      const { reason } = this.failure;
 
-      this.error = null;
+      this.failure = null;
 
-      throw error;
+      throw reason;
     }
 
     if(this.closed) {
