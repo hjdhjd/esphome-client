@@ -4,6 +4,7 @@
  */
 import type { Entity, InfraredEntity } from "../schemas/index.ts";
 import { EspHomeClient, openEspHomeClient } from "../esphome-client.ts";
+import type { InboundMessage, NoiseCipherPair } from "../transport.ts";
 import { InfraredCapabilityFlags, SerialProxyPortType } from "../api-constants.ts";
 import { MockTransport, MockTransportPhase, mockNoiseHandshakeExchange, pushDeviceInfo, pushHandshake, pushInfraredListEntity } from "./mock-transport.ts";
 import { describe, test } from "node:test";
@@ -13,7 +14,6 @@ import { ConnectionClosedByPeerError } from "../errors.ts";
 import type { DeviceInfo } from "../esphome-client.ts";
 import { ENTITY_SCHEMAS } from "../schemas/index.ts";
 import type { EspHomeLogging } from "../types.ts";
-import type { InboundMessage } from "../transport.ts";
 import { MessageType } from "../protocol/message-types.ts";
 import type { SubDevice } from "../sub-device.ts";
 import assert from "node:assert/strict";
@@ -375,6 +375,57 @@ describe("MockTransport.fail (simulating fatal transport error)", () => {
     assert.equal(first.value?.type, 1, "the first queued message must come before the fault");
     assert.equal(second.value?.type, 2, "the second queued message must come before the fault");
     await assert.rejects(it.next(), (err: unknown): boolean => err === fault);
+  });
+
+  test("the handshake read returns the frames queued before a fault, then rejects with the fault, as the real transport does", async () => {
+
+    const t = new MockTransport();
+    const fault = new Error("peer reset behind the queued handshake frames");
+
+    t.pushNoiseHandshakeFrame(Buffer.from([0x01]));
+    t.pushNoiseHandshakeFrame(Buffer.from([0x02]));
+    t.fail(fault);
+
+    assert.deepEqual(await t.nextNoiseHandshakeFrame(), Buffer.from([0x01]), "the first queued frame must come before the fault");
+    assert.deepEqual(await t.nextNoiseHandshakeFrame(), Buffer.from([0x02]), "the second queued frame must come before the fault");
+    await assert.rejects(t.nextNoiseHandshakeFrame(), (err: unknown): boolean => err === fault);
+  });
+
+  test("the handshake read and the first-byte read reject at once after a dispose with nothing queued", async () => {
+
+    const t = new MockTransport();
+
+    t[Symbol.dispose]();
+
+    await assert.rejects(t.nextNoiseHandshakeFrame(), { code: "TRANSPORT_CLOSED" });
+    await assert.rejects(t.firstByte(), { code: "TRANSPORT_CLOSED" });
+  });
+
+  test("the handshake read returns a queued frame even when its signal is already aborted", async () => {
+
+    const t = new MockTransport();
+
+    t.pushNoiseHandshakeFrame(Buffer.from([0x07]));
+
+    assert.deepEqual(await t.nextNoiseHandshakeFrame(AbortSignal.abort()), Buffer.from([0x07]));
+  });
+
+  test("the cipher install clears the handshake queue and refuses a terminated mock with the stored fault", async () => {
+
+    const t = new MockTransport();
+    const fault = new Error("peer reset before the install");
+    const cipher = {} as NoiseCipherPair;
+
+    t.pushNoiseHandshakeFrame(Buffer.from([0x01]));
+    t.installCipher(cipher);
+    t.fail(fault);
+
+    await assert.rejects(t.nextNoiseHandshakeFrame(), (err: unknown): boolean => err === fault, "the install must leave no stale handshake frame queued");
+
+    const ended = new MockTransport();
+
+    ended.fail(fault);
+    assert.throws(() => ended.installCipher(cipher), (err: unknown): boolean => err === fault);
   });
 
   test("fail is safe to call more than once - calling twice does not throw", () => {

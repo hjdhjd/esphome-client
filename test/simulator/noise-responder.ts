@@ -9,15 +9,16 @@
  * initiator and then encrypts the discovery responses with the genuine post-handshake cipher pair.
  *
  * The coordination mechanism is a thin write-intercepting subclass of {@link MockSocket}: each captured outbound wire frame fires the responder's state machine, which
- * pushes the matching inbound bytes back through the socket. The two handshake frames the client writes (the empty initial frame, then its NNpsk0 msg1) drive the two
- * responder replies (server-hello, then server-handshake msg2). The encrypted discovery frames are pushed only when the client emits its FIRST data-phase write (its
- * encrypted HELLO_REQUEST): that write is the client's own proof it has installed the cipher and entered the noise-data phase, so gating the discovery push on it
- * eliminates the microtask-gap race where a data frame pushed too eagerly would be parsed while the transport is still in the noise-handshake phase, queued as a stale
- * handshake frame, and then discarded by `installCipher`. Inbound pushes are deferred to the microtask queue so the responder never re-enters the transport's framing
- * layer synchronously while the client is still inside its own `write` callback.
+ * pushes the matching inbound bytes back through the socket. The two handshake frames the client writes (the empty initial frame, then its NNpsk0 msg1) drive the
+ * responder's server-hello and then its answer to msg1, which is the server-handshake msg2 unless `msg1Reply` names another answer. The encrypted discovery frames
+ * are pushed only when the client emits its FIRST data-phase write (its encrypted HELLO_REQUEST): that write is the client's own proof it has installed the cipher
+ * and entered the noise-data phase, so gating the discovery push on it eliminates the microtask-gap race where a data frame pushed too eagerly would be parsed while
+ * the transport is still in the noise-handshake phase, queued as a stale handshake frame, and then discarded by `installCipher`. Inbound pushes are deferred to the
+ * microtask queue so the responder never re-enters the transport's framing layer synchronously while the client is still inside its own `write` callback.
  *
  * This is a plain non-`.test.ts` module: the e2e runner globs only the `.test.ts` files under `test/e2e`, so this helper is imported by the encrypted-session test
- * (whose handshake, frame-corruption, bad-key fail-closed, and key-resolver cases all drive it) rather than discovered standalone.
+ * (whose handshake, frame-corruption, bad-key fail-closed, in-band key rejection, close-after-hello, and key-resolver cases all drive it) rather than discovered
+ * standalone.
  *
  * @module test/simulator/noise-responder
  */
@@ -47,6 +48,13 @@ const NOISE_PROTO_ID = 0x01;
 const NOISE_SUCCESS_HEADER = 0x00;
 
 /**
+ * The in-band rejection ESPHome answers a wrong key with: a non-zero header byte prefixing the handshake reply, then the reason as text. Mirrors the wrong-key reason
+ * {@link "lifecycle/handshake".performNoiseHandshake} reads as a rejected key (step 4).
+ */
+const NOISE_REJECTED_HEADER = 0x01;
+const NOISE_KEY_REJECTED_REASON = "Handshake MAC failure";
+
+/**
  * Build a raw noise wire frame: `[0x01 indicator][size-be16][body]`. Mirrors {@link "transport".Transport.writeNoiseFrame} (file-local there) so the responder's frames
  * parse identically to a real device's.
  *
@@ -67,7 +75,8 @@ const buildNoiseWireFrame = (body: Buffer): Buffer => {
  * Discrete steps of the responder handshake state machine. The responder advances exactly once per inbound handshake frame the client writes: `AWAIT_INITIAL` consumes
  * the client's empty initial frame and replies with the server-hello; `AWAIT_MSG1` consumes the client's NNpsk0 msg1, replies with msg2, and splits the cipher pair;
  * `AWAIT_FIRST_DATA` waits for the client's first encrypted write (its proof the cipher is installed) and pushes the discovery frames; `DATA` is terminal - further
- * client writes are encrypted requests the test inspects directly, not drive signals.
+ * client writes are encrypted requests the test inspects directly, not drive signals. When `msg1Reply` names an answer that ends the session, `AWAIT_MSG1` closes
+ * the socket instead of replying with msg2, after the in-band key rejection under `"reject-key"`, and moves to `DATA`.
  */
 const ResponderStep = {
 
@@ -101,6 +110,26 @@ export interface NoiseResponderOptions {
   readonly frames: readonly InboundMessage[];
 
   /**
+   * Optional answer the device gives the client's NNpsk0 msg1. When omitted the responder completes the handshake: it replies with msg2 under the `0x00` SUCCESS
+   * header and splits the cipher pair.
+   *
+   * - `"auth-failed"` and `"low-order"` drive the header=0-UNDECRYPTABLE bad-key path. The responder still emits the `0x00` SUCCESS header (so the client treats the
+   *   reply as a non-rejection and proceeds into its `readMessage` - this is the path the in-band non-zero-header reject does NOT exercise) but corrupts the responder
+   *   ephemeral in msg2 so the client cannot complete the handshake. `"low-order"` overwrites the responder ephemeral with the all-zeros low-order X25519 point, so
+   *   the client's `ee` Diffie-Hellman rejects it -> `INVALID_REMOTE_KEY`. `"auth-failed"` overwrites it with 0xFF (a DH-accepted but wrong point), so the DH
+   *   succeeds with a wrong shared secret and the payload AEAD tag check fails -> `AUTH_FAILED`. Each code is a genuine bad-key code the connect-flow handshake
+   *   re-tags into the permanent {@link "errors".EncryptionKeyInvalidError}, so the in-flight `connect()` must fail closed (reject, never encrypted, no plaintext
+   *   fallback). The e2e bad-key rows use them to drive the readMessage-wrap + gate path end-to-end.
+   * - `"reject-key"` answers msg1 the way ESPHome answers a wrong key, with a non-zero header and the wrong-key reason, and then closes its socket. The push and the
+   *   close run in one deferred microtask, the push first, so the rejection reaches the transport ahead of the close. The in-flight `connect()` must fail closed with
+   *   the permanent {@link "errors".EncryptionKeyInvalidError} and open no plaintext fallback.
+   * - `"close-without-reply"` sends nothing in answer to msg1 and closes its socket in a deferred microtask. The server-hello has already answered the client's
+   *   initial frame, so the device has spoken Noise before it closes, and the in-flight `connect()` must reject with the ordinary peer close and open no plaintext
+   *   fallback.
+   */
+  readonly msg1Reply?: "auth-failed" | "close-without-reply" | "low-order" | "reject-key";
+
+  /**
    * The 32-byte pre-shared key. MUST be a fresh buffer the client does not also hold: the initiator's success path zeroizes its own PSK buffer, so a shared buffer would
    * be wiped out from under the responder mid-handshake.
    */
@@ -112,20 +141,6 @@ export interface NoiseResponderOptions {
    * chosen-proto byte only.
    */
   readonly serverHello?: { readonly mac: string; readonly name: string };
-
-  /**
-   * Optional bad-key anti-vacuity hook driving the header=0-UNDECRYPTABLE path. When set, the responder still emits the `0x00` SUCCESS header (so the client treats the
-   * reply as a non-rejection and proceeds into its `readMessage` - this is the path the in-band header != 0 reject does NOT exercise) but corrupts the responder
-   * ephemeral in msg2 so the client cannot complete the handshake:
-   *
-   * - `"low-order"` overwrites the responder ephemeral with the all-zeros low-order X25519 point, so the client's `ee` Diffie-Hellman rejects it -> `INVALID_REMOTE_KEY`.
-   * - `"auth-failed"` overwrites it with 0xFF (a DH-accepted but wrong point), so the DH succeeds
-   *   with a wrong shared secret and the payload AEAD tag check fails -> `AUTH_FAILED`.
-   *
-   * Both codes are the genuine bad-key codes the connect-flow handshake re-tags into the permanent {@link "errors".EncryptionKeyInvalidError}, so the in-flight
-   * `connect()` must fail closed (reject, never encrypted, no plaintext fallback). Used by the e2e bad-key test to drive the readMessage-wrap + gate path end-to-end.
-   */
-  readonly undecryptableMode?: "auth-failed" | "low-order";
 }
 
 /**
@@ -175,7 +190,7 @@ export interface NoiseResponder {
  */
 export function createNoiseResponder(options: NoiseResponderOptions): NoiseResponder {
 
-  const { corruptType, frames, psk, serverHello, undecryptableMode } = options;
+  const { corruptType, frames, msg1Reply, psk, serverHello } = options;
 
   // The responder's handshake. A real responder-role HandshakeState; both sides OMIT additionalPrologueData, so the prologue is ESPHome's fixed "NoiseAPIInit\x00\x00".
   const responder = createESPHomeHandshake({ psk, role: "responder" });
@@ -222,8 +237,40 @@ export function createNoiseResponder(options: NoiseResponderOptions): NoiseRespo
 
       case ResponderStep.AWAIT_MSG1: {
 
-        dataSendCipher = completeHandshake(frame);
-        step = ResponderStep.AWAIT_FIRST_DATA;
+        switch(msg1Reply) {
+
+          case "close-without-reply": {
+
+            // The device closes without answering msg1. Its server-hello was pushed in the step before this one, so the transport has received a Noise frame by the
+            // time the close lands, and the close is an ordinary peer close rather than a device that never spoke Noise.
+            queueMicrotask((): void => { socket.simulateClose(); });
+            step = ResponderStep.DATA;
+
+            break;
+          }
+
+          case "reject-key": {
+
+            // The in-band rejection ends the session: the device answers and then closes, so the push and the close share one deferred microtask with the push first.
+            queueMicrotask((): void => {
+
+              socket.pushData(buildNoiseWireFrame(Buffer.concat([ Buffer.from([NOISE_REJECTED_HEADER]), Buffer.from(NOISE_KEY_REJECTED_REASON, "utf8") ])));
+              socket.simulateClose();
+            });
+            step = ResponderStep.DATA;
+
+            break;
+          }
+
+          default: {
+
+            // Every other answer writes msg2: the bad-key answers corrupt it inside completeHandshake, and the absent option sends it intact.
+            dataSendCipher = completeHandshake(frame);
+            step = ResponderStep.AWAIT_FIRST_DATA;
+
+            break;
+          }
+        }
 
         break;
       }
@@ -289,10 +336,10 @@ export function createNoiseResponder(options: NoiseResponderOptions): NoiseRespo
 
     // Header=0-UNDECRYPTABLE bad-key drive: keep the SUCCESS header but corrupt the responder ephemeral (the first 32 bytes of msg2) so the client's readMessage fails.
     // "low-order" -> the all-zeros low-order X25519 point the client's DH rejects (INVALID_REMOTE_KEY); "auth-failed" -> 0xFF, a DH-accepted wrong point whose payload
-    // AEAD tag check then fails (AUTH_FAILED). Both re-tag to a permanent EncryptionKeyInvalidError in the connect flow, so the in-flight connect fails closed.
-    if(undecryptableMode !== undefined) {
+    // AEAD tag check then fails (AUTH_FAILED). Each re-tags to a permanent EncryptionKeyInvalidError in the connect flow, so the in-flight connect fails closed.
+    if((msg1Reply === "auth-failed") || (msg1Reply === "low-order")) {
 
-      Buffer.alloc(32, (undecryptableMode === "low-order") ? 0x00 : 0xff).copy(msg2, 0);
+      Buffer.alloc(32, (msg1Reply === "low-order") ? 0x00 : 0xff).copy(msg2, 0);
     }
 
     // Emit the server-handshake reply: a `0x00` SUCCESS header then msg2. The client strips the one header byte then `readMessage(msg2)` and installs the cipher.

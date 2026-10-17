@@ -5,8 +5,8 @@
 import type { ApiMajorRange, ClientApiVersion } from "./handshake.ts";
 import type { ClientMetrics, EspHomeLogging, NoiseServerHello, PskResolver } from "../types.ts";
 import {
-  EncryptionKeyInvalidError, EncryptionKeyMissingError, EncryptionRequiredError, NegotiationFailedError, NoiseHandshakeError, PermanentError, PlaintextHandshakeError,
-  ProtocolError
+  ConnectionClosedByPeerError, EncryptionKeyInvalidError, EncryptionKeyMissingError, EncryptionRequiredError, NegotiationFailedError, NoiseHandshakeError,
+  PermanentError, PlaintextHandshakeError, ProtocolError
 } from "../errors.ts";
 import { MessageType, WireType } from "../protocol/index.ts";
 import { applyHelloResponse, authenticateIfNeeded, parseServerHello, performDiscovery, performNoiseHandshake, performPlaintextHandshake } from "./handshake.ts";
@@ -15,6 +15,7 @@ import { Buffer } from "node:buffer";
 import type { ClockFn } from "../heartbeat.ts";
 import { MessageReceiver } from "../message-receiver.ts";
 import { MockTransport } from "../testing/mock-transport.ts";
+import type { NoiseCipherPair } from "../transport.ts";
 import assert from "node:assert/strict";
 import { createESPHomeHandshake } from "../crypto-noise.ts";
 import { encodeProtoFields } from "../protocol/codec.ts";
@@ -441,6 +442,82 @@ const pushReply = (transport: MockTransport, msg2: Buffer): void => {
 
   transport.pushNoiseHandshakeFrame(Buffer.concat([ Buffer.from([0]), msg2 ]));
 };
+
+// A device that answers the client's handshake message and then closes its socket. On the client's second handshake frame the mock captures it through the base
+// method, queues the answer the row builds from the raw handshake message, and then fails with the ordinary peer close the real transport stores once the device has
+// spoken Noise, so the step's next read meets a queued frame behind a stored fault. The install is observed so a row can inspect the cipher pair the step offered.
+const answerThenClose = (answer: (clientMessage: Buffer) => Buffer): { offered: NoiseCipherPair[]; peerClose: ConnectionClosedByPeerError; transport: MockTransport } => {
+
+  const transport = new MockTransport();
+  const offered: NoiseCipherPair[] = [];
+  const peerClose = new ConnectionClosedByPeerError("Peer closed the socket.", "PEER_CLOSED");
+  const install = transport.installCipher.bind(transport);
+  const send = transport.sendNoiseHandshakeFrame.bind(transport);
+
+  transport.installCipher = (cipher: NoiseCipherPair): void => {
+
+    offered.push(cipher);
+    install(cipher);
+  };
+
+  transport.sendNoiseHandshakeFrame = async (frame: Buffer): Promise<void> => {
+
+    await send(frame);
+
+    // The client prefixes its handshake message with a single zero header byte, so the answer reads the message after it.
+    if(transport.outboundHandshakeFrames.length === 2) {
+
+      transport.pushNoiseHandshakeFrame(answer(frame.subarray(1)));
+      transport.fail(peerClose);
+    }
+  };
+
+  return { offered, peerClose, transport };
+};
+
+describe("performNoiseHandshake - a reply queued behind the device's close", () => {
+
+  test("an in-band key rejection the device closes behind is the permanent key rejection, not the close", async () => {
+
+    const { transport } = answerThenClose((): Buffer => Buffer.concat([ Buffer.from([1]), Buffer.from("Handshake MAC failure", "utf8") ]));
+    const promise = startNoise({ transport });
+
+    transport.pushNoiseHandshakeFrame(goodHello);
+
+    await assert.rejects(promise, (err: unknown) => {
+
+      assert.ok(err instanceof EncryptionKeyInvalidError, "the rejection the device sent before it closed must reach the step ahead of the close");
+      assert.equal(err.code, "NOISE_HANDSHAKE_FAILED");
+      assert.ok(err instanceof PermanentError, "a rejected key must be permanent so the default reconnect predicate gives up");
+
+      return true;
+    });
+  });
+
+  test("a valid reply the device closes behind is read, the install refuses the closed transport, and the failure path destroys the offered pair", async () => {
+
+    const { offered, peerClose, transport } = answerThenClose((clientMessage: Buffer): Buffer => {
+
+      const responder = createESPHomeHandshake({ psk: Buffer.from(VALID_PSK, "base64"), role: "responder" });
+
+      responder.readMessage(clientMessage);
+
+      return Buffer.concat([ Buffer.from([0]), Buffer.from(responder.writeMessage(Buffer.from("server-hello", "utf8"))) ]);
+    });
+    const promise = startNoise({ transport });
+
+    transport.pushNoiseHandshakeFrame(goodHello);
+
+    await assert.rejects(promise, (err: unknown): boolean => err === peerClose);
+
+    const [cipher] = offered;
+
+    assert.equal(offered.length, 1, "the step must read the reply queued before the close and offer its cipher pair to the install");
+    assert.ok(cipher);
+    assert.equal(cipher.sendCipher.HasKey(), false, "the refused send cipher must hold no key once the step's failure path has run");
+    assert.equal(cipher.receiveCipher.HasKey(), false, "the refused receive cipher must hold no key once the step's failure path has run");
+  });
+});
 
 describe("performNoiseHandshake - duration metric", () => {
 

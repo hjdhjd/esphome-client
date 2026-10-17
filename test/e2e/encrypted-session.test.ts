@@ -14,7 +14,7 @@
  * outbound under the responder's `receiveCipher`, proving the client->responder direction; the successful encrypted discovery proves responder->client; and (2) the
  * mutation-check corrupts one ciphertext byte of a SETUP-phase frame and asserts `connect()` rejects, proving the client genuinely decrypts a real cipher.
  */
-import { ConnectionClosedByPeerError, EncryptionKeyInvalidError, EspHomeError, PermanentError } from "../../src/errors.ts";
+import { ConnectionClosedByPeerError, DecryptionFailedError, EncryptionKeyInvalidError, EspHomeError, PermanentError } from "../../src/errors.ts";
 import { EspHomeClient, openEspHomeClient } from "../../src/esphome-client.ts";
 import type { EspHomeLogging, NoiseServerHello } from "../../src/types.ts";
 import type { InboundMessage, TransportLike } from "../../src/transport.ts";
@@ -143,9 +143,9 @@ describe("encrypted session end-to-end - real NNpsk0 cipher", () => {
     // Mutation-check / crypto anti-vacuity proof. The responder flips one ciphertext byte of the LIST_ENTITIES_SWITCH_RESPONSE - a SETUP-phase frame the in-flight
     // connect awaits via the discovery loop, NOT a run-phase frame that would decrypt-fail only after connect already resolved (corrupting SWITCH_STATE would leave the
     // green path intact and prove nothing). A genuine ChaCha20-Poly1305 cipher rejects the tampered frame at its AEAD tag check: the transport's
-    // `receiveCipher.DecryptWithAd` throws, the transport tears down, and `connect()` rejects. The decrypt teardown deterministically races just ahead of the discovery
-    // `waitFor` rejection, so the surfaced error is the transport-closed failure the teardown produces (the discovery loop's next `transport.send` hits the now-closed
-    // transport) - a faithful downstream consequence of the real decrypt failing, not an unrelated connection error. The differential below is the airtight non-vacuity
+    // `receiveCipher.DecryptWithAd` throws, the transport tears down with that failure stored, and `connect()` rejects. The decrypt teardown deterministically races just
+    // ahead of the discovery `waitFor` rejection, and the discovery loop's next `transport.send` on the ended transport reports the stored fault, so the surfaced error
+    // is the decrypt failure itself, not an unrelated connection error. The differential below is the airtight non-vacuity
     // proof: the SAME harness with the SAME bytes, minus the one flipped ciphertext byte, connects successfully (the happy-path test above) - so this rejection is caused
     // by the corruption and nothing else. If the cipher were a no-op stub, the flipped byte would be invisible and this connect would falsely succeed.
     const responder = createNoiseResponder({ corruptType: MessageType.LIST_ENTITIES_SWITCH_RESPONSE, frames: scenarioFrames(basicDiscovery), psk: responderPsk() });
@@ -153,25 +153,25 @@ describe("encrypted session end-to-end - real NNpsk0 cipher", () => {
     await assert.rejects(async (): Promise<void> => { await driveEncryptedConnect(responder); }, (err: unknown): boolean => {
 
       // The rejection must be a typed client error from the real protocol path (an EspHomeError), proving the corruption propagated through genuine decrypt + teardown
-      // rather than surfacing as a test-harness fault. Concretely it is the ConnectionClosedByPeerError the post-teardown send raises; the broader EspHomeError check
-      // documents that any teardown-rooted client error is the expected shape while pinning it to the library's typed hierarchy.
+      // rather than surfacing as a test-harness fault. Concretely it is the DecryptionFailedError the transport stored, which the post-teardown send reports.
       assert.ok(err instanceof EspHomeError, "connect must reject with a typed client error after the real cipher rejects the tampered frame, got: " + String(err));
-      assert.ok(err instanceof ConnectionClosedByPeerError, "the decrypt teardown surfaces as a transport-closed rejection, got: " + String(err));
+      assert.ok(err instanceof DecryptionFailedError, "the decrypt teardown surfaces as the stored decrypt failure, got: " + String(err));
 
       return true;
     });
   });
 
-  // Drive a single encrypted connect whose responder corrupts msg2 on the header=0 SUCCESS path so the client cannot complete the handshake. Returns the construction
-  // count via a closure so a REJECTED connect still proves no plaintext fallback (a fallback would construct a second transport). Mirrors driveEncryptedConnect but keeps
-  // the count reachable on the rejection path and surfaces the client reference so `isEncrypted` can be checked. `maxConstructionRetries: 0` keeps the attempt
-  // single-shot.
-  const driveBadKeyConnect = (responder: NoiseResponder): { count: () => number; openPromise: Promise<EspHomeClient> } => {
+  // Drive a single encrypted connect that is expected to reject during the handshake. Returns the construction count via a closure so a REJECTED connect still
+  // proves no plaintext fallback (a fallback would construct a second transport). Mirrors driveEncryptedConnect but keeps the count reachable on the rejection path.
+  // `maxConstructionRetries: 0` keeps the attempt single-shot, so only a fallback can construct a second transport, and an optional connect timeout bounds a row whose
+  // failure mode is a wait rather than a rejection.
+  const driveRejectedConnect = (responder: NoiseResponder, connectTimeoutMs?: number): { count: () => number; openPromise: Promise<EspHomeClient> } => {
 
     let transportConstructions = 0;
 
     const openPromise = openEspHomeClient({
 
+      ...((connectTimeoutMs === undefined) ? {} : { connectTimeoutMs }),
       host: "encrypted-host",
       keepAlive: false,
       logger: silentLogger,
@@ -189,17 +189,17 @@ describe("encrypted session end-to-end - real NNpsk0 cipher", () => {
     return { count: (): number => transportConstructions, openPromise };
   };
 
-  // The two header=0-UNDECRYPTABLE bad-key modes, parameterized: a low-order responder ephemeral drives the client's X25519 DH to INVALID_REMOTE_KEY; a 0xFF ephemeral
-  // drives a DH-accepted-but-wrong secret to a payload AEAD AUTH_FAILED. Both re-tag to a permanent EncryptionKeyInvalidError in the connect flow, so connect() must fail
-  // CLOSED: reject with EncryptionKeyInvalidError (a PermanentError), never reach isEncrypted === true, and construct ONE transport (no plaintext fallback). These
-  // two modes are the meaningful coverage for the header=0 path; the in-band header != 0 reject is already fail-closed and exercises neither the readMessage wrap nor the
-  // narrowed gate.
+  // The header=0-UNDECRYPTABLE bad-key modes, parameterized: a low-order responder ephemeral drives the client's X25519 DH to INVALID_REMOTE_KEY; a 0xFF ephemeral
+  // drives a DH-accepted-but-wrong secret to a payload AEAD AUTH_FAILED. Each re-tags to a permanent EncryptionKeyInvalidError in the connect flow, so connect() must
+  // fail CLOSED: reject with EncryptionKeyInvalidError (a PermanentError), never reach isEncrypted === true, and construct ONE transport (no plaintext fallback).
+  // These modes are the meaningful coverage for the header=0 path; the in-band header != 0 reject, covered by the row after them, exercises neither the readMessage
+  // wrap nor the narrowed gate.
   for(const mode of [ "auth-failed", "low-order" ] as const) {
 
     test("a header=0 undecryptable msg2 (" + mode + ") fails closed - rejects EncryptionKeyInvalidError, never encrypted, one transport", async () => {
 
-      const responder = createNoiseResponder({ frames: scenarioFrames(basicDiscovery), psk: responderPsk(), undecryptableMode: mode });
-      const { count, openPromise } = driveBadKeyConnect(responder);
+      const responder = createNoiseResponder({ frames: scenarioFrames(basicDiscovery), msg1Reply: mode, psk: responderPsk() });
+      const { count, openPromise } = driveRejectedConnect(responder);
 
       // Guard the open promise's eventual rejection so firing the responder connect cannot surface an unhandled rejection between the tick and the assertion.
       const settled = openPromise.then((client): { client?: EspHomeClient; err?: unknown } => ({ client }),
@@ -217,6 +217,57 @@ describe("encrypted session end-to-end - real NNpsk0 cipher", () => {
       assert.equal(count(), 1, "no plaintext fallback - a bad-key handshake must construct exactly one transport");
     });
   }
+
+  // The in-band wrong-key rejection followed by the device's close. The rejection arrives before the close, so the handshake read hands it out and the connect fails
+  // closed with the permanent key error. The short connect timeout bounds a run that loses the rejection, so it fails on its assertion rather than waiting out the
+  // default.
+  test("an in-band key rejection followed by a close fails closed - rejects EncryptionKeyInvalidError, never encrypted, one transport", async () => {
+
+    const shortConnectTimeoutMs = 2000;
+    const responder = createNoiseResponder({ frames: scenarioFrames(basicDiscovery), msg1Reply: "reject-key", psk: responderPsk() });
+    const { count, openPromise } = driveRejectedConnect(responder, shortConnectTimeoutMs);
+
+    // Guard the open promise's eventual rejection so firing the responder connect cannot surface an unhandled rejection between the tick and the assertion.
+    const settled = openPromise.then((client): { client?: EspHomeClient; err?: unknown } => ({ client }),
+      (err: unknown): { client?: EspHomeClient; err?: unknown } => ({ err }));
+
+    await yieldTick();
+    responder.start();
+
+    const outcome = await settled;
+
+    assert.equal(outcome.client, undefined, "an in-band key rejection must NOT resolve to a connected client");
+    assert.ok(outcome.err instanceof EncryptionKeyInvalidError, "an in-band key rejection must reject with EncryptionKeyInvalidError, got: " + String(outcome.err));
+    assert.ok(outcome.err instanceof PermanentError, "the key rejection must be a PermanentError so the default reconnect predicate gives up");
+    assert.equal(count(), 1, "no plaintext fallback - an in-band key rejection must construct exactly one transport");
+  });
+
+  // A device that sends its server hello and then closes without answering msg1. The hello is a Noise frame, so the device speaks the encrypted protocol and its
+  // close is an ordinary peer close: the fallback gate sends to plaintext only a device that closes before it has spoken Noise, and rethrows this close as the
+  // connect's rejection. The count is asserted first so a run that falls back fails on the line that names the fallback, and the short connect timeout bounds
+  // that run, whose second transport waits on a socket that never connects.
+  test("a close after the device's hello rejects with the peer close - one transport, no plaintext fallback", async () => {
+
+    const shortConnectTimeoutMs = 2000;
+    const responder = createNoiseResponder({ frames: scenarioFrames(basicDiscovery), msg1Reply: "close-without-reply", psk: responderPsk() });
+    const { count, openPromise } = driveRejectedConnect(responder, shortConnectTimeoutMs);
+
+    // Guard the open promise's eventual rejection so firing the responder connect cannot surface an unhandled rejection between the tick and the assertion.
+    const settled = openPromise.then((client): { client?: EspHomeClient; err?: unknown } => ({ client }),
+      (err: unknown): { client?: EspHomeClient; err?: unknown } => ({ err }));
+
+    await yieldTick();
+    responder.start();
+
+    const outcome = await settled;
+
+    assert.equal(count(), 1, "no plaintext fallback - a close after the device's hello must construct exactly one transport");
+    assert.equal(outcome.client, undefined, "a close after the device's hello must NOT resolve to a connected client");
+    assert.ok(outcome.err instanceof ConnectionClosedByPeerError,
+      "a close after the device's hello must reject with ConnectionClosedByPeerError, got: " + String(outcome.err));
+    assert.equal(outcome.err.code, "PEER_CLOSED", "the rejection must be the ordinary peer close, not the close of a device that never spoke Noise");
+    assert.ok(!(outcome.err instanceof PermanentError), "the peer close is a transient connection error, not a PermanentError");
+  });
 
   // The server hellos the resolver tests announce, in the upstream wire form (a raw lowercase MAC with no separators), and the parse each must reach the resolver as.
   const POOLHOUSE = { expected: { macAddress: "24:4C:AB:06:49:9C", name: "poolhouse81proxy" }, serverHello: { mac: "244cab06499c", name: "poolhouse81proxy" } };

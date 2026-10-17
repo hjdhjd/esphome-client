@@ -1285,7 +1285,7 @@ describe("Transport.nextNoiseHandshakeFrame", () => {
     mock.pushData(NOISE_HANDSHAKE_FRAME_DEAD_BEEF);
     transport[Symbol.dispose]();
 
-    // Dispose without prior fail() leaves terminationError null, so the queue drains before the terminated guard fires.
+    // A frame received before the transport ended is handed out first, so the read returns it before it reports the dispose.
     const frame = await transport.nextNoiseHandshakeFrame();
 
     assert.equal(frame.length, 4);
@@ -1295,6 +1295,52 @@ describe("Transport.nextNoiseHandshakeFrame", () => {
 
       assert.ok(err instanceof ConnectionClosedByPeerError);
       assert.equal(err.code, "TRANSPORT_CLOSED");
+
+      return true;
+    });
+  });
+
+  test("returns a frame queued before a peer close, then rejects with the ordinary peer close because the device has spoken Noise", async () => {
+
+    const mock = new MockSocket();
+    const transport = await openTransport(mock);
+
+    transport.enterNoiseHandshake();
+
+    mock.pushData(NOISE_HANDSHAKE_FRAME_DEAD_BEEF);
+    mock.simulateClose();
+
+    const frame = await transport.nextNoiseHandshakeFrame();
+
+    assert.equal(frame.compare(Buffer.from([ 0xDE, 0xAD, 0xBE, 0xEF ])), 0);
+
+    await assert.rejects(transport.nextNoiseHandshakeFrame(), (err) => {
+
+      assert.ok(err instanceof ConnectionClosedByPeerError);
+      assert.ok(!(err instanceof PeerClosedDuringNoiseError));
+      assert.equal(err.code, "PEER_CLOSED");
+
+      return true;
+    });
+  });
+
+  test("returns a complete frame ahead of a bad indicator in the same chunk, then rejects with the indicator error", async () => {
+
+    const mock = new MockSocket();
+    const transport = await openTransport(mock);
+
+    transport.enterNoiseHandshake();
+
+    mock.pushData(Buffer.concat([ NOISE_HANDSHAKE_FRAME_DEAD_BEEF, Buffer.from([ 0x55, 0x55, 0x55 ]) ]));
+
+    const frame = await transport.nextNoiseHandshakeFrame();
+
+    assert.equal(frame.length, 4);
+
+    await assert.rejects(transport.nextNoiseHandshakeFrame(), (err) => {
+
+      assert.ok(err instanceof ProtocolError);
+      assert.equal(err.code, "BAD_NOISE_INDICATOR");
 
       return true;
     });
@@ -1345,6 +1391,79 @@ describe("Transport.nextNoiseHandshakeFrame", () => {
     mock.pushData(Buffer.from([ 0x00, 0x00, 0x07 ]));
 
     await assert.rejects(transport.nextNoiseHandshakeFrame(), PeerClosedDuringNoiseError);
+  });
+});
+
+describe("Transport - calls after the transport ends", () => {
+
+  // A parked read observes the fault the transport stores, which each row then compares by identity against what a later call throws.
+  const faultDuringHandshake = async (): Promise<{ fault: unknown; transport: Transport }> => {
+
+    const mock = new MockSocket();
+    const transport = await openTransport(mock);
+
+    transport.enterNoiseHandshake();
+
+    const parked = transport.nextNoiseHandshakeFrame();
+
+    mock.simulateClose();
+
+    const fault = await parked.then(() => null, (err: unknown) => err);
+
+    assert.ok(fault instanceof PeerClosedDuringNoiseError);
+
+    return { fault, transport };
+  };
+
+  test("each send on a faulted transport rejects with the stored fault", async () => {
+
+    const { fault, transport } = await faultDuringHandshake();
+
+    await assert.rejects(transport.sendNoiseHandshakeFrame(Buffer.alloc(0)), (err) => err === fault);
+    await assert.rejects(transport.send(MessageType.PING_REQUEST, Buffer.alloc(0)), (err) => err === fault);
+  });
+
+  test("a send on a transport disposed without a fault rejects with TRANSPORT_CLOSED", async () => {
+
+    const mock = new MockSocket();
+    const transport = await openTransport(mock);
+
+    transport[Symbol.dispose]();
+
+    await assert.rejects(transport.send(MessageType.PING_REQUEST, Buffer.alloc(0)), (err) => {
+
+      assert.ok(err instanceof ConnectionClosedByPeerError);
+      assert.equal(err.code, "TRANSPORT_CLOSED");
+
+      return true;
+    });
+  });
+
+  test("the cipher install on a faulted transport throws the stored fault and stores nothing", async () => {
+
+    const { fault, transport } = await faultDuringHandshake();
+
+    assert.throws(() => transport.installCipher(buildStubCipherPair()), (err) => err === fault);
+    assert.equal(transport.isEncrypted, false);
+
+    // The phase stays the handshake, so the read reports the fault rather than a phase error.
+    await assert.rejects(transport.nextNoiseHandshakeFrame(), (err) => err === fault);
+  });
+
+  test("the first-byte read after a fault that left an unparsed byte rejects with the fault", async () => {
+
+    const mock = new MockSocket();
+    const transport = await openTransport(mock);
+
+    mock.pushData(Buffer.from([ 0x55, 0x55, 0x55 ]));
+
+    await assert.rejects(transport.firstByte(), (err) => {
+
+      assert.ok(err instanceof ProtocolError);
+      assert.equal(err.code, "BAD_PLAINTEXT_INDICATOR");
+
+      return true;
+    });
   });
 });
 
@@ -2399,7 +2518,7 @@ describe("Transport - failure injection (fail path is internal but observable)",
 
     mock.pushData(Buffer.from([ 0x55, 0x55, 0x55 ]));
 
-    await assert.rejects(transport.send(MessageType.PING_REQUEST, Buffer.alloc(0)), ConnectionClosedByPeerError);
+    await assert.rejects(transport.send(MessageType.PING_REQUEST, Buffer.alloc(0)), { code: "BAD_PLAINTEXT_INDICATOR", constructor: ProtocolError });
   });
 
   test("fail() is safe to call more than once - the first error is preserved when subsequent fail-trips occur", async () => {
@@ -2664,7 +2783,7 @@ describe("Transport - negative guarantees (X does NOT happen when Z)", () => {
 
     mock.pushData(Buffer.from([ 0x55, 0x55, 0x55 ]));
 
-    await assert.rejects(transport.send(MessageType.PING_REQUEST, Buffer.alloc(0)), { code: "TRANSPORT_CLOSED", constructor: ConnectionClosedByPeerError });
+    await assert.rejects(transport.send(MessageType.PING_REQUEST, Buffer.alloc(0)), { code: "BAD_PLAINTEXT_INDICATOR", constructor: ProtocolError });
   });
 
   test("the iterator does NOT yield more frames after dispose", async () => {
@@ -2693,7 +2812,7 @@ describe("Transport - negative guarantees (X does NOT happen when Z)", () => {
 
     mock.simulateClose();
 
-    await assert.rejects(transport.send(MessageType.PING_REQUEST, Buffer.alloc(0)), { code: "TRANSPORT_CLOSED", constructor: ConnectionClosedByPeerError });
+    await assert.rejects(transport.send(MessageType.PING_REQUEST, Buffer.alloc(0)), { code: "PEER_CLOSED", constructor: ConnectionClosedByPeerError });
   });
 
   test("a fail() trip does NOT double-reject the same parked awaiter (the first reject wins)", async () => {

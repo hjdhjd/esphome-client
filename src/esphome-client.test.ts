@@ -1677,6 +1677,54 @@ describe("EspHomeClient.connect - error and abort paths", () => {
     client.disconnect();
   });
 
+  test("connect with PSK fails closed on an in-band key rejection the device closes behind - permanent error, no plaintext fallback, one transport", async () => {
+
+    // The mock plays a device with the wrong key: it answers the empty initial frame with its server hello, and the client's handshake message with the in-band
+    // wrong-key rejection followed by the ordinary peer close, so the step's read meets the rejection queued behind the stored close. The rejection arrived first,
+    // so the connect reports it as the permanent key error and never opens a plaintext transport.
+    const hello = Buffer.concat([ Buffer.from([1]), Buffer.from("device\x00", "utf8") ]);
+    const rejection = Buffer.concat([ Buffer.from([1]), Buffer.from("Handshake MAC failure", "utf8") ]);
+    const transports: MockTransport[] = [];
+    const transportFactory = (): MockTransport => {
+
+      const t = new MockTransport();
+      const send = t.sendNoiseHandshakeFrame.bind(t);
+
+      t.sendNoiseHandshakeFrame = async (frame: Buffer): Promise<void> => {
+
+        await send(frame);
+
+        if(t.outboundHandshakeFrames.length === 1) {
+
+          t.pushNoiseHandshakeFrame(hello);
+
+          return;
+        }
+
+        t.pushNoiseHandshakeFrame(rejection);
+        t.fail(new ConnectionClosedByPeerError("Peer closed the socket.", "PEER_CLOSED"));
+      };
+
+      transports.push(t);
+
+      return t;
+    };
+    const psk = Buffer.alloc(32, 0x55).toString("base64");
+    const client = new EspHomeClient({ host: "test.local", logger: quietLogger(), psk, reconnect: false, transportFactory });
+
+    await assert.rejects(client.connect({ signal: AbortSignal.timeout(2000) }), (err: unknown) => {
+
+      assert.ok(err instanceof EncryptionKeyInvalidError, "the rejection the device sent before it closed must reject the connect with EncryptionKeyInvalidError");
+      assert.ok(err instanceof PermanentError, "a bad-key failure must be a PermanentError so the default reconnect predicate gives up");
+
+      return true;
+    });
+
+    assert.equal(transports.length, 1, "a key rejection the device closes behind must NOT construct a second (plaintext) transport");
+
+    client.disconnect();
+  });
+
   test("connect with PSK fails closed on a garbled noise reply (TRUNCATED_E) - no plaintext fallback, exactly one transport", async () => {
 
     // A garbled/truncated noise reply is NOT a no-encryption signal: the device spoke noise but the reply was framing-broken. It is transient (the reconnect supervisor

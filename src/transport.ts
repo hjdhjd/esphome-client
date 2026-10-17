@@ -195,6 +195,8 @@ export interface TransportLike extends AsyncDisposable, Disposable, AsyncIterabl
    * Transition from `noise-handshake` to `noise-data`. Installs the cipher pair used to encrypt and decrypt subsequent frames.
    *
    * @param cipher - The receive/send cipher pair from the completed Noise handshake.
+   * @throws The fault that ended the transport, or a `TRANSPORT_CLOSED` error after a dispose without one, when the transport has already ended; the cipher pair
+   *   is not stored and stays the caller's to destroy.
    */
   installCipher(cipher: NoiseCipherPair): void;
 
@@ -336,14 +338,23 @@ export class Transport implements TransportLike {
   private firstByteAwaiter: Nullable<Awaiter<number>> = null;
 
   /**
-   * Whether the transport has reached a terminal state. Set on dispose, fatal error, or socket close. New `next()` calls resolve `done`; pending awaiters are settled.
+   * Whether the transport has reached a terminal state. Set on dispose, fatal error, or socket close. Pending awaiters are settled, and a read hands out what its
+   * queue already holds before it reports the end: once the queue is empty, `next()` resolves `done` and the handshake and first-byte reads throw.
    */
   private terminated = false;
 
   /**
-   * Pending fatal error. When set, awaiters reject with this rather than yielding from their queues.
+   * Pending fatal error. The message iterator and the handshake read hand out the frames already queued before they throw it, because those frames arrived before
+   * the connection ended. The first-byte read throws it before it reads, and the sends and the cipher install throw it on a terminated transport.
    */
   private terminationError: Nullable<Error> = null;
+
+  /**
+   * Whether the device has sent a Noise handshake frame on this transport. The plaintext fallback follows only a device that has not spoken the encrypted protocol, and
+   * a device that has sent a Noise frame has, so a close during the handshake counts as the fallback's error only while this is unset. A transport serves one connect
+   * attempt and the fallback opens a new one, so nothing resets it.
+   */
+  private receivedNoiseFrame = false;
 
   private constructor(options: TransportOpenOptions) {
 
@@ -371,16 +382,18 @@ export class Transport implements TransportLike {
    *
    * A failed socket write ends the transport: the send rejects with a {@link ConnectionError} coded `SOCKET_WRITE_FAILED` whose cause is the socket's own error, and
    * every parked awaiter and the message iterator reject with that same error. A write that fails after an earlier fault has ended the transport rejects with that
-   * fault's error instead, so concurrent in-flight writes report one cause.
+   * fault's error instead, and a send on a transport that has already ended rejects with the fault that ended it, so every send reports one cause. A send on a
+   * transport disposed without a fault rejects with a {@link ConnectionClosedByPeerError} coded `TRANSPORT_CLOSED`.
    *
    * @param type - Numeric message type.
    * @param payload - Message payload bytes (encoded protobuf body).
    */
   public async send(type: number, payload: Buffer): Promise<void> {
 
+    // A send on an ended transport reports the fault that ended it, as a write in flight does, so the send and every observer name one cause.
     if(this.terminated || !this.socket || this.socket.destroyed) {
 
-      throw new ConnectionClosedByPeerError("Transport is closed; cannot send.", "TRANSPORT_CLOSED");
+      throw this.terminationError ?? new ConnectionClosedByPeerError("Transport is closed; cannot send.", "TRANSPORT_CLOSED");
     }
 
     const typeTag = messageTypeName(type);
@@ -447,9 +460,10 @@ export class Transport implements TransportLike {
    */
   public async sendNoiseHandshakeFrame(frame: Buffer): Promise<void> {
 
+    // A send on an ended transport reports the fault that ended it, as a write in flight does, so the handshake step and every observer name one cause.
     if(this.terminated || !this.socket || this.socket.destroyed) {
 
-      throw new ConnectionClosedByPeerError("Transport is closed; cannot send.", "TRANSPORT_CLOSED");
+      throw this.terminationError ?? new ConnectionClosedByPeerError("Transport is closed; cannot send.", "TRANSPORT_CLOSED");
     }
 
     if(this.phase !== Phase.NOISE_HANDSHAKE) {
@@ -481,12 +495,21 @@ export class Transport implements TransportLike {
    * One-way for the lifetime of the transport - to revert, dispose this transport and construct a fresh one in `plaintext` phase.
    *
    * @param cipher - The send/receive cipher pair from a completed noise handshake.
+   * @throws The fault that ended the transport, or a {@link ConnectionClosedByPeerError} coded `TRANSPORT_CLOSED` after a dispose without one, when the transport
+   *   has already ended; the cipher pair is not stored and stays the caller's to destroy.
    */
   public installCipher(cipher: NoiseCipherPair): void {
 
     if(this.phase !== Phase.NOISE_HANDSHAKE) {
 
       throw new ProtocolError("installCipher() called outside the noise-handshake phase (current: " + this.phase + ").", "BAD_TRANSPORT_PHASE");
+    }
+
+    // Teardown has already run its one cipher destroy on a terminated transport, so a cipher stored now would never be destroyed. Refuse it with the error a send
+    // throws here, and the caller's failure path destroys the pair it still holds.
+    if(this.terminated) {
+
+      throw this.terminationError ?? new ConnectionClosedByPeerError("Transport is closed; cannot install the cipher.", "TRANSPORT_CLOSED");
     }
 
     this.cipher = cipher;
@@ -507,6 +530,8 @@ export class Transport implements TransportLike {
    */
   public async firstByte(signal?: AbortSignal): Promise<typeof ProtocolByte.NOISE | typeof ProtocolByte.PLAINTEXT> {
 
+    // This read reports a stored fault before it reads, unlike the queued reads, because it peeks the unparsed accumulator, which after a fault still holds the
+    // bytes that caused it.
     if(this.terminationError) {
 
       throw this.terminationError;
@@ -536,7 +561,9 @@ export class Transport implements TransportLike {
   }
 
   /**
-   * Read the next noise handshake frame. Valid only during the `noise-handshake` phase.
+   * Read the next noise handshake frame. Valid only during the `noise-handshake` phase. A frame already queued is returned first, even after the transport has
+   * ended; with the queue empty, the read throws the stored fault, then a `TRANSPORT_CLOSED` error on a transport disposed without one, then an aborted signal's
+   * reason, and otherwise waits for the next frame.
    *
    * @param signal - Optional cancellation signal.
    * @returns The next frame's body bytes (already deframed).
@@ -548,16 +575,17 @@ export class Transport implements TransportLike {
       throw new ProtocolError("nextNoiseHandshakeFrame() called outside the noise-handshake phase (current: " + this.phase + ").", "BAD_TRANSPORT_PHASE");
     }
 
-    if(this.terminationError) {
-
-      throw this.terminationError;
-    }
-
+    // A frame the transport already parsed was received before the connection ended, so the caller gets it before the fault, as the message iterator's caller does.
     const queued = this.handshakeFrameQueue.shift();
 
     if(queued !== undefined) {
 
       return queued;
+    }
+
+    if(this.terminationError) {
+
+      throw this.terminationError;
     }
 
     if(this.terminated) {
@@ -745,9 +773,9 @@ export class Transport implements TransportLike {
       // If we've already terminated for a more specific reason, keep that. Otherwise surface a generic peer-closed.
       if(!this.terminated) {
 
-        // During noise handshake, a peer-initiated close means the device closed mid-noise - usually it does not support encryption. Translate so the connect path can
-        // fall back without inspecting socket internals.
-        if(this.phase === Phase.NOISE_HANDSHAKE) {
+        // A peer close during the noise handshake from a device that has not sent a Noise frame means it does not speak the encrypted protocol, so translate it for the
+        // connect path to fall back without inspecting socket internals. A device that has sent a Noise frame speaks the protocol, so its close is an ordinary one.
+        if((this.phase === Phase.NOISE_HANDSHAKE) && !this.receivedNoiseFrame) {
 
           this.fail(new PeerClosedDuringNoiseError("Peer closed the socket during the noise handshake.", "PEER_CLOSED_NOISE"));
 
@@ -995,6 +1023,7 @@ export class Transport implements TransportLike {
 
       // Raw handshake frame - hand to the awaiter or queue.
       this.options.metrics?.increment("frames.received", 1, { encrypted: "false" });
+      this.receivedNoiseFrame = true;
 
       if(this.handshakeAwaiter) {
 

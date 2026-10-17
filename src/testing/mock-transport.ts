@@ -237,7 +237,7 @@ export class MockTransport implements TransportLike {
 
   /**
    * Simulate a fatal transport error. Pending awaiters reject, a pending {@link whenIdle} resolves, and subsequent calls reject with the same error, the inbound
-   * iterator once it has yielded the messages already queued, as the real transport does.
+   * iterator and the handshake read once each has returned what its queue already holds, as the real transport does.
    *
    * @param error - The error to surface.
    */
@@ -311,13 +311,21 @@ export class MockTransport implements TransportLike {
   /**
    * Install the negotiated noise cipher pair and transition to {@link MockTransportPhase.NOISE_DATA}. Implements the {@link TransportLike}.installCipher
    * contract; the captured cipher pair is held so tests can assert that the host installed the correct keys, but the mock does not actually encrypt subsequent frames.
+   * The install clears the handshake queue, and on a terminated mock it stores nothing and throws the stored fault, or a `TRANSPORT_CLOSED` error after a dispose.
    *
    * @param cipher - The negotiated send/receive cipher pair from the noise handshake.
    */
   public installCipher(cipher: NoiseCipherPair): void {
 
+    // The real transport refuses a cipher once it has ended, because its teardown has already run the one cipher destroy, so the mock refuses it the same way.
+    if(this.terminated) {
+
+      throw this.fatalError ?? new ConnectionClosedByPeerError("Transport is closed; cannot install the cipher.", "TRANSPORT_CLOSED");
+    }
+
     this.installedCipher = cipher;
     this.currentPhase = MockTransportPhase.NOISE_DATA;
+    this.handshakeFrameQueue.length = 0;
   }
 
   public async firstByte(signal?: AbortSignal): Promise<0x00 | 0x01> {
@@ -327,14 +335,19 @@ export class MockTransport implements TransportLike {
       throw this.fatalError;
     }
 
-    signal?.throwIfAborted();
-
     const queued = this.firstByteQueue.shift();
 
     if(queued !== undefined) {
 
       return (queued === 0x01 ? 0x01 : 0x00);
     }
+
+    if(this.terminated) {
+
+      throw new ConnectionClosedByPeerError("Transport closed while waiting for the first byte.", "TRANSPORT_CLOSED");
+    }
+
+    signal?.throwIfAborted();
 
     const { promise, resolve, reject } = Promise.withResolvers<0x00 | 0x01>();
     const awaiter: ValueAwaiter<number> = { reject, resolve: resolve as (v: number) => void, signal };
@@ -363,19 +376,25 @@ export class MockTransport implements TransportLike {
 
   public async nextNoiseHandshakeFrame(signal?: AbortSignal): Promise<Buffer> {
 
-    if(this.fatalError) {
-
-      throw this.fatalError;
-    }
-
-    signal?.throwIfAborted();
-
+    // A queued frame was received before the transport ended, so the caller gets it before the fault or an aborted signal, as the real transport's caller does.
     const queued = this.handshakeFrameQueue.shift();
 
     if(queued !== undefined) {
 
       return queued;
     }
+
+    if(this.fatalError) {
+
+      throw this.fatalError;
+    }
+
+    if(this.terminated) {
+
+      throw new ConnectionClosedByPeerError("Transport closed while waiting for a noise handshake frame.", "TRANSPORT_CLOSED");
+    }
+
+    signal?.throwIfAborted();
 
     const { promise, resolve, reject } = Promise.withResolvers<Buffer>();
     const awaiter: ValueAwaiter<Buffer> = { reject, resolve, signal };
