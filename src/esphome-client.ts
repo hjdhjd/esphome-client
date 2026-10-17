@@ -863,8 +863,8 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
   private readonly stateMessageTypes: ReadonlySet<number>;
 
   // Per-instance set of inbound list-entities wire-message-types. Derived once from {@link schemasTable} via {@link buildListEntitiesMessageTypes}; threaded into
-  // both the setup-phase discovery awaiter and the `RunPhaseHost` so an extras-registered `LIST_ENTITIES_*_RESPONSE` is awaited during discovery and routed via the
-  // default-handler's late-discovery branch during run phase.
+  // each handshake context's `MessageReceiver`, the setup-phase discovery awaiter, and the `RunPhaseHost`, so an extras-registered `LIST_ENTITIES_*_RESPONSE` waits
+  // uncapped in the receiver's setup buffer, is awaited during discovery, and is routed via the default-handler's late-discovery branch during run phase.
   private readonly listEntitiesMessageTypes: ReadonlySet<number>;
 
   // Per-instance lookup from inbound state-message wire-message-type to the schema that decodes it. Derived once from {@link schemasTable} via
@@ -1475,7 +1475,7 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
   private async openHandshakeContext(signal: AbortSignal): Promise<HandshakeContext> {
 
     const transport = await this.openTransport(signal);
-    const receiver = new MessageReceiver(transport, this.log);
+    const receiver = new MessageReceiver(transport, { log: this.log, uncappedMessageTypes: this.listEntitiesMessageTypes });
 
     // Setup-phase interleave handlers. Both auto-tear-down when the receiver enters drain phase via startDrain(); the connect-flow finally also disposes them
     // explicitly to handle the failure path.

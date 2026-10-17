@@ -4,7 +4,7 @@
  */
 
 /*
- * Defines and exports the canonical scenarios that mirror the capture-replay set. The basic-discovery and v114-discovery scenarios carry full byte-level fixtures
+ * Defines and exports the canonical scenarios that mirror the capture-replay set. Each scenario that declares an `expectedReplay` carries full byte-level fixtures
  * synthesized via the library's own encoder; the rest are stubs awaiting real-device captures (gated on hardware).
  */
 import type { InboundFrame, Scenario } from "../simulator.ts";
@@ -130,6 +130,40 @@ export const v114Discovery: Scenario = {
   name: "v114-discovery"
 };
 
+// The number of switches the discovery-burst scenario announces, chosen far past the receiver's per-type setup-buffer mark so a replay that queues the burst ahead of
+// the discovery loop would lose entities to that mark if the list-entities stream were not exempt from it.
+const discoveryBurstSwitchCount = 40;
+
+const discoveryBurstInbound: InboundFrame[] = [
+  { payload: helloResponsePayload(), type: MessageType.HELLO_RESPONSE },
+  { payload: deviceInfoResponsePayload(), type: MessageType.DEVICE_INFO_RESPONSE },
+  ...Array.from({ length: discoveryBurstSwitchCount }, (_, index): InboundFrame => ({
+
+    payload: listEntitiesSwitchResponsePayload(index + 1, "switch_" + String(index), "Switch " + String(index)), type: MessageType.LIST_ENTITIES_SWITCH_RESPONSE
+  })),
+  { payload: Buffer.alloc(0), type: MessageType.LIST_ENTITIES_DONE_RESPONSE }
+];
+
+/**
+ * Discovery-burst scenario: plaintext HELLO + DeviceInfo + a same-type switch discovery far past the receiver's per-type setup-buffer mark, with no state frames.
+ *
+ * A replay queues every setup frame before the connect, so the whole burst reaches the receiver ahead of the discovery loop. Regression net for the setup buffer's
+ * exemption of the list-entities stream: the replay keeps every entity only when the host exempts its list-entities types from the per-type cap.
+ */
+export const discoveryBurst: Scenario = {
+
+  expectedOutbound: [
+
+    MessageType.HELLO_REQUEST,
+    MessageType.LIST_ENTITIES_REQUEST,
+    MessageType.DEVICE_INFO_REQUEST,
+    MessageType.SUBSCRIBE_STATES_REQUEST
+  ],
+  expectedReplay: { deviceName: "test-device", entityCount: discoveryBurstSwitchCount, telemetryEventCount: 0 },
+  inbound: discoveryBurstInbound,
+  name: "discovery-burst"
+};
+
 const empty = (name: string): Scenario => ({ expectedOutbound: [], inbound: [], name });
 
 // Exercises the full Noise handshake path against a device configured with a pre-shared key.
@@ -153,5 +187,5 @@ export const disconnectRequest: Scenario = empty("disconnect-request");
 // The canonical scenario registry. Every scenario constant defined above must be added here, since consumers that iterate scenarios exhaustively (the e2e
 // replay and capture-corpus tests) rely on this array as their sole enumeration source.
 export const ALL_SCENARIOS: readonly Scenario[] = [
-  basicDiscovery, v114Discovery, encryptedHandshake, fallback, pingFlood, multiDevice, slowDiscovery, disconnectRequest
+  basicDiscovery, v114Discovery, discoveryBurst, encryptedHandshake, fallback, pingFlood, multiDevice, slowDiscovery, disconnectRequest
 ];

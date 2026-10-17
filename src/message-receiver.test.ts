@@ -7,6 +7,7 @@ import { Buffer } from "node:buffer";
 import { ConnectionClosedByPeerError } from "./errors.ts";
 import type { EspHomeLogging } from "./types.ts";
 import { MessageReceiver } from "./message-receiver.ts";
+import { MessageType } from "./protocol/message-types.ts";
 import { MockTransport } from "./testing/mock-transport.ts";
 import assert from "node:assert/strict";
 
@@ -37,6 +38,9 @@ function createCapturingLog(): { log: EspHomeLogging; warns: CapturedWarn[] } {
 
   return { log, warns };
 }
+
+// The size of a same-type burst, chosen far past the setup buffer's per-type mark so a capped type is certain to lose entries to that mark.
+const SAME_TYPE_BURST_SIZE = 40;
 
 describe("MessageReceiver.waitFor", () => {
 
@@ -533,7 +537,7 @@ describe("MessageReceiver diagnostics logger", () => {
 
     const transport = new MockTransport();
     const { log, warns } = createCapturingLog();
-    const receiver = new MessageReceiver(transport, log);
+    const receiver = new MessageReceiver(transport, { log });
 
     // onTerminal is the teardown escalation. A handler throw must NOT route here - if it flips, the policy regressed from log-and-continue to teardown.
     let terminalFired = false;
@@ -572,7 +576,7 @@ describe("MessageReceiver diagnostics logger", () => {
 
     const transport = new MockTransport();
     const { log, warns } = createCapturingLog();
-    const receiver = new MessageReceiver(transport, log);
+    const receiver = new MessageReceiver(transport, { log });
 
     // Prime the pump in setup phase without awaiting type 42, mirroring the buffered-message test above: an interleave registration on an unrelated type starts the pump
     // so the type-42 frames have nowhere to go but the per-type buffer.
@@ -596,7 +600,7 @@ describe("MessageReceiver diagnostics logger", () => {
 
     const transport = new MockTransport();
     const { log, warns } = createCapturingLog();
-    const receiver = new MessageReceiver(transport, log);
+    const receiver = new MessageReceiver(transport, { log });
 
     receiver.onInterleave(99, () => { /* noop, just primes the pump */ });
 
@@ -624,7 +628,7 @@ describe("MessageReceiver diagnostics logger", () => {
 
     const transport = new MockTransport();
     const { log, warns } = createCapturingLog();
-    const receiver = new MessageReceiver(transport, log);
+    const receiver = new MessageReceiver(transport, { log });
 
     // MAX_BUFFERED_PER_TYPE is 8 (module-private). The overflow test above pushes 9 to trip the drop-and-warn; this pushes EXACTLY 8 - one below the threshold - so the
     // buffer fills to its high-water mark with nothing dropped. Prime the pump with an interleave registration on an unrelated type so the type-42 frames have nowhere to
@@ -647,6 +651,171 @@ describe("MessageReceiver diagnostics logger", () => {
 
       assert.equal(message.payload.readUInt8(0), i, "buffered frames must be retained in arrival order with none dropped");
     }
+  });
+});
+
+describe("MessageReceiver uncapped message types", () => {
+
+  // Push a same-type burst whose payloads carry each frame's arrival index.
+  const pushBurst = (transport: MockTransport, type: number): void => {
+
+    for(let i = 0; i < SAME_TYPE_BURST_SIZE; i++) {
+
+      transport.pushInbound(type, Buffer.from([i]));
+    }
+  };
+
+  // The drop warning reports the mark in its context object, so a row reads the mark there and asserts the extent of a drop without restating the mark's value.
+  const reportedMark = (warns: readonly CapturedWarn[]): number => {
+
+    const mark = (warns[0]?.context as { highWaterMark?: unknown } | undefined)?.highWaterMark;
+
+    assert.ok(typeof mark === "number", "a drop must have been warned with the mark in its context");
+
+    return mark;
+  };
+
+  // Assert that a capped type's burst lost exactly its oldest frames to the mark: one warning per dropped frame, each naming the type and the mark, and the newest
+  // frames left for waitFor in arrival order.
+  const assertOldestDropped = async (receiver: MessageReceiver, warns: readonly CapturedWarn[], type: number): Promise<void> => {
+
+    const mark = reportedMark(warns);
+
+    assert.equal(warns.length, SAME_TYPE_BURST_SIZE - mark, "each frame past the mark must drop one entry and warn once");
+
+    for(const warn of warns) {
+
+      assert.match(warn.message, /high-water mark/, "each drop must warn naming the high-water mark");
+      assert.deepEqual(warn.context, { highWaterMark: mark, messageType: type }, "each drop warning must carry the mark and the capped type");
+    }
+
+    for(let i = SAME_TYPE_BURST_SIZE - mark; i < SAME_TYPE_BURST_SIZE; i++) {
+
+      assert.equal((await receiver.waitFor([type], { signal: AbortSignal.timeout(500) })).payload.readUInt8(0), i, "the newest frames must survive in arrival order");
+    }
+  };
+
+  test("an uncapped type buffered far past the per-type mark keeps every frame in arrival order and logs no warning", async () => {
+
+    const transport = new MockTransport();
+    const { log, warns } = createCapturingLog();
+    const receiver = new MessageReceiver(transport, { log, uncappedMessageTypes: new Set([MessageType.LIST_ENTITIES_SENSOR_RESPONSE]) });
+
+    receiver.onInterleave(99, () => { /* noop, just primes the pump */ });
+    pushBurst(transport, MessageType.LIST_ENTITIES_SENSOR_RESPONSE);
+
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.equal(warns.length, 0, "an uncapped type must never trip the drop warning");
+
+    for(let i = 0; i < SAME_TYPE_BURST_SIZE; i++) {
+
+      assert.equal((await receiver.waitFor([MessageType.LIST_ENTITIES_SENSOR_RESPONSE], { signal: AbortSignal.timeout(500) })).payload.readUInt8(0), i,
+        "every frame of an uncapped type must return to waitFor in arrival order");
+    }
+  });
+
+  test("a capped type still drops its oldest past the mark, with the warning, on a receiver that holds uncapped types", async () => {
+
+    const transport = new MockTransport();
+    const { log, warns } = createCapturingLog();
+    const receiver = new MessageReceiver(transport, { log, uncappedMessageTypes: new Set([MessageType.LIST_ENTITIES_SENSOR_RESPONSE]) });
+
+    receiver.onInterleave(99, () => { /* noop, just primes the pump */ });
+
+    // The uncapped and capped bursts interleave frame by frame, so only a decision made per type spares the one and caps the other.
+    for(let i = 0; i < SAME_TYPE_BURST_SIZE; i++) {
+
+      transport.pushInbound(MessageType.LIST_ENTITIES_SENSOR_RESPONSE, Buffer.from([i]));
+      transport.pushInbound(MessageType.SENSOR_STATE_RESPONSE, Buffer.from([i]));
+    }
+
+    await new Promise((resolve) => setImmediate(resolve));
+
+    await assertOldestDropped(receiver, warns, MessageType.SENSOR_STATE_RESPONSE);
+
+    for(let i = 0; i < SAME_TYPE_BURST_SIZE; i++) {
+
+      assert.equal((await receiver.waitFor([MessageType.LIST_ENTITIES_SENSOR_RESPONSE], { signal: AbortSignal.timeout(500) })).payload.readUInt8(0), i,
+        "the uncapped type beside the capped one must keep every frame in arrival order");
+    }
+  });
+
+  test("a receiver constructed without uncapped types drops a list-entities burst's oldest past the mark, with the warning", async () => {
+
+    const transport = new MockTransport();
+    const { log, warns } = createCapturingLog();
+    const receiver = new MessageReceiver(transport, { log });
+
+    receiver.onInterleave(99, () => { /* noop, just primes the pump */ });
+    pushBurst(transport, MessageType.LIST_ENTITIES_SENSOR_RESPONSE);
+
+    await new Promise((resolve) => setImmediate(resolve));
+
+    await assertOldestDropped(receiver, warns, MessageType.LIST_ENTITIES_SENSOR_RESPONSE);
+  });
+
+  test("an uncapped set holding a type no built-in schema uses is honored", async () => {
+
+    // A type id past every message type the protocol defines, so only the set the receiver was given can exempt it.
+    const vendorType = Math.max(...Object.values(MessageType)) + 1;
+    const transport = new MockTransport();
+    const { log, warns } = createCapturingLog();
+    const receiver = new MessageReceiver(transport, { log, uncappedMessageTypes: new Set([vendorType]) });
+
+    receiver.onInterleave(99, () => { /* noop, just primes the pump */ });
+    pushBurst(transport, vendorType);
+
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.equal(warns.length, 0, "a type the set names must never trip the drop warning");
+
+    for(let i = 0; i < SAME_TYPE_BURST_SIZE; i++) {
+
+      assert.equal((await receiver.waitFor([vendorType], { signal: AbortSignal.timeout(500) })).payload.readUInt8(0), i,
+        "every frame of a type the set names must return to waitFor in arrival order");
+    }
+  });
+
+  test("the drain hand-off replays uncapped frames in arrival order among frames of other types", async () => {
+
+    const transport = new MockTransport();
+    const receiver = new MessageReceiver(transport, { uncappedMessageTypes: new Set([MessageType.LIST_ENTITIES_SENSOR_RESPONSE]) });
+    const sent: string[] = [];
+    const received: string[] = [];
+
+    // Push one frame and record its label, so the expected replay is the arrival order itself.
+    const push = (type: number, index: number): void => {
+
+      transport.pushInbound(type, Buffer.from([index]));
+      sent.push(String(type) + ":" + String(index));
+    };
+
+    receiver.onInterleave(99, () => { /* noop, just primes the pump */ });
+
+    // One frame of each other type sits before, inside and after the uncapped burst, so no capped type comes near the mark.
+    push(MessageType.SENSOR_STATE_RESPONSE, 0);
+
+    for(let i = 0; i < SAME_TYPE_BURST_SIZE; i++) {
+
+      push(MessageType.LIST_ENTITIES_SENSOR_RESPONSE, i);
+
+      if(i === (SAME_TYPE_BURST_SIZE / 2)) {
+
+        push(MessageType.BINARY_SENSOR_STATE_RESPONSE, 0);
+      }
+    }
+
+    push(MessageType.SWITCH_STATE_RESPONSE, 0);
+
+    await new Promise((resolve) => setImmediate(resolve));
+
+    receiver.startDrain({
+
+      default: (msg): void => { received.push(String(msg.type) + ":" + String(msg.payload.readUInt8(0))); }
+    }, () => { /* terminal escalation is irrelevant to this ordering test */ });
+
+    assert.deepEqual(received, sent, "the hand-off must replay uncapped frames among the other types in the order the device sent them");
   });
 });
 

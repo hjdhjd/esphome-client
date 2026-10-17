@@ -17,6 +17,7 @@ import { EspHomeClient, openEspHomeClient } from "./esphome-client.ts";
 import { LockState, LogLevel, SerialProxyPortType, WaterHeaterMode } from "./api-constants.ts";
 import { MockTransport, pushInfraredRFReceiveEvent } from "./testing/mock-transport.ts";
 import type { Nullable, ServiceEntity } from "./types.ts";
+import { ProtocolByte, Transport } from "./transport.ts";
 import { decodeProtobuf, encodeProtoFields, encodeVarint } from "./protocol/codec.ts";
 import { describe, mock, test } from "node:test";
 import { Buffer } from "node:buffer";
@@ -25,8 +26,10 @@ import type { ClockFn } from "./heartbeat.ts";
 import type { ConnectionHealth } from "./health.ts";
 import type { DeviceInfo } from "./esphome-client.ts";
 import { MessageType } from "./protocol/message-types.ts";
+import { MockSocket } from "./testing/mock-socket.ts";
 import type { NoiseCipherPair } from "./transport.ts";
 import type { ProtoField } from "./protocol/codec.ts";
+import type { Socket } from "node:net";
 import type { TestContext } from "node:test";
 import { WireType } from "./protocol/wire-types.ts";
 import assert from "node:assert/strict";
@@ -410,6 +413,36 @@ async function pushHandshake(transport: MockTransport, script: HandshakeScript =
 
   await delay(2);
   transport.pushInbound(MessageType.LIST_ENTITIES_DONE_RESPONSE, LIST_ENTITIES_DONE_RESPONSE);
+}
+
+// Discovery-burst fixtures.
+
+// The number of same-type entities in a discovery burst, chosen far past the receiver's per-type setup-buffer mark so a burst that arrives ahead of the discovery
+// loop would lose entities to that mark if the list-entities stream were not exempt from it.
+const DISCOVERY_BURST_ENTITY_COUNT = 40;
+
+// The entities of a discovery burst: one sensor per key, each named by its index so an assertion on discovery order reads plainly.
+const DISCOVERY_BURST: { key: number; name: string; objectId: string; type: EntityType }[] = Array.from({ length: DISCOVERY_BURST_ENTITY_COUNT },
+  (_, index) => ({ key: index + 1, name: "Sensor " + String(index), objectId: "sensor_" + String(index), type: "sensor" }));
+
+// Frame a typed message as a plaintext device writes it to its socket: the plaintext indicator byte, the payload length and the message type as varints, then the
+// payload itself.
+function plaintextFrame(type: number, payload: Buffer): Buffer {
+
+  return Buffer.concat([ Buffer.from([ProtocolByte.PLAINTEXT]), encodeVarint(payload.length), encodeVarint(type), payload ]);
+}
+
+// A testing socket whose write callback fires on the next tick, as a real socket's does. The base testing socket calls it synchronously, which lets each send of the
+// connect flow settle inside the same run of microtasks as the receiver's pump and so hides how far the pump reads ahead of the flow.
+class DeferredWriteMockSocket extends MockSocket {
+
+  public override write(data: Buffer | string, callback?: (err?: Error) => void): boolean {
+
+    return super.write(data, (err?: Error): void => {
+
+      process.nextTick((): void => { callback?.(err); });
+    });
+  }
 }
 
 // 1. Construction and pre-connect smoke.
@@ -1640,9 +1673,6 @@ describe("EspHomeClient discovery flow", () => {
       host: "test.local", logger: quietLogger(), maxFieldsPerMessage: 4096, reconnect: false, transportFactory: (): MockTransport => transport
     });
 
-    // For the 1000-entity stress we drive the connect manually so we can batch the entity pushes with periodic awaits, letting the host's discovery loop chew through
-    // each batch before the next set arrives. driveConnect's synchronous-flush model is fine for <=100 entities but the receiver's awaiter resolution scheduling needs
-    // breathing room at this scale.
     const connectPromise = client.connect({ signal: AbortSignal.timeout(5000) });
 
     await delay(5);
@@ -1651,17 +1681,11 @@ describe("EspHomeClient discovery flow", () => {
     transport.pushInbound(MessageType.DEVICE_INFO_RESPONSE, DEVICE_INFO_RESPONSE_DEFAULT);
     await delay(2);
 
-    // The setup-phase per-type buffer in MessageReceiver caps at 8 messages. Push in batches of 5 with a microtask yield so the pump+waitFor stay synchronized: each
-    // batch fits comfortably under the buffer ceiling, and the await yields the event loop to let the discovery loop's next waitFor consume the buffered ones before
-    // the next batch arrives. This is exactly how steady-state network traffic looks - bursts of a few packets followed by application-level processing.
-    for(let i = 0; i < 1000; i += 5) {
+    // The whole entity stream is pushed at once, with no yield between frames, so the receiver's pump reads far ahead of the discovery loop. The host exempts its
+    // list-entities types from the setup buffer's per-type cap, so every buffered entity waits for the discovery loop rather than being dropped.
+    for(let i = 0; i < 1000; i++) {
 
-      for(let j = i; j < Math.min(i + 5, 1000); j++) {
-
-        transport.pushInbound(MessageType.LIST_ENTITIES_SENSOR_RESPONSE, listEntitiesPayloadFor("sensor", j + 1, "sensor_" + String(j), "Sensor " + String(j)));
-      }
-
-      await delay(0);
+      transport.pushInbound(MessageType.LIST_ENTITIES_SENSOR_RESPONSE, listEntitiesPayloadFor("sensor", i + 1, "sensor_" + String(i), "Sensor " + String(i)));
     }
 
     transport.pushInbound(MessageType.LIST_ENTITIES_DONE_RESPONSE, LIST_ENTITIES_DONE_RESPONSE);
@@ -1669,6 +1693,103 @@ describe("EspHomeClient discovery flow", () => {
 
     assert.equal(client.getEntitiesWithIds().length, 1000);
     assert.equal(client.snapshotFor("sensor").size, 0, "discovery alone does not populate state cache");
+
+    client.disconnect();
+  });
+
+  test("a same-type discovery burst queued before connect keeps every entity, in order, and logs no drop", async () => {
+
+    const transport = new MockTransport();
+    const capture = makeLogCapture();
+    const client = new EspHomeClient({ host: "test.local", logger: capture.logger, reconnect: false, transportFactory: (): MockTransport => transport });
+
+    // Every reply is queued before connect() starts, so the receiver's pump reads the whole burst into its setup buffer before the discovery loop takes any of it.
+    transport.pushInbound(MessageType.HELLO_RESPONSE, HELLO_RESPONSE_PROTOCOL_1_12);
+    transport.pushInbound(MessageType.DEVICE_INFO_RESPONSE, DEVICE_INFO_RESPONSE_DEFAULT);
+
+    for(const entity of DISCOVERY_BURST) {
+
+      transport.pushInbound(ENTITY_SCHEMAS[entity.type].listEntities.messageType, listEntitiesPayloadFor(entity.type, entity.key, entity.objectId, entity.name));
+    }
+
+    transport.pushInbound(MessageType.LIST_ENTITIES_DONE_RESPONSE, LIST_ENTITIES_DONE_RESPONSE);
+
+    await client.connect({ signal: AbortSignal.timeout(2000) });
+
+    assert.deepEqual(client.getEntitiesWithIds().map((entity) => entity.id), DISCOVERY_BURST.map((entity) => entityId(entity.type, entity.objectId)),
+      "every entity of the burst must be registered, in the order the device sent it");
+    assert.deepEqual(capture.warn, [], "a discovery burst must not trip the setup buffer's drop warning");
+
+    client.disconnect();
+  });
+
+  test("a same-type discovery burst written in one chunk over the real transport keeps every entity, in order, and logs no drop", async () => {
+
+    const socket = new DeferredWriteMockSocket();
+    const capture = makeLogCapture();
+    const client = new EspHomeClient({
+
+      host: "test.local", keepAlive: false, logger: capture.logger, reconnect: false,
+      transportFactory: async (options): Promise<Transport> => Transport.open({ ...options, socketFactory: (): Socket => socket as unknown as Socket })
+    });
+
+    const connectPromise = client.connect({ signal: AbortSignal.timeout(2000) });
+
+    // Yield a macrotask so the transport has attached its connect listener before the socket reports the connection.
+    await delay(5);
+    socket.simulateConnect();
+
+    // The device's whole reply stream lands as one chunk, so the transport decodes every frame at once and the receiver's pump reads them all ahead of the connect flow.
+    socket.pushData(Buffer.concat([
+
+      plaintextFrame(MessageType.HELLO_RESPONSE, HELLO_RESPONSE_PROTOCOL_1_12),
+      plaintextFrame(MessageType.DEVICE_INFO_RESPONSE, DEVICE_INFO_RESPONSE_DEFAULT),
+      ...DISCOVERY_BURST.map((entity) => plaintextFrame(ENTITY_SCHEMAS[entity.type].listEntities.messageType,
+        listEntitiesPayloadFor(entity.type, entity.key, entity.objectId, entity.name))),
+      plaintextFrame(MessageType.LIST_ENTITIES_DONE_RESPONSE, LIST_ENTITIES_DONE_RESPONSE)
+    ]));
+
+    await connectPromise;
+
+    assert.deepEqual(client.getEntitiesWithIds().map((entity) => entity.id), DISCOVERY_BURST.map((entity) => entityId(entity.type, entity.objectId)),
+      "every entity of the burst must be registered, in the order the device sent it");
+    assert.deepEqual(capture.warn, [], "a discovery burst must not trip the setup buffer's drop warning");
+
+    client.disconnect();
+  });
+
+  test("a discovery burst of an extras list-entities type no built-in schema uses keeps every entity, in order, and logs no drop", async () => {
+
+    // The vendor schema reuses the sensor wire format under a list-entities type id past every message type the protocol defines, so only the host's per-instance
+    // set, built from its own schema table, can name it.
+    const vendorListEntitiesType = Math.max(...Object.values(MessageType)) + 1;
+    const sensor = aliasOf("sensor");
+    const extras: Record<string, EntitySchema> = {
+
+      "vendor_sensor": { ...sensor, listEntities: { ...sensor.listEntities, messageType: vendorListEntitiesType }, type: "vendor_sensor" }
+    };
+    const transport = new MockTransport();
+    const capture = makeLogCapture();
+    const client = new EspHomeClient<typeof extras>({
+
+      extraSchemas: extras, host: "test.local", logger: capture.logger, reconnect: false, transportFactory: (): MockTransport => transport
+    });
+
+    transport.pushInbound(MessageType.HELLO_RESPONSE, HELLO_RESPONSE_PROTOCOL_1_12);
+    transport.pushInbound(MessageType.DEVICE_INFO_RESPONSE, DEVICE_INFO_RESPONSE_DEFAULT);
+
+    for(const entity of DISCOVERY_BURST) {
+
+      transport.pushInbound(vendorListEntitiesType, listEntitiesPayloadFor(entity.type, entity.key, entity.objectId, entity.name));
+    }
+
+    transport.pushInbound(MessageType.LIST_ENTITIES_DONE_RESPONSE, LIST_ENTITIES_DONE_RESPONSE);
+
+    await client.connect({ signal: AbortSignal.timeout(2000) });
+
+    assert.deepEqual(client.getEntitiesWithIds().map((entity) => entity.id), DISCOVERY_BURST.map((entity) => entityId("vendor_sensor", entity.objectId)),
+      "every entity of the extras burst must be registered, in the order the device sent it");
+    assert.deepEqual(capture.warn, [], "an extras discovery burst must not trip the setup buffer's drop warning");
 
     client.disconnect();
   });

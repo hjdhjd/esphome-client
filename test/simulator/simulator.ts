@@ -9,7 +9,7 @@
  * `const client = await openEspHomeClient({ ..., transportFactory: () => transport })`, disposing the client explicitly via `client[Symbol.dispose]()` once the
  * scenario has run.
  *
- * The framing ships with named scenarios that mirror the capture-replay set. The basic-discovery and v114-discovery scenarios carry full byte-level fixtures
+ * The framing ships with named scenarios that mirror the capture-replay set. Each scenario that declares an `expectedReplay` carries full byte-level fixtures
  * synthesized via the library's own encoder; the rest are stubs awaiting real-device captures that will let the simulator and capture-replay layers
  * cross-validate the same exchanges.
  *

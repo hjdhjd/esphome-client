@@ -18,9 +18,10 @@
  * - The pump never blocks the transport - it always pulls the next message and routes it.
  *
  * Backpressure: setup-phase messages that nothing claims on arrival wait in one buffer, in arrival order, with a small per-type high-water mark
- * (`MAX_BUFFERED_PER_TYPE`). Setup-phase messages should arrive in tight cadence; if unhandled messages of the same type accumulate beyond that high-water mark, the
- * receiver drops that type's oldest with a warning. This is intentional: setup is a sequence with handful-of-messages cardinality. The single arrival-ordered buffer
- * is what lets a late `waitFor` and the drain hand-off both see messages in the order the device sent them.
+ * (`MAX_BUFFERED_PER_TYPE`). Unclaimed setup-phase traffic arrives a handful of messages at a time; if unhandled messages of the same type accumulate beyond that
+ * high-water mark, the receiver drops that type's oldest with a warning. The mark applies to every type outside {@link MessageReceiverOptions.uncappedMessageTypes},
+ * which names the streams the connect flow drains in bulk. The single arrival-ordered buffer is what lets a late `waitFor` and the drain hand-off both see messages
+ * in the order the device sent them.
  *
  * @module message-receiver
  */
@@ -29,10 +30,31 @@ import type { InboundMessage, TransportLike } from "./transport.ts";
 import { ConnectionClosedByPeerError } from "./errors.ts";
 
 /**
- * Per-type high-water mark of the setup-phase buffer. Setup-phase doesn't reasonably accumulate more than a few unhandled messages of the same type at a time;
- * exceeding this is almost certainly a bug or a hostile peer. We drop that type's oldest with a warning rather than allowing unbounded growth.
+ * Per-type high-water mark of the setup-phase buffer, applied to every type outside {@link MessageReceiverOptions.uncappedMessageTypes}. Unclaimed setup-phase traffic
+ * doesn't reasonably accumulate more than a few messages of the same type at a time; exceeding this is almost certainly a bug or a hostile peer. We drop that type's
+ * oldest with a warning rather than allowing unbounded growth.
  */
 const MAX_BUFFERED_PER_TYPE = 8;
+
+/**
+ * Options for the {@link MessageReceiver} constructor.
+ */
+export interface MessageReceiverOptions {
+
+  /**
+   * Optional host logger. When supplied, the receiver surfaces its run-phase diagnostics (a run-phase handler throw, a setup-phase buffer-overflow drop) through it;
+   * when omitted (the test/handshake construction sites that pass no logger), those diagnostics no-op. Optional by design so the logger-less call sites keep compiling
+   * without a sweep.
+   */
+  log?: EspHomeLogging;
+
+  /**
+   * Message types the setup buffer's per-type cap does not apply to. The cap bounds traffic nothing will claim. A stream the connect flow drains in bulk, such as
+   * discovery's list-entities replies, is claimed by construction and sized by the device, so its frames wait in the buffer for the waits that consume them, however
+   * far ahead of those waits they arrive. When omitted, the cap applies to every type.
+   */
+  uncappedMessageTypes?: ReadonlySet<number>;
+}
 
 /**
  * Options for {@link MessageReceiver.waitFor}.
@@ -96,6 +118,11 @@ export class MessageReceiver implements AsyncDisposable {
   private readonly log: EspHomeLogging | undefined;
 
   /**
+   * Message types the setup buffer's per-type cap does not apply to, from {@link MessageReceiverOptions.uncappedMessageTypes}. Empty when the option is omitted.
+   */
+  private readonly uncappedMessageTypes: ReadonlySet<number>;
+
+  /**
    * Registered sync interleave handlers.
    */
   private readonly interleaveHandlers = new Map<number, InterleaveRegistration>();
@@ -106,8 +133,8 @@ export class MessageReceiver implements AsyncDisposable {
   private readonly awaiters = new Set<WaitForAwaiter>();
 
   /**
-   * Setup-phase messages no interleave handler or awaiter claimed on arrival, in arrival order, for a late `waitFor` or the drain hand-off. Each message type keeps at
-   * most `MAX_BUFFERED_PER_TYPE` entries.
+   * Setup-phase messages no interleave handler or awaiter claimed on arrival, in arrival order, for a late `waitFor` or the drain hand-off. Each message type outside
+   * {@link uncappedMessageTypes} keeps at most `MAX_BUFFERED_PER_TYPE` entries.
    */
   private readonly buffered: InboundMessage[] = [];
 
@@ -146,20 +173,20 @@ export class MessageReceiver implements AsyncDisposable {
   /**
    * @param transport - The transport whose typed-message iterator this receiver demultiplexes. Accepts either {@link Transport} or any structurally-
    * compatible {@link TransportLike} (notably the testing-subpath `MockTransport`).
-   * @param log - Optional host logger. When supplied, the receiver surfaces its run-phase diagnostics (a run-phase handler throw, a setup-phase buffer-overflow drop)
-   * through it; when omitted (the test/handshake construction sites that pass no logger), those diagnostics no-op. Optional by design so the logger-less call sites
-   * keep compiling without a sweep.
+   * @param options - The optional host logger and the message types the setup buffer's per-type cap does not apply to, each documented on
+   * {@link MessageReceiverOptions}.
    */
-  public constructor(transport: TransportLike, log?: EspHomeLogging) {
+  public constructor(transport: TransportLike, options: MessageReceiverOptions = {}) {
 
     this.transport = transport;
-    this.log = log;
+    this.log = options.log;
+    this.uncappedMessageTypes = options.uncappedMessageTypes ?? new Set<number>();
   }
 
   /**
    * Wait for the next message whose `type` is in `types`. A buffered message of a wanted type returns first, earliest arrival first, so a late `waitFor` sees
    * messages in the order the device sent them. Other inbound messages route to interleave handlers (during setup) or wait in the arrival-ordered buffer, capped at
-   * `MAX_BUFFERED_PER_TYPE` entries per type.
+   * `MAX_BUFFERED_PER_TYPE` entries per type for every type outside the receiver's uncapped message types.
    *
    * @param types - Acceptable message types. Must be non-empty.
    * @param options - Optional cancellation signal.
@@ -464,6 +491,12 @@ export class MessageReceiver implements AsyncDisposable {
     // No handler. Buffer for a future waitFor, in arrival order.
     this.buffered.push(message);
 
+    // An uncapped type's frames wait in full for the waits that consume them, so they skip the per-type count and its drop.
+    if(this.uncappedMessageTypes.has(message.type)) {
+
+      return;
+    }
+
     let sameType = 0;
 
     for(const entry of this.buffered) {
@@ -476,8 +509,8 @@ export class MessageReceiver implements AsyncDisposable {
 
     if(sameType > MAX_BUFFERED_PER_TYPE) {
 
-      // Drop this type's oldest entry and leave every other type's entries in place. The mark is sized so this only fires under abuse or a buggy peer; warn so the drop
-      // is observable.
+      // Drop this capped type's oldest entry and leave every other type's entries in place. The mark is sized so this only fires under abuse or a buggy peer, because
+      // the streams the connect flow drains in bulk are declared uncapped; warn so the drop is observable.
       this.buffered.splice(this.buffered.findIndex((entry) => entry.type === message.type), 1);
       this.log?.warn("Dropped the oldest buffered setup-phase message; the per-type buffer exceeded its high-water mark.",
         { highWaterMark: MAX_BUFFERED_PER_TYPE, messageType: message.type });
