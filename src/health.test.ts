@@ -1,10 +1,10 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
- * health.test.ts: Unit tests for the HealthState const-object and the disconnectedHealth helper.
+ * health.test.ts: Unit tests for the HealthState const-object, the health record builders, the live-state guard, and the uptime derivation.
  */
-import { HealthState, connectionUptimeMs, disconnectedHealth, isConnectionLive } from "./health.ts";
+import type { DownConnectionHealth, LiveConnectionHealth } from "./health.ts";
+import { HealthState, connectedHealth, connectionUptimeMs, disconnectedHealth, downHealth, isConnectionLive } from "./health.ts";
 import { describe, test } from "node:test";
-import type { LiveConnectionHealth } from "./health.ts";
 import assert from "node:assert/strict";
 
 describe("HealthState", () => {
@@ -143,5 +143,72 @@ describe("connectionUptimeMs", () => {
     const before = Date.now();
 
     assert.ok(connectionUptimeMs({ ...liveConnected, connectedAtMs: before }) >= 0);
+  });
+});
+
+describe("downHealth", () => {
+
+  test("carries the stall count of the record it replaces - only inbound activity resets the count", () => {
+
+    assert.equal(downHealth({ ...liveConnected, consecutiveStalls: 3 }, HealthState.DISCONNECTED).consecutiveStalls, 3);
+  });
+
+  test("carries the last ping round-trip time when the record it replaces has one", () => {
+
+    assert.equal(downHealth({ ...liveConnected, lastPingRttMs: 42 }, HealthState.DISCONNECTED).lastPingRttMs, 42);
+  });
+
+  test("omits lastPingRttMs when the record it replaces has none - the key is absent, not undefined", () => {
+
+    assert.equal(("lastPingRttMs" in downHealth(liveConnected, HealthState.DISCONNECTED)), false);
+  });
+
+  test("returns the down state it was given, for each down state", () => {
+
+    assert.equal(downHealth(liveConnected, HealthState.DISCONNECTED).state, HealthState.DISCONNECTED);
+    assert.equal(downHealth(liveConnected, HealthState.RECONNECTING).state, HealthState.RECONNECTING);
+  });
+
+  test("returns no inbound-activity time when handed a reconnecting record that carries one", () => {
+
+    const reconnecting: DownConnectionHealth = { ...disconnectedHealth(), lastInboundActivityAt: 12345, state: HealthState.RECONNECTING };
+
+    assert.equal(downHealth(reconnecting, HealthState.RECONNECTING).lastInboundActivityAt, 0);
+  });
+
+  test("returns no inbound-activity time when handed a live record that carries one", () => {
+
+    assert.equal(downHealth({ ...liveConnected, lastInboundActivityAt: 12345 }, HealthState.RECONNECTING).lastInboundActivityAt, 0);
+  });
+
+  test("carries no connect epoch when handed a live record", () => {
+
+    const health = downHealth({ ...liveConnected, connectedAtMs: 1000 }, HealthState.RECONNECTING);
+
+    assert.ok(!("connectedAtMs" in health), "a down record must not carry the connect epoch");
+  });
+});
+
+describe("connectedHealth", () => {
+
+  // The new session's facts, each different from the matching field of every record the tests below replace, so a value read from the wrong side shows.
+  const facts = { connectedAtMs: 5000, encrypted: true, lastInboundActivityAt: 6000 };
+
+  test("carries the stall count of the record it replaces - a device that stalls again right after reconnecting keeps counting", () => {
+
+    assert.equal(connectedHealth({ ...disconnectedHealth(), consecutiveStalls: 2, state: HealthState.RECONNECTING }, facts).consecutiveStalls, 2);
+  });
+
+  test("omits lastPingRttMs even when the record it replaces has one - a new connection has measured no round trip", () => {
+
+    assert.equal(("lastPingRttMs" in connectedHealth({ ...disconnectedHealth(), lastPingRttMs: 42 }, facts)), false);
+  });
+
+  test("takes its connect epoch, encryption flag, and inbound-activity time from its options, in the connected state", () => {
+
+    const previous: LiveConnectionHealth = { ...liveConnected, connectedAtMs: 1, encrypted: false, lastInboundActivityAt: 2, state: HealthState.STALLED };
+    const expected: LiveConnectionHealth = { connectedAtMs: 5000, consecutiveStalls: 0, encrypted: true, lastInboundActivityAt: 6000, state: HealthState.CONNECTED };
+
+    assert.deepEqual(connectedHealth(previous, facts), expected);
   });
 });

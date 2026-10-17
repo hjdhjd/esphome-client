@@ -127,11 +127,8 @@ export function connectionUptimeMs(health: ConnectionHealth, now: number = Date.
 /**
  * Returns the "disconnected" health record. Used as the initial value before the first successful connect, and after every clean teardown.
  *
- * @remarks This is the pure baseline and carries no `lastPingRttMs` and zero stalls. On a live disconnect the host deliberately overlays the most recent
- * `lastPingRttMs` onto this baseline as a "last seen latency" diagnostic, and the current `consecutiveStalls` so the count survives the teardown between a stall and
- * the reconnect (the `disconnect` path in `esphome-client.ts`); only inbound activity resets the count. The `disconnected` state
- * and the absent connect epoch (so {@link connectionUptimeMs} reads `0`) are themselves the staleness signal that the RTT was measured against the prior connection, so
- * the carry-forward is intentional... this helper and the host's overlay are two layers of one design, not a contradiction.
+ * @remarks This is the pure baseline and carries no `lastPingRttMs` and zero stalls. A transition out of a session builds its down record through `downHealth`, which
+ * overlays the diagnostics the previous record carries forward onto this baseline...this helper and that overlay are layers of one design, not a contradiction.
  *
  * @returns A {@link DownConnectionHealth} snapshot in the disconnected baseline (state `disconnected`, `encrypted: false`, no connect epoch, zero stalls, no inbound
  * activity, no last ping RTT).
@@ -144,5 +141,59 @@ export function disconnectedHealth(): DownConnectionHealth {
     encrypted: false,
     lastInboundActivityAt: 0,
     state: HealthState.DISCONNECTED
+  };
+}
+
+/**
+ * Returns the down health record a transition out of a session installs: the {@link disconnectedHealth} baseline in the given down state, carrying the previous record's
+ * `consecutiveStalls` and, when it has one, its `lastPingRttMs`.
+ *
+ * @remarks The stall count survives the teardown between a stall and the reconnect because only inbound activity resets it. The round-trip time stays as a last-seen
+ * latency diagnostic, and the down state itself marks it stale: the record's state and its absent connect epoch (so {@link connectionUptimeMs} reads `0`) say it was
+ * measured against a connection that has ended. Every other field is the baseline's, whatever the previous record holds: a down record is never on an encrypted wire and
+ * carries no connect epoch and no inbound-activity time, even when it follows a live record.
+ *
+ * @param previous - The record the transition leaves.
+ * @param state - The down state to enter.
+ * @returns A {@link DownConnectionHealth} snapshot in `state`.
+ */
+export function downHealth(previous: ConnectionHealth, state: DownConnectionHealth["state"]): DownConnectionHealth {
+
+  return {
+
+    ...disconnectedHealth(),
+    consecutiveStalls: previous.consecutiveStalls,
+    ...((previous.lastPingRttMs !== undefined) && { lastPingRttMs: previous.lastPingRttMs }),
+    state
+  };
+}
+
+/**
+ * The new session's facts a connected record takes from its caller. Each is a field of {@link LiveConnectionHealth}, so its meaning is the one that field documents.
+ */
+type ConnectedHealthOptions = Pick<LiveConnectionHealth, "connectedAtMs" | "encrypted" | "lastInboundActivityAt">;
+
+/**
+ * Returns the connected health record a successful connect installs: the given connect epoch, encryption flag, and inbound-activity time in the connected state,
+ * carrying the previous record's `consecutiveStalls` and no `lastPingRttMs`.
+ *
+ * @remarks A new connection has measured no round trip, so a round-trip time from the previous record would describe a connection that has ended. The stall count
+ * carries because only inbound activity resets it, so a device that stalls again right after reconnecting keeps counting until its first inbound message proves it live.
+ *
+ * @param previous - The record the transition leaves.
+ * @param options - The new session's connect epoch, encryption flag, and inbound-activity time.
+ * @returns A {@link LiveConnectionHealth} snapshot in the connected state.
+ */
+export function connectedHealth(previous: ConnectionHealth, options: ConnectedHealthOptions): LiveConnectionHealth {
+
+  const { connectedAtMs, encrypted, lastInboundActivityAt } = options;
+
+  return {
+
+    connectedAtMs,
+    consecutiveStalls: previous.consecutiveStalls,
+    encrypted,
+    lastInboundActivityAt,
+    state: HealthState.CONNECTED
   };
 }

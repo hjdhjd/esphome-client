@@ -20,6 +20,7 @@ import type { CommandFor, Entity, EntitySchema, EntityType, StateEventFor, Telem
 import { ConfigurationError, ConnectionError } from "../errors.ts";
 import { DEFAULT_COMMAND_AWAIT_TIMEOUT_MS, ENCODE_REFUSAL_CODES, assertTransmitter, encodeCommand, entityTypeFromId } from "../command-runner.ts";
 import { EventBus, endedAsyncIterable } from "../event-bus.ts";
+import { HealthState, connectedHealth, disconnectedHealth, downHealth } from "../health.ts";
 import { MOCK, createRecordingMock } from "./recording-mock.ts";
 import { BluetoothProxyApi } from "../bluetooth-proxy.ts";
 import { CameraApi } from "../camera.ts";
@@ -41,7 +42,6 @@ import { UserServicesApi } from "../user-services.ts";
 import { VoiceAssistantApi } from "../voice-assistant.ts";
 import { ZWaveProxyApi } from "../zwave-proxy.ts";
 import { disconnectedCapabilities } from "../capabilities.ts";
-import { disconnectedHealth } from "../health.ts";
 import { entityId } from "../entity-id.ts";
 import { getSchemaIn } from "../schemas/extensions.ts";
 
@@ -72,8 +72,9 @@ export interface RecordedCommand<T extends EntityType = EntityType> {
  *
  * Teardown: {@link MockClient.disconnect} and {@link MockClient.setConnected} with `false` end the session the way the real client's teardown does. The session's
  * device info, capabilities, encryption flag, and sub-devices return to their disconnected values, and a connected mock announces the end on `healthChange`,
- * `lifecycle`, and `disconnect`, in the real client's order. A test that connects again seeds the next session's records again, as a real device reports them on
- * every connect.
+ * `lifecycle`, and `disconnect`, in the real client's order. A connect installs a connected health record of its own, as the real client's does, so a test seeds a
+ * health record after {@link MockClient.setConnected} with `true`, and a test that connects again seeds the next session's records again, as a real device reports
+ * them on every connect.
  *
  * Sub-API mocks: every sub-API the real client exposes is mirrored on MockClient via {@link createRecordingMock}. Tests address each sub-API's recorded-call log
  * under the {@link MOCK} symbol: `mock.bluetooth[MOCK].calls`, `mock.services[MOCK].stub("list", () => services)`, etc. The reflection-driven factory enumerates
@@ -82,7 +83,6 @@ export interface RecordedCommand<T extends EntityType = EntityType> {
  * Usage:
  *
  * {@includeCode ../examples/showcase.ts#mock-client-pattern}
- *
  */
 export class MockClient {
 
@@ -370,7 +370,8 @@ export class MockClient {
   }
 
   /**
-   * Set the encrypted flag returned by {@link MockClient.isEncrypted}. Default is `false`.
+   * Set the encrypted flag returned by {@link MockClient.isEncrypted}. Default is `false`. The next connect reads the flag for its `connect` event and its health
+   * record, so on a connected mock `health().encrypted` keeps the value the connect read until the mock connects again.
    */
   public setEncrypted(encrypted: boolean): void {
 
@@ -378,11 +379,14 @@ export class MockClient {
   }
 
   /**
-   * Set the connected flag. A transition to connected announces the connect on `connect` and then `lifecycle`. A transition to disconnected is the device dropping
-   * the session, and it goes through the same teardown as {@link disconnect}: the session's device info, capabilities, encryption flag, and sub-devices return to
-   * their disconnected values, and the mock announces the end with the disconnected health record on `healthChange`, a `lifecycle` event of kind `disconnect`, and
-   * then `disconnect` carrying `reason`, in the real client's order. The entity registry, the command log, and the sub-API call logs survive a dropped session, as
-   * the real client keeps its registry across one. Setting the state the mock already holds does nothing.
+   * Set the connected flag. A transition to connected goes through the real client's connect: the mock installs a connected health record built from the current
+   * one, with the encryption flag {@link setEncrypted} set, and then announces `connect`, that record on `healthChange`, and `lifecycle`, in the real client's order,
+   * so a listener of each reads the connected record from {@link health}. The record replaces whatever record the mock held, a seeded one included, so a test seeds a
+   * health record after connecting. A transition to disconnected is the device dropping the session, and it goes through the same teardown as {@link disconnect}: the
+   * session's device info, capabilities, encryption flag, and sub-devices return to their disconnected values, and the mock announces the end with the disconnected
+   * health record on `healthChange`, a `lifecycle` event of kind `disconnect`, and then `disconnect` carrying `reason`, in the real client's order. The entity
+   * registry, the command log, and the sub-API call logs survive a dropped session, as the real client keeps its registry across one. Setting the state the mock
+   * already holds does nothing.
    *
    * @param connected - The connection state to move to.
    * @param reason - The reason the `disconnect` event carries on a transition to disconnected.
@@ -396,8 +400,15 @@ export class MockClient {
 
     if(connected) {
 
+      // Connect in the real client's order: the connected record goes in silently before any announcement, so every listener below reads it from `health()`, and
+      // `healthChange` follows `connect` carrying the record current at that moment. One wall-clock read supplies the connect epoch and the first inbound activity,
+      // as the real client seeds its heartbeat from its connect epoch.
+      const now = Date.now();
+
       this.connected = true;
+      this.setHealthRecord(connectedHealth(this.healthRecord, { connectedAtMs: now, encrypted: this.encrypted, lastInboundActivityAt: now }));
       this.bus.emit("connect", this.encrypted);
+      this.bus.emit("healthChange", this.healthRecord);
       this.bus.emit("lifecycle", { encrypted: this.encrypted, kind: "connect" });
 
       return;
@@ -529,7 +540,8 @@ export class MockClient {
 
   /**
    * Synchronous read of the live health record. Mirrors {@link EspHomeClient.health}: the record is frozen and is the same object the most recent `healthChange` event
-   * carried. Tests seed the record via {@link setHealth}; before the first call it is the frozen disconnected record.
+   * carried. A connect and a teardown install the records the real client's do, and tests seed any other record via {@link setHealth}; before the first of these it is
+   * the frozen disconnected record.
    */
   public health(): ConnectionHealth {
 
@@ -543,10 +555,20 @@ export class MockClient {
    */
   public setHealth(health: ConnectionHealth): void {
 
-    const record = Object.freeze({ ...health });
+    this.setHealthRecord({ ...health });
+    this.bus.emit("healthChange", this.healthRecord);
+  }
 
-    this.healthRecord = record;
-    this.bus.emit("healthChange", record);
+  /**
+   * Install the next health record without announcing it, mirroring the real client's split between a silent install and an announced one. The record is frozen here,
+   * the only place the field is written after construction, so the object {@link health} returns is one no reader can mutate. The connect installs through here ahead
+   * of its announcements; every other transition goes through {@link setHealth}.
+   *
+   * @param next - The record that replaces the current one.
+   */
+  private setHealthRecord(next: ConnectionHealth): void {
+
+    this.healthRecord = Object.freeze(next);
   }
 
   /**
@@ -828,10 +850,10 @@ export class MockClient {
   /**
    * Synchronous teardown. Mirrors {@link EspHomeClient.disconnect}: the session's device info, capabilities, encryption flag, and sub-devices return to their
    * disconnected values, and when the mock was connected it announces the end as the real client does, with the disconnected health record on `healthChange`, a
-   * `lifecycle` event of kind `disconnect`, and then `disconnect` with no reason. The disconnected health record carries the current record's stall count and last
-   * ping round-trip time forward, as the real client's does. The mock then clears the entity registry, the command log, and every sub-API call log. The event bus
-   * lives as long as the mock, as the real client's does, so a subscription taken before a connect keeps firing after a disconnect and the next connect. Safe to call
-   * more than once: a call on a disconnected mock announces nothing and leaves the health record as it stands, as on the real client.
+   * `lifecycle` event of kind `disconnect`, and then `disconnect` with no reason. The disconnected health record is built from the current one by the builder the
+   * real client's teardown uses. The mock then clears the entity registry, the command log, and every sub-API call log. The event bus lives as long as the mock, as
+   * the real client's does, so a subscription taken before a connect keeps firing after a disconnect and the next connect. Safe to call more than once: a call on a
+   * disconnected mock announces nothing and leaves the health record as it stands, as on the real client.
    */
   public disconnect(): void {
 
@@ -882,16 +904,8 @@ export class MockClient {
     }
 
     // Announce the end in the real client's order: the health transition, the typed lifecycle event, then the string-payload `disconnect` event. The disconnected
-    // record carries the stall count and the last ping round-trip time forward from the current record, as the real client's does, and setHealth freezes it and emits
-    // it on `healthChange`.
-    const previous = this.healthRecord;
-
-    this.setHealth({
-
-      ...disconnectedHealth(),
-      consecutiveStalls: previous.consecutiveStalls,
-      ...((previous.lastPingRttMs !== undefined) && { lastPingRttMs: previous.lastPingRttMs })
-    });
+    // record comes from the down builder the real client's teardown uses, and setHealth freezes it and emits it on `healthChange`.
+    this.setHealth(downHealth(this.healthRecord, HealthState.DISCONNECTED));
     this.bus.emit("lifecycle", { kind: "disconnect" });
     this.bus.emit("disconnect", reason);
   }

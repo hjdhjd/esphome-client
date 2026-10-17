@@ -30,7 +30,7 @@ import {
 import type { Entity, EntitySchema, EntityType, ExtendedEntityType, ExtraSchemaSet, SchemaForExtended, SchemasTable, TelemetryEvent } from "./schemas/index.ts";
 import { EventBus, endedAsyncIterable } from "./event-bus.ts";
 import type { FieldValue, ProtoField } from "./protocol/codec.ts";
-import { HealthState, disconnectedHealth, isConnectionLive } from "./health.ts";
+import { HealthState, connectedHealth, disconnectedHealth, downHealth, isConnectionLive } from "./health.ts";
 import type { HomeAssistantApiHost, HomeAssistantServiceEvent, HomeAssistantStateRequest } from "./home-assistant.ts";
 import type { InboundMessage, TransportLike, TransportOpenOptions } from "./transport.ts";
 import { MessageType, WireType, extractEntityKey, extractNumberField, extractStringField, extractTelemetryValue, messageTypeName } from "./protocol/index.ts";
@@ -1383,19 +1383,16 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
       });
 
       // Stamp the connect epoch once and build the live health record atomically from it - the epoch is a property of the connected state, not a separate field, so it
-      // cannot drift from `state` and is gone the moment the record becomes a down variant. Heartbeat seeds its initial activity from the same local. The stall count
-      // is carried forward: only inbound activity resets it, so a device that stalls again right after reconnecting keeps counting.
+      // cannot drift from `state` and is gone the moment the record becomes a down variant. Heartbeat seeds its initial activity from the same local.
       const connectedAtMs = this.clock();
 
       this.heartbeat.start(connectedAtMs);
-      this.setHealthRecord({
+      this.setHealthRecord(connectedHealth(this.healthRecord, {
 
         connectedAtMs,
-        consecutiveStalls: this.healthRecord.consecutiveStalls,
         encrypted: context.transport.isEncrypted,
-        lastInboundActivityAt: this.heartbeat.lastActivityAt,
-        state: HealthState.CONNECTED
-      });
+        lastInboundActivityAt: this.heartbeat.lastActivityAt
+      }));
       this.reconnectAttempts = 0;
       this.explicitlyClosed = false;
 
@@ -1755,12 +1752,11 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
   }
 
   /**
-   * Emit the canonical terminal-disconnect surface: transition {@link ConnectionHealth} to disconnected (carrying the last RTT forward as a diagnostic and the
-   * consecutive-stall count forward so it survives the teardown between a stall and the reconnect) and broadcast via `healthChange`, emit the typed `lifecycle` event
-   * (with the cause when present), and emit the legacy string-payload `disconnect` event. This is the single source of truth for the disconnect surface, shared by
-   * {@link EspHomeClient.disconnectInternal} (the run-phase teardown), {@link EspHomeClient.runReconnectLoop} (the auto-reconnect give-up and the release after an
-   * explicit close), and {@link EspHomeClient.connectInternal} (a failed attempt left holding a reconnecting or connected health record). The caller has already
-   * narrowed `cause` to the typed hierarchy, so this method does not re-narrow.
+   * Emit the canonical terminal-disconnect surface: transition {@link ConnectionHealth} to the disconnected record `downHealth` builds from the current one and
+   * broadcast it via `healthChange`, emit the typed `lifecycle` event (with the cause when present), and emit the legacy string-payload `disconnect` event. This is
+   * the single source of truth for the disconnect surface, shared by {@link EspHomeClient.disconnectInternal} (the run-phase teardown),
+   * {@link EspHomeClient.runReconnectLoop} (the auto-reconnect give-up and the release after an explicit close), and {@link EspHomeClient.connectInternal} (a failed
+   * attempt left holding a reconnecting or connected health record). The caller has already narrowed `cause` to the typed hierarchy, so this method does not re-narrow.
    *
    * @param reason - The human-readable disconnect reason carried on the legacy string `disconnect` event.
    * @param cause - The typed cause, already narrowed by the caller, or undefined for a causeless disconnect.
@@ -1769,14 +1765,7 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
 
     // Emit both the typed lifecycle event (canonical) and the legacy string-payload `disconnect` bus event. ConnectionHealth transitions to disconnected and is
     // broadcast via healthChange.
-    const previousRtt = this.healthRecord.lastPingRttMs;
-
-    this.publishHealthRecord({
-
-      ...disconnectedHealth(),
-      consecutiveStalls: this.healthRecord.consecutiveStalls,
-      ...((previousRtt !== undefined) && { lastPingRttMs: previousRtt })
-    });
+    this.publishHealthRecord(downHealth(this.healthRecord, HealthState.DISCONNECTED));
     this.emit("lifecycle", cause ? { cause, kind: "disconnect" } : { kind: "disconnect" });
     this.emit("disconnect", reason);
   }
@@ -1979,17 +1968,9 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
       const config = this.reconnectConfig;
       const delayMs = nextBackoffDelay(this.reconnectAttempts, config);
 
-      // Construct the down "reconnecting" record explicitly, carrying only the base diagnostics forward. A down record drops the connect epoch by construction: spreading
-      // a live record's `connectedAtMs` onto a variant whose `connectedAtMs?: never` would not compile, which is the union's enforcement working. The explicit build also
-      // stays correct if the state machine later sets RECONNECTING from a live record.
-      this.publishHealthRecord({
-
-        consecutiveStalls: this.healthRecord.consecutiveStalls,
-        encrypted: false,
-        lastInboundActivityAt: this.healthRecord.lastInboundActivityAt,
-        ...((this.healthRecord.lastPingRttMs !== undefined) && { lastPingRttMs: this.healthRecord.lastPingRttMs }),
-        state: HealthState.RECONNECTING
-      });
+      // Every attempt announces the down "reconnecting" record before its backoff, so consumers see each retry begin. The record is built from the one in place, which
+      // is a live record when the previous attempt failed after the run-phase handoff, and the down builder drops the connect epoch by construction.
+      this.publishHealthRecord(downHealth(this.healthRecord, HealthState.RECONNECTING));
 
       try {
 

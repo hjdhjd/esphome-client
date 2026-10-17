@@ -3,6 +3,7 @@
  * mock-client.test.ts: Helper-coverage-parity tests for the MockClient consumer-test double.
  */
 import { ConfigurationError, ConnectionError } from "../errors.ts";
+import { HealthState, isConnectionLive } from "../health.ts";
 import { InfraredCapabilityFlags, LogLevel, RadioFrequencyCapabilityFlags, SerialProxyPortType } from "../api-constants.ts";
 import { describe, test } from "node:test";
 import { mockDeviceInfo, mockEntity, mockHealth, mockStateMessage } from "./factories.ts";
@@ -11,7 +12,6 @@ import { ENTITY_SCHEMAS } from "../schemas/index.ts";
 import type { EncodeResult } from "../command-pipeline.ts";
 import type { Entity } from "../schemas/index.ts";
 import type { EntityId } from "../entity-id.ts";
-import { HealthState } from "../health.ts";
 import { MOCK } from "./recording-mock.ts";
 import { MockClient } from "./mock-client.ts";
 import assert from "node:assert/strict";
@@ -455,6 +455,136 @@ describe("MockClient.setConnected lifecycle", () => {
   });
 });
 
+describe("MockClient.setConnected health record", () => {
+
+  test("setConnected(true) installs a frozen connected record that isConnectionLive reads as live, as the real client's connect does", () => {
+
+    const client = new MockClient();
+
+    client.setConnected(true);
+
+    const health = client.health();
+
+    assert.equal(health.state, HealthState.CONNECTED);
+    assert.ok(isConnectionLive(health), "the connected record must be the live variant");
+    assert.ok(Object.isFrozen(health), "the connected record must be frozen");
+  });
+
+  test("setConnected(true) announces the transition on healthChange exactly once, with the record health() returns", () => {
+
+    const client = new MockClient();
+    const emitted: unknown[] = [];
+
+    using _sub = client.onHealthChange((health) => { emitted.push(health); });
+
+    client.setConnected(true);
+
+    assert.equal(emitted.length, 1, "the connect must announce its record once");
+    assert.equal(emitted[0], client.health(), "health() must return the record the healthChange event carried");
+  });
+
+  test("isConnected and health().state agree after a connect and after the disconnect that follows it", () => {
+
+    const client = new MockClient();
+
+    client.setConnected(true);
+
+    assert.equal(client.isConnected, true);
+    assert.equal(client.health().state, HealthState.CONNECTED);
+
+    client.setConnected(false);
+
+    assert.equal(client.isConnected, false);
+    assert.equal(client.health().state, HealthState.DISCONNECTED);
+  });
+
+  test("setConnected(true) announces connect, healthChange, then lifecycle, and every listener reads the connected record, as the real client does", () => {
+
+    const client = new MockClient();
+    const events: [ string, string ][] = [];
+
+    using _connect = client.on("connect", () => { events.push([ "connect", client.health().state ]); });
+    using _health = client.onHealthChange(() => { events.push([ "healthChange", client.health().state ]); });
+    using _lifecycle = client.on("lifecycle", () => { events.push([ "lifecycle", client.health().state ]); });
+
+    client.setConnected(true);
+
+    assert.deepEqual(events, [ [ "connect", HealthState.CONNECTED ], [ "healthChange", HealthState.CONNECTED ], [ "lifecycle", HealthState.CONNECTED ] ]);
+  });
+
+  test("setConnected(true) on a connected mock announces nothing and keeps the record it holds", () => {
+
+    const client = new MockClient();
+
+    client.setConnected(true);
+
+    const health = client.health();
+    const events: string[] = [];
+
+    using _connect = client.on("connect", () => { events.push("connect"); });
+    using _health = client.onHealthChange(() => { events.push("healthChange"); });
+    using _lifecycle = client.on("lifecycle", () => { events.push("lifecycle"); });
+
+    client.setConnected(true);
+
+    assert.deepEqual(events, [], "a repeat connect must announce nothing");
+    assert.equal(client.health(), health, "a repeat connect must leave the record as it stands");
+  });
+
+  test("setConnected(true) replaces a seeded record, carrying only its stall count, and stamps one clock read as the epoch and the inbound activity", () => {
+
+    const client = new MockClient();
+    const seed = mockHealth({ connectedAtMs: 1, consecutiveStalls: 3, encrypted: true, lastInboundActivityAt: 12345, lastPingRttMs: 42, state: HealthState.STALLED });
+
+    client.setHealth(seed);
+
+    const before = Date.now();
+
+    client.setConnected(true);
+
+    const after = Date.now();
+    const health = client.health();
+
+    assert.ok(isConnectionLive(health), "the connected record must be the live variant");
+    assert.equal(health.state, HealthState.CONNECTED);
+    assert.equal(health.consecutiveStalls, 3, "the stall count must carry into the connected record");
+    assert.equal(("lastPingRttMs" in health), false, "a new connection has measured no round trip");
+    assert.equal(health.encrypted, false, "the encryption flag must be the mock's own, not the seed's");
+    assert.ok((health.connectedAtMs >= before) && (health.connectedAtMs <= after), "the connect epoch must be read at the connect");
+    assert.equal(health.lastInboundActivityAt, health.connectedAtMs, "the epoch and the first inbound activity must come from one clock read");
+  });
+
+  test("the connected record's encryption flag is the one the connect event carries", () => {
+
+    const client = new MockClient();
+    const payloads: boolean[] = [];
+
+    using _sub = client.on("connect", (encrypted) => { payloads.push(encrypted); });
+
+    client.setEncrypted(true);
+    client.setConnected(true);
+
+    assert.deepEqual(payloads, [true]);
+    assert.equal(client.health().encrypted, true, "the record and the connect event must carry the same flag");
+  });
+
+  test("a seeded stall count carries through a disconnect into the next connected record", () => {
+
+    const client = new MockClient();
+
+    client.setConnected(true);
+    client.setHealth(mockHealth({ consecutiveStalls: 2, state: HealthState.STALLED }));
+    client.disconnect();
+
+    assert.equal(client.health().consecutiveStalls, 2, "the teardown must carry the count into the disconnected record");
+
+    client.setConnected(true);
+
+    assert.equal(client.health().state, HealthState.CONNECTED);
+    assert.equal(client.health().consecutiveStalls, 2, "the next connect must carry the count until inbound activity resets it");
+  });
+});
+
 describe("MockClient.setEncrypted / isEncrypted", () => {
 
   test("isEncrypted reflects setEncrypted", () => {
@@ -867,9 +997,11 @@ describe("MockClient teardown mirrors the real client's", () => {
     client.setCapabilities({ ...disconnectedCapabilities(), encryption: { active: true, supported: true } });
     client.setDeviceInfo(mockDeviceInfo({ name: "kitchen-controller" }));
     client.setEncrypted(true);
-    client.setHealth(mockHealth());
     client.setSubDevices([{ id: 1, name: "kitchen" }]);
     client.setConnected(true);
+
+    // The connect installs a connected record of its own, so the health seed follows it.
+    client.setHealth(mockHealth());
 
     return client;
   }
@@ -975,8 +1107,8 @@ describe("MockClient teardown mirrors the real client's", () => {
 
     const client = new MockClient();
 
-    client.setHealth(mockHealth({ consecutiveStalls: 3, encrypted: true, lastInboundActivityAt: 12345, lastPingRttMs: 42, state: HealthState.STALLED }));
     client.setConnected(true);
+    client.setHealth(mockHealth({ consecutiveStalls: 3, encrypted: true, lastInboundActivityAt: 12345, lastPingRttMs: 42, state: HealthState.STALLED }));
     client.disconnect();
 
     // Only the stall count and the round-trip time carry over. The encryption flag and the inbound-activity stamp return to the disconnected baseline, and the
