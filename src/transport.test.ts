@@ -6,7 +6,7 @@
  * describing the behaviour being asserted. Hand-verified hex fixtures live as named constants at the top of the file with provenance comments.
  */
 import {
-  BufferOverflowError, ConnectionClosedByPeerError, ConnectionRefusedError, ConnectionTimeoutError, DecryptionFailedError, FrameTooLargeError,
+  BufferOverflowError, ConnectionClosedByPeerError, ConnectionError, ConnectionRefusedError, ConnectionTimeoutError, DecryptionFailedError, FrameTooLargeError,
   MalformedVarintError, NoiseHandshakeError, PeerClosedDuringNoiseError, PermanentError, ProtocolError
 } from "./errors.ts";
 import type { ClientMetrics, EspHomeLogging } from "./types.ts";
@@ -675,22 +675,59 @@ describe("Transport.send - plaintext framing", () => {
     });
   });
 
-  test("rejects when the underlying socket.write callback fires an error", async () => {
+  test("rejects with ConnectionError SOCKET_WRITE_FAILED and ends the transport when the underlying socket.write callback fires an error", async () => {
 
     const mock = new MockSocket();
     const transport = await openTransport(mock);
+    const iter = transport[Symbol.asyncIterator]();
+    const parkedMessage = iter.next();
+    const parkedFirstByte = transport.firstByte();
+    let writeError: unknown = null;
 
     mock.failNextWrite(new Error("EIO"));
 
     await assert.rejects(transport.send(MessageType.PING_REQUEST, Buffer.alloc(0)), (err) => {
 
-      assert.ok(err instanceof Error);
-      assert.equal((err).message, "EIO");
+      assert.ok(err instanceof ConnectionError);
+      assert.equal(err.name, "ConnectionError");
+      assert.equal(err.code, "SOCKET_WRITE_FAILED");
+      assert.ok(err.cause instanceof Error);
+      assert.equal(err.cause.message, "EIO");
+      writeError = err;
 
       return true;
     });
 
-    transport[Symbol.dispose]();
+    // The failure path destroys the socket, so a send that rejects without ending the transport fails here rather than leaving the awaiters below parked.
+    assert.equal(mock.destroyed, true);
+
+    await assert.rejects(parkedFirstByte, (err) => err === writeError);
+    await assert.rejects(parkedMessage, (err) => err === writeError);
+    await assert.rejects(iter.next(), (err) => err === writeError);
+  });
+
+  test("a socket error after a failed write leaves the write failure as the termination error", async () => {
+
+    const mock = new MockSocket();
+    const transport = await openTransport(mock);
+    let writeError: unknown = null;
+
+    mock.failNextWrite(new Error("EIO"));
+
+    await assert.rejects(transport.send(MessageType.PING_REQUEST, Buffer.alloc(0)), (err) => {
+
+      writeError = err;
+
+      return (err instanceof ConnectionError) && (err.code === "SOCKET_WRITE_FAILED");
+    });
+
+    // The failed write tore the socket down and detached the transport's listeners with it, so this listener stands in to keep the late error from surfacing as an
+    // unhandled EventEmitter error. Whatever the socket reports after the failure, the write failure stays the error every later read rejects with.
+    mock.on("error", (): void => { /* absorb */ });
+    mock.simulateError(Object.assign(new Error("ECONNRESET"), { code: "ECONNRESET" }));
+
+    await assert.rejects(transport[Symbol.asyncIterator]().next(), (err) => err === writeError);
+    await assert.rejects(transport.firstByte(), (err) => err === writeError);
   });
 });
 

@@ -2672,7 +2672,7 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
     }
 
     // Fire-and-forget; a send-related socket fault surfaces on the transport's iterator and is routed via the receiver's terminal-completion hook into the disconnect
-    // path (which schedules auto-reconnect). The local catch only happens if the socket was destroyed mid-write, which we cannot recover from at the application layer;
+    // path (which schedules auto-reconnect). The local catch sees every failed write, and its error is the one the transport has already ended itself with, so
     // logging at debug suffices because the iterator-driven teardown is the authoritative recovery.
     void this.transport.send(type, payload).catch((err: unknown) => {
 

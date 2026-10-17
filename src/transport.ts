@@ -26,7 +26,7 @@
  * @module transport
  */
 import {
-  BufferOverflowError, ConnectionClosedByPeerError, ConnectionRefusedError, ConnectionTimeoutError, DecryptionFailedError, FrameTooLargeError,
+  BufferOverflowError, ConnectionClosedByPeerError, ConnectionError, ConnectionRefusedError, ConnectionTimeoutError, DecryptionFailedError, FrameTooLargeError,
   NoiseHandshakeError, PeerClosedDuringNoiseError, ProtocolError
 } from "./errors.ts";
 import type { ClientMetrics, EspHomeLogging, Nullable } from "./types.ts";
@@ -369,6 +369,10 @@ export class Transport implements TransportLike {
    * Send a typed message. Routes to plaintext framing in `plaintext` phase or to encrypted noise framing in `noise-data` phase. Throws when called during the
    * `noise-handshake` phase - use {@link Transport.sendNoiseHandshakeFrame} for raw handshake frames.
    *
+   * A failed socket write ends the transport: the send rejects with a {@link ConnectionError} coded `SOCKET_WRITE_FAILED` whose cause is the socket's own error, and
+   * every parked awaiter and the message iterator reject with that same error. A write that fails after an earlier fault has ended the transport rejects with that
+   * fault's error instead, so concurrent in-flight writes report one cause.
+   *
    * @param type - Numeric message type.
    * @param payload - Message payload bytes (encoded protobuf body).
    */
@@ -436,7 +440,8 @@ export class Transport implements TransportLike {
   }
 
   /**
-   * Send a raw noise handshake frame (no encryption). Valid only during the `noise-handshake` phase.
+   * Send a raw noise handshake frame (no encryption). Valid only during the `noise-handshake` phase. A failed socket write ends the transport and rejects exactly as it
+   * does for {@link Transport.send}.
    *
    * @param frame - The handshake frame bytes (e.g., the noise client's `writeMessage()` output, or the empty initial frame).
    */
@@ -1265,7 +1270,9 @@ export class Transport implements TransportLike {
   }
 
   /**
-   * Write raw bytes to the socket. Resolves once the socket's `write` callback fires (or rejects on error).
+   * Write raw bytes to the socket. Resolves once the socket's `write` callback fires. A callback error ends the transport through {@link Transport.fail} with a
+   * {@link ConnectionError} coded `SOCKET_WRITE_FAILED` that carries the socket's error as its cause, and the write rejects with that same error. When an earlier fault
+   * has already ended the transport, the write rejects with that fault's error instead.
    */
   private async writeToSocket(bytes: Buffer): Promise<void> {
 
@@ -1280,11 +1287,18 @@ export class Transport implements TransportLike {
         return;
       }
 
-      socket.write(bytes, (err: Error | null | undefined) => {
+      socket.write(bytes, (err: NodeJS.ErrnoException | null | undefined) => {
 
         if(err) {
 
-          reject(err);
+          // A failed write ends the transport here rather than waiting for a socket `error` event, because the socket contract does not promise one follows a failed
+          // write...without this, the parked awaiters and the message iterator would never learn of the fault. A write that fails after an earlier fault reuses that
+          // fault's error, so the send, every observer, and every concurrent in-flight write report one cause, and the second fail() is a no-op behind its guard.
+          const error = this.terminationError ?? new ConnectionError("Transport socket write failed: " + (err.code ?? err.message) + ".", "SOCKET_WRITE_FAILED",
+            { cause: err });
+
+          this.fail(error);
+          reject(error);
 
           return;
         }
