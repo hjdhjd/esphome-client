@@ -177,12 +177,14 @@ export interface CommandHost {
 
 /**
  * Extract the entity type prefix from a branded entity id. Returns `null` when the id is malformed (no `-` separator or the dash is at index 0). The runtime extraction
- * trusts the brand at the type level - by the time a malformed id reaches here, the caller has unsafe-cast across the brand boundary.
+ * trusts the brand at the type level - by the time a malformed id reaches here, the caller has unsafe-cast across the brand boundary. The testing
+ * `MockClient.commandAndAwait` reads the prefix through this function as well, so the mock treats exactly the ids the client treats as malformed.
  *
  * @param id - The branded entity id.
  * @returns The entity-type string slice or `null` when the id is malformed.
+ * @internal
  */
-function entityTypeFromId(id: EntityId): Nullable<string> {
+export function entityTypeFromId(id: EntityId): Nullable<string> {
 
   const dash = id.indexOf("-");
 
@@ -220,11 +222,13 @@ export function assertTransmitter(entity: BaseEntity, id: EntityId): void {
 }
 
 /**
- * The one place an encode refusal becomes a {@link ConfigurationError} code: {@link runCommandAndAwait} rejects a refused command with the code its reason maps to.
- * The map is exhaustive over {@link EncodeFailureReason}, so a new refusal reason fails the typecheck here until it is given a code. A missing key maps to
- * `UNKNOWN_ENTITY_ID` because an entity with no registered key is an unknown entity id.
+ * The one place an encode refusal becomes a {@link ConfigurationError} code: {@link runCommandAndAwait} and the testing `MockClient.commandAndAwait` reject a
+ * refused command with the code its reason maps to. The map is exhaustive over {@link EncodeFailureReason}, so a new refusal reason fails the typecheck here until it
+ * is given a code. A missing key maps to `UNKNOWN_ENTITY_ID` because an entity with no registered key is an unknown entity id.
+ *
+ * @internal
  */
-const ENCODE_REFUSAL_CODES = {
+export const ENCODE_REFUSAL_CODES = {
 
   "command_unsupported": "COMMAND_UNSUPPORTED",
   "enum_value_unknown": "ENUM_VALUE_UNKNOWN",
@@ -244,9 +248,10 @@ interface EncodeCommandInput {
   readonly entityType: string;
 
   /**
-   * The command-dispatch host the key and schema lookups go through.
+   * The host the key, device-id, and schema lookups and the debug trace go through, narrowed to the members {@link encodeCommand} reads: every {@link CommandHost}
+   * passes, and the testing `MockClient` passes a view over its own entity registry.
    */
-  readonly host: CommandHost;
+  readonly host: Pick<CommandHost, "deviceIdForKey" | "keyForId" | "resolveSchema"> & { readonly log: Pick<EspHomeLogging, "debug"> };
 
   /**
    * The branded entity id.
@@ -270,12 +275,14 @@ interface CommandEncoding {
 
 /**
  * Adapt, key, and encode one command. Both runners encode through this function exactly once per command, so the fire-and-forget send and the awaited send put the
- * same bytes on the wire and refuse the same inputs.
+ * same bytes on the wire and refuse the same inputs. The testing `MockClient` encodes through it as well, so a consumer test against the mock sees the same refusals
+ * the real client applies.
  *
  * @param input - The {@link EncodeCommandInput} bag.
  * @returns The encode result paired with the adapted wire options.
+ * @internal
  */
-function encodeCommand(input: EncodeCommandInput): CommandEncoding {
+export function encodeCommand(input: EncodeCommandInput): CommandEncoding {
 
   const { entityType, host, id, options } = input;
 

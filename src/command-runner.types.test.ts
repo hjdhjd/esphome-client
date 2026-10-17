@@ -129,14 +129,14 @@ describe("runCommandAndAwait<T> - type-level constraint on awaitable entity type
     assert.equal(typeof runCommandAndAwait, "function");
   });
 
-  test("runCommandAndAwait rejects a camera id (no key-bearing state event)", () => {
+  test("runCommandAndAwait rejects a camera id (no command schema)", () => {
 
     const host = stubHost();
     const cameraId: EntityId<"camera"> = entityId("camera", "x");
 
     const _attempt = (): unknown => {
 
-      // @ts-expect-error - camera is excluded from CommandAndAwaitable; its event shape lacks `key` so the predicate-match loop has nothing to compare against.
+      // @ts-expect-error - camera is excluded from CommandAndAwaitable because its schema declares no command block, so there is no command to send and await.
       return runCommandAndAwait(host, cameraId, {});
     };
 

@@ -403,8 +403,9 @@ export type ConfigurationErrorCode = "AWAIT_STREAM_CLOSED" | "COMMAND_UNSUPPORTE
  *
  * Code table:
  *
- * - `AWAIT_STREAM_CLOSED` - The state stream {@link EspHomeClient.commandAndAwait} was awaiting ended before a matching state event arrived, typically because the
- *   connection dropped while the await was pending.
+ * - `AWAIT_STREAM_CLOSED` - The state stream {@link EspHomeClient.commandAndAwait} was awaiting ended before a matching state event arrived. The client's own
+ *   connection lifecycle never causes this: its event bus lives as long as the client, so a disconnect leaves the stream open and the await still settles through a
+ *   matching event, its timeout, or the caller's signal.
  * - `COMMAND_UNSUPPORTED` - {@link EspHomeClient.commandAndAwait} was called for an entity type whose schema declares no command. Nothing is sent.
  * - `ENUM_VALUE_UNKNOWN` - A {@link EspHomeClient.commandAndAwait} command field received a string that is not one of the field's enum aliases. The message names the
  *   field and the value. Nothing is sent.

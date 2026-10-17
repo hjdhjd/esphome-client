@@ -3,14 +3,20 @@
  * mock-client.test.ts: Helper-coverage-parity tests for the MockClient consumer-test double.
  */
 import { ConfigurationError, ConnectionError } from "../errors.ts";
-import { InfraredCapabilityFlags, LogLevel, RadioFrequencyCapabilityFlags } from "../api-constants.ts";
+import { InfraredCapabilityFlags, LogLevel, RadioFrequencyCapabilityFlags, SerialProxyPortType } from "../api-constants.ts";
 import { describe, test } from "node:test";
 import { mockDeviceInfo, mockEntity, mockHealth, mockStateMessage } from "./factories.ts";
 import { Buffer } from "node:buffer";
+import { ENTITY_SCHEMAS } from "../schemas/index.ts";
+import type { EncodeResult } from "../command-pipeline.ts";
+import type { Entity } from "../schemas/index.ts";
+import type { EntityId } from "../entity-id.ts";
 import { HealthState } from "../health.ts";
 import { MOCK } from "./recording-mock.ts";
 import { MockClient } from "./mock-client.ts";
 import assert from "node:assert/strict";
+import { decodeProtobuf } from "../protocol/codec.ts";
+import { disconnectedCapabilities } from "../capabilities.ts";
 import { entityId } from "../entity-id.ts";
 
 describe("MockClient.populateEntities", () => {
@@ -83,6 +89,72 @@ describe("MockClient.command recording", () => {
 
     assert.equal(client.commands.length, 1);
     assert.equal(client.commands[0]?.id, kitchen);
+  });
+
+  test("drops a malformed id without throwing and records nothing, as the real client's fire-and-forget runner does", () => {
+
+    const client = new MockClient();
+    const lamp = entityId("light", "lamp");
+
+    client.populateEntities([mockEntity("light", "lamp")]);
+
+    // A malformed id reaches the mock only through a cast across the brand. The real runner warns and drops it rather than throwing, unlike commandAndAwait().
+    for(const malformed of [ "lamp", "-lamp" ]) {
+
+      assert.doesNotThrow(() => client.command(malformed as unknown as typeof lamp, { state: true }));
+    }
+
+    assert.equal(client.commands.length, 0, "a command for a malformed id must not reach the command log");
+
+    // The well-formed id for the same entity records, so the drop is the malformed id and not a refusal of this entity.
+    client.command(lamp, { state: true });
+
+    assert.equal(client.commands.length, 1);
+    assert.equal(client.commands[0]?.id, lamp);
+  });
+
+  test("drops an out-of-range value and an unknown enum alias the client's encoder refuses and records nothing, as the real client does", () => {
+
+    const client = new MockClient();
+    const alarm = entityId("datetime", "alarm");
+    const thermostat = entityId("climate", "thermostat");
+
+    client.populateEntities([ mockEntity("datetime", "alarm"), mockEntity("climate", "thermostat") ]);
+    client.command(alarm, { epochSeconds: -1 });
+    client.command(thermostat, { mode: "freze" } as never);
+
+    assert.equal(client.commands.length, 0, "a command the client's encoder refuses must not reach the command log");
+
+    // In-range values for the same fields record, so the drop is the encoder's refusal and not a blanket refusal of these entities.
+    client.command(alarm, { epochSeconds: 1 });
+    client.command(thermostat, { mode: "heat" });
+
+    assert.deepEqual(client.commands.map((recorded) => recorded.id), [ alarm, thermostat ]);
+    assert.deepEqual(client.commands[1]?.options, { mode: "heat" }, "the recorded options are the caller's own, not the encoded form");
+  });
+
+  test("records a command to a sub-device entity and encodes it with the entity's device id", () => {
+
+    const client = new MockClient();
+    const porch = mockEntity("light", "porch", { deviceId: 7 });
+    const id = entityId("light", "porch");
+
+    client.populateEntities([porch]);
+    client.command(id, { state: true });
+
+    assert.equal(client.commands.length, 1, "a command to a sub-device entity must record");
+
+    // The encoded frame is private to the mock, so the test reads it through the encode helper every command path goes through.
+    const result = (client as unknown as { encode: (entity: Entity, id: EntityId, options: unknown) => EncodeResult }).encode(porch, id, { state: true });
+
+    if(!result.ok) {
+
+      assert.fail("the encoder refused a command to a sub-device entity: " + result.reason);
+    }
+
+    const fields = decodeProtobuf(result.value.payload, { maxFieldsPerMessage: 16 });
+
+    assert.deepEqual(fields[ENTITY_SCHEMAS.light.command.deviceIdFieldNumber], [7], "the frame must carry the entity's device id");
   });
 
   test("clearCommands empties the recorded log", () => {
@@ -168,6 +240,51 @@ describe("MockClient.transmitRawTimings recording", () => {
       return (err instanceof ConnectionError) && (err.code === "ENTITY_NOT_FOUND") && (err.message === "No entity is registered for infrared-blaster.");
     });
     assert.equal(client.commands.length, 0, "a refused transmit must not reach the command log");
+  });
+
+  test("refuses a malformed id with ENTITY_NOT_FOUND and records nothing, as the real client's registry lookup does", () => {
+
+    const client = new MockClient();
+    const blaster = entityId("infrared", "blaster");
+    const options = { carrierFrequency: 38000, repeatCount: 1, timings: [ 9000, -4500 ] };
+
+    client.populateEntities([mockEntity("infrared", "blaster", { capabilities: InfraredCapabilityFlags.TRANSMITTER })]);
+
+    // The real client looks the id up before the runner reads its prefix, so a malformed id fails that lookup and throws where command() would drop it.
+    for(const malformed of [ "blaster", "-blaster" ]) {
+
+      assert.throws(() => client.transmitRawTimings(malformed as unknown as typeof blaster, options), (err: unknown): boolean => {
+
+        return (err instanceof ConnectionError) && (err.code === "ENTITY_NOT_FOUND") && (err.message === "No entity is registered for " + malformed + ".");
+      });
+    }
+
+    assert.equal(client.commands.length, 0, "a refused transmit must not reach the command log");
+
+    // The well-formed id for the same transmitter records, so the refusal is the malformed id and not a refusal of this entity.
+    client.transmitRawTimings(blaster, options);
+
+    assert.equal(client.commands.length, 1);
+    assert.equal(client.commands[0]?.id, blaster);
+  });
+
+  test("drops a transmit whose timings the client's encoder refuses and records nothing, as the real client does", () => {
+
+    const client = new MockClient();
+    const blaster = entityId("infrared", "blaster");
+
+    client.populateEntities([mockEntity("infrared", "blaster", { capabilities: InfraredCapabilityFlags.TRANSMITTER })]);
+
+    // A timing one past the signed 32-bit maximum is outside the packed sint32 domain the wire carries.
+    client.transmitRawTimings(blaster, { carrierFrequency: 38000, repeatCount: 1, timings: [ 9000, 2147483648 ] });
+
+    assert.equal(client.commands.length, 0, "a transmit the client's encoder refuses must not reach the command log");
+
+    // The same transmit with in-range timings records, so the drop is the encoder's refusal and not the transmitter check.
+    client.transmitRawTimings(blaster, { carrierFrequency: 38000, repeatCount: 1, timings: [ 9000, -4500 ] });
+
+    assert.equal(client.commands.length, 1);
+    assert.equal(client.commands[0]?.id, blaster);
   });
 });
 
@@ -370,6 +487,31 @@ describe("MockClient.setDeviceInfo / deviceInfo", () => {
 
     assert.equal(client.deviceInfo(), null);
   });
+
+  test("setDeviceInfo emits a frozen copy with its serial-proxy list and entries frozen, and deviceInfo() returns that same record, as on the real client", () => {
+
+    const client = new MockClient();
+    const fixture = mockDeviceInfo({ name: "kitchen-controller", serialProxies: [{ name: "uart_0", portType: SerialProxyPortType.TTL }] });
+    const emitted: unknown[] = [];
+
+    using _sub = client.on("deviceInfo", (info) => { emitted.push(info); });
+
+    client.setDeviceInfo(fixture);
+
+    const info = client.deviceInfo();
+
+    assert.equal(emitted.length, 1, "setDeviceInfo must announce the record on the deviceInfo event");
+    assert.equal(info, emitted[0], "deviceInfo() must return the record the deviceInfo event carried");
+    assert.ok(Object.isFrozen(info), "the record must be frozen");
+    assert.ok(Object.isFrozen(info?.serialProxies), "the serial-proxy list must be frozen");
+    assert.ok(Object.isFrozen(info?.serialProxies?.[0]), "each serial-proxy entry must be frozen");
+    assert.deepEqual(info, fixture, "the record must carry the caller's values");
+
+    // The caller's own fixture stays writable, so the mock froze a copy rather than the object the test passed in.
+    assert.equal(Object.isFrozen(fixture), false);
+    assert.equal(Object.isFrozen(fixture.serialProxies), false);
+    assert.equal(Object.isFrozen(fixture.serialProxies?.[0]), false);
+  });
 });
 
 describe("MockClient.setHealth / health", () => {
@@ -389,6 +531,25 @@ describe("MockClient.setHealth / health", () => {
     const client = new MockClient();
 
     assert.equal(client.health().state, HealthState.DISCONNECTED);
+  });
+
+  test("setHealth emits a frozen copy and health() returns that same record, with the default record frozen too, as on the real client", () => {
+
+    const client = new MockClient();
+    const fixture = mockHealth({ state: HealthState.STALLED });
+    const emitted: unknown[] = [];
+
+    assert.ok(Object.isFrozen(client.health()), "the default disconnected record must be frozen");
+
+    using _sub = client.onHealthChange((health) => { emitted.push(health); });
+
+    client.setHealth(fixture);
+
+    assert.equal(emitted.length, 1, "setHealth must announce the record on the healthChange event");
+    assert.equal(client.health(), emitted[0], "health() must return the record the healthChange event carried");
+    assert.ok(Object.isFrozen(client.health()), "the record must be frozen");
+    assert.deepEqual(client.health(), fixture, "the record must carry the caller's values");
+    assert.equal(Object.isFrozen(fixture), false, "the caller's own object must stay writable");
   });
 });
 
@@ -671,6 +832,159 @@ describe("MockClient disconnect resets every sub-API recording log", () => {
   });
 });
 
+describe("MockClient disconnect keeps the event bus", () => {
+
+  test("a subscription taken before connect keeps firing after disconnect() and the next connect, as on the real client", async () => {
+
+    const client = new MockClient();
+    const kinds: string[] = [];
+    const connects = client.stream("connect")[Symbol.asyncIterator]();
+
+    using _sub = client.on("lifecycle", (event) => { kinds.push(event.kind); });
+
+    client.setConnected(true);
+    client.disconnect();
+    client.setConnected(true);
+
+    assert.deepEqual(kinds, [ "connect", "disconnect", "connect" ], "the lifecycle handler must fire for disconnect() and for the connect that follows it");
+
+    // The stream taken before the first connect queues every connect emission; a disposed bus would have ended it instead.
+    assert.equal((await connects.next()).done, false);
+    assert.equal((await connects.next()).done, false, "the stream must still deliver the connect that follows disconnect()");
+
+    await connects.return?.();
+  });
+});
+
+describe("MockClient teardown mirrors the real client's", () => {
+
+  // A connected mock with a non-default record for every session fact the teardown resets, plus one registered entity, so each reset and each survivor shows.
+  function connectedClient(): MockClient {
+
+    const client = new MockClient();
+
+    client.populateEntities([mockEntity("light", "kitchen")]);
+    client.setCapabilities({ ...disconnectedCapabilities(), encryption: { active: true, supported: true } });
+    client.setDeviceInfo(mockDeviceInfo({ name: "kitchen-controller" }));
+    client.setEncrypted(true);
+    client.setHealth(mockHealth());
+    client.setSubDevices([{ id: 1, name: "kitchen" }]);
+    client.setConnected(true);
+
+    return client;
+  }
+
+  // Record every event on the channels the real client announces a disconnect on, in arrival order and with its payload, until the recorder is disposed.
+  function recordAnnouncements(client: MockClient): Disposable & { readonly events: [ string, unknown ][] } {
+
+    const events: [ string, unknown ][] = [];
+    const subscriptions = [
+      client.onHealthChange((health) => { events.push([ "healthChange", health ]); }),
+      client.on("lifecycle", (event) => { events.push([ "lifecycle", event ]); }),
+      client.on("disconnect", (reason) => { events.push([ "disconnect", reason ]); })
+    ];
+
+    return {
+
+      events,
+      [Symbol.dispose]: (): void => {
+
+        for(const subscription of subscriptions) {
+
+          subscription[Symbol.dispose]();
+        }
+      }
+    };
+  }
+
+  test("disconnect() on a connected mock resets the session's records and announces healthChange, lifecycle, then disconnect, as the real client does", () => {
+
+    const client = connectedClient();
+    let deviceInfoAtAnnouncement: unknown = "unset";
+    let entitiesAtAnnouncement = -1;
+
+    using recorder = recordAnnouncements(client);
+    using _health = client.onHealthChange(() => { deviceInfoAtAnnouncement = client.deviceInfo(); });
+    using _disconnect = client.on("disconnect", () => { entitiesAtAnnouncement = client.entities().length; });
+
+    client.disconnect();
+
+    const health = client.health();
+
+    assert.deepEqual(recorder.events, [ [ "healthChange", health ], [ "lifecycle", { kind: "disconnect" } ], [ "disconnect", undefined ] ]);
+    assert.equal(recorder.events[0]?.[1], health, "health() must return the record the healthChange event carried");
+    assert.ok(Object.isFrozen(health), "the disconnected record must be frozen");
+    assert.deepEqual(health, { consecutiveStalls: 0, encrypted: false, lastInboundActivityAt: 0, state: HealthState.DISCONNECTED });
+    assert.equal(client.deviceInfo(), null);
+    assert.deepEqual(client.capabilities(), disconnectedCapabilities());
+    assert.equal(client.isEncrypted, false);
+    assert.deepEqual(client.subDevices(), []);
+    assert.equal(client.isConnected, false);
+
+    // The real client resets the session's records before it announces the end and keeps its registry through it, so a listener sees both.
+    assert.equal(deviceInfoAtAnnouncement, null, "the device info must be cleared before the announcement");
+    assert.equal(entitiesAtAnnouncement, 1, "the entity registry must still be readable while the disconnect is announced");
+    assert.equal(client.entities().length, 0, "disconnect() clears the entity registry once the announcement is done");
+  });
+
+  test("setConnected(false) on a connected mock tears down the same way, carries its reason, and keeps the registry and the command log", () => {
+
+    const client = connectedClient();
+    const kitchen = entityId("light", "kitchen");
+
+    client.command(kitchen, { state: true });
+
+    using recorder = recordAnnouncements(client);
+
+    client.setConnected(false, "link lost");
+
+    const health = client.health();
+
+    assert.deepEqual(recorder.events, [ [ "healthChange", health ], [ "lifecycle", { kind: "disconnect" } ], [ "disconnect", "link lost" ] ]);
+    assert.equal(recorder.events[0]?.[1], health, "health() must return the record the healthChange event carried");
+    assert.ok(Object.isFrozen(health), "the disconnected record must be frozen");
+    assert.deepEqual(health, { consecutiveStalls: 0, encrypted: false, lastInboundActivityAt: 0, state: HealthState.DISCONNECTED });
+    assert.equal(client.deviceInfo(), null);
+    assert.deepEqual(client.capabilities(), disconnectedCapabilities());
+    assert.equal(client.isEncrypted, false);
+    assert.deepEqual(client.subDevices(), []);
+
+    // A dropped session is not the consumer's own teardown, so the registry and the command log survive it, as the real client keeps its registry.
+    assert.equal(client.hasEntity(kitchen), true);
+    assert.equal(client.commands.length, 1);
+  });
+
+  test("a second disconnect() announces nothing and leaves the health record as it stands, as the real client's repeat call does", () => {
+
+    const client = connectedClient();
+
+    client.disconnect();
+
+    const health = client.health();
+
+    using recorder = recordAnnouncements(client);
+
+    client.disconnect();
+
+    assert.deepEqual(recorder.events, [], "a disconnect on a disconnected mock must announce nothing");
+    assert.equal(client.health(), health, "the health record must be the one the first teardown installed");
+    assert.equal(client.deviceInfo(), null);
+  });
+
+  test("the disconnected health record carries the stall count and the last ping round-trip time forward, as the real client's does", () => {
+
+    const client = new MockClient();
+
+    client.setHealth(mockHealth({ consecutiveStalls: 3, encrypted: true, lastInboundActivityAt: 12345, lastPingRttMs: 42, state: HealthState.STALLED }));
+    client.setConnected(true);
+    client.disconnect();
+
+    // Only the stall count and the round-trip time carry over. The encryption flag and the inbound-activity stamp return to the disconnected baseline, and the
+    // connect epoch is absent, as a down record requires.
+    assert.deepEqual(client.health(), { consecutiveStalls: 3, encrypted: false, lastInboundActivityAt: 0, lastPingRttMs: 42, state: HealthState.DISCONNECTED });
+  });
+});
+
 describe("MockClient.getEntityKey", () => {
 
   test("returns the registered entity's numeric key, and null for an unknown id", () => {
@@ -813,5 +1127,46 @@ describe("MockClient.commandAndAwait", () => {
 
       return true;
     });
+  });
+
+  test("rejects a malformed id at once with the real runner's MALFORMED_ENTITY_ID error, ahead of the unknown-id check, and records nothing", async () => {
+
+    const client = new MockClient();
+
+    client.populateEntities([mockEntity("climate", "thermostat")]);
+
+    // A malformed id is never registered either, so the code shows the order: the malformed check runs before the registry lookup, as in the real runner. The
+    // timeout is generous, so a refusal that fell through to the await would reject with the timeout's TimeoutError instead.
+    for(const malformed of [ "thermostat", "-thermostat" ]) {
+
+      await assert.rejects(client.commandAndAwait(malformed as unknown as EntityId<"climate">, { mode: "heat" }, { timeoutMs: 5000 }), (err: unknown): boolean => {
+
+        return (err instanceof ConfigurationError) && (err.code === "MALFORMED_ENTITY_ID") &&
+          (err.message === "commandAndAwait(): malformed entity id '" + malformed + "'.");
+      });
+    }
+
+    assert.equal(client.commands.length, 0, "a command for a malformed id must not reach the command log");
+  });
+
+  test("rejects an unknown enum alias at once with the real runner's ConfigurationError code, opening no stream and recording nothing", async () => {
+
+    const client = new MockClient();
+    const id = entityId("climate", "thermostat");
+    const bus = (client as unknown as { bus: { listenerCount: (event: string) => number } }).bus;
+
+    client.populateEntities([mockEntity("climate", "thermostat")]);
+
+    // The timeout is generous: a refusal that fell through to the await would reject with the timeout's TimeoutError instead of the refusal code.
+    const pending = client.commandAndAwait(id, { mode: "freze" } as never, { timeoutMs: 5000 });
+
+    assert.equal(bus.listenerCount("climate"), 0, "a refused command must not open the state stream");
+
+    await assert.rejects(pending, (err: unknown): boolean => (err instanceof ConfigurationError) && (err.code === "ENUM_VALUE_UNKNOWN"));
+    await assert.rejects(pending, {
+
+      message: "commandAndAwait(): command for climate-thermostat refused before sending (ENUM_VALUE_UNKNOWN): field 'mode' received unknown enum value 'freze'."
+    });
+    assert.equal(client.commands.length, 0, "a refused command must not reach the command log");
   });
 });

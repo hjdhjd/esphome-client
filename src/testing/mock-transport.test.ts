@@ -6,6 +6,7 @@ import { MockTransport, MockTransportPhase, mockNoiseHandshakeExchange } from ".
 import { describe, test } from "node:test";
 import { Buffer } from "node:buffer";
 import assert from "node:assert/strict";
+import { setImmediate as settle } from "node:timers/promises";
 
 describe("MockTransport phase transitions", () => {
 
@@ -207,6 +208,38 @@ describe("MockTransport whenIdle", () => {
     t[Symbol.dispose]();
 
     await t.whenIdle();
+  });
+
+  test("a wait pending when fail() runs resolves (a failed transport consumes nothing further)", async () => {
+
+    const t = new MockTransport();
+
+    // A queued frame with no consumer parked holds the wait pending until something ends the transport.
+    t.pushInbound(1, Buffer.from([0]));
+
+    const idle = t.whenIdle().then((): string => "settled");
+
+    assert.equal(await Promise.race([ idle, settle("pending") ]), "pending", "the wait must be pending before fail() runs");
+
+    t.fail(new Error("peer reset"));
+
+    assert.equal(await Promise.race([ idle, settle("pending") ]), "settled", "fail() must settle the pending wait");
+  });
+
+  test("a wait pending when the inbound iterator's return() runs resolves (an ended stream consumes nothing further)", async () => {
+
+    const t = new MockTransport();
+    const it = t[Symbol.asyncIterator]();
+
+    t.pushInbound(1, Buffer.from([0]));
+
+    const idle = t.whenIdle().then((): string => "settled");
+
+    assert.equal(await Promise.race([ idle, settle("pending") ]), "pending", "the wait must be pending before return() runs");
+
+    await it.return?.();
+
+    assert.equal(await Promise.race([ idle, settle("pending") ]), "settled", "the iterator's return() must settle the pending wait");
   });
 });
 

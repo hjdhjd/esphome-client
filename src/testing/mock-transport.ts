@@ -224,7 +224,7 @@ export class MockTransport implements TransportLike {
   }
 
   /**
-   * Simulate a fatal transport error. Pending awaiters reject; subsequent calls reject with the same error.
+   * Simulate a fatal transport error. Pending awaiters reject, a pending {@link whenIdle} resolves, and subsequent calls reject with the same error.
    *
    * @param error - The error to surface.
    */
@@ -236,7 +236,7 @@ export class MockTransport implements TransportLike {
     }
 
     this.fatalError = error;
-    this.terminated = true;
+    this.terminate();
 
     if(this.messageAwaiter) {
 
@@ -418,7 +418,8 @@ export class MockTransport implements TransportLike {
   /**
    * Resolve once the inbound consumer has drained the queue and parked awaiting the next frame - i.e. every frame pushed so far has been pulled and its synchronous
    * handling has run. This is the deterministic alternative to timer-based "let the queue drain" waits: push frames, then `await transport.whenIdle()`. Resolves
-   * immediately when the consumer is already parked on an empty queue, or when the transport has terminated (nothing more will be consumed).
+   * immediately when the consumer is already parked on an empty queue, or when the transport has terminated (nothing more will be consumed). A wait already pending
+   * when the transport terminates, through dispose, {@link fail}, or the inbound iterator's `return()`, resolves at that moment.
    *
    * @returns A promise that settles when the consumer has caught up to everything pushed.
    */
@@ -435,7 +436,8 @@ export class MockTransport implements TransportLike {
     });
   }
 
-  // Fire and clear any pending whenIdle() resolvers. Called when the consumer parks on an empty queue and on disposal, so a pending whenIdle() never hangs.
+  // Fire and clear any pending whenIdle() resolvers. Called when the consumer parks on an empty queue and when the transport terminates, so a wait taken while the
+  // consumer is still working through the queue settles at whichever of those comes first.
   private resolveIdle(): void {
 
     if(this.idleResolvers.length === 0) {
@@ -451,6 +453,14 @@ export class MockTransport implements TransportLike {
 
       resolve();
     }
+  }
+
+  // Mark the transport terminated and settle every pending whenIdle() waiter. Every terminal path goes through here: a terminated transport consumes nothing further,
+  // so it is trivially idle, and a wait taken before the end must settle rather than hang.
+  private terminate(): void {
+
+    this.terminated = true;
+    this.resolveIdle();
   }
 
   /**
@@ -497,7 +507,7 @@ export class MockTransport implements TransportLike {
       // `require-await` are satisfied without a lint suppression - the `await` here costs nothing and keeps the AsyncIterator contract clean.
       return: async (): Promise<IteratorResult<InboundMessage>> => {
 
-        this.terminated = true;
+        this.terminate();
 
         await Promise.resolve();
 
@@ -518,10 +528,7 @@ export class MockTransport implements TransportLike {
       return;
     }
 
-    this.terminated = true;
-
-    // Settle any pending whenIdle() waiters: a disposed transport will consume nothing further, so it is trivially idle.
-    this.resolveIdle();
+    this.terminate();
 
     if(this.messageAwaiter) {
 

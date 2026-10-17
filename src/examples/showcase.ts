@@ -1234,8 +1234,9 @@ export async function errorClassEnumerationExample(): Promise<void> {
 // #endregion error-class-enumeration
 
 /**
- * {@link EspHomeClient.commandAndAwait} surfaces a handful of distinct rejection paths: {@link ConfigurationError} codes (`MALFORMED_ENTITY_ID`,
- * `UNKNOWN_ENTITY_ID`, `AWAIT_STREAM_CLOSED`) for id and discovery failures, plus {@link DOMException} for the abort/timeout cases. The fire-and-forget
+ * {@link EspHomeClient.commandAndAwait} surfaces a handful of distinct rejection paths: {@link ConfigurationError} codes for a malformed id (`MALFORMED_ENTITY_ID`),
+ * an id no entity is registered for (`UNKNOWN_ENTITY_ID`), and a state stream that ended before a match (`AWAIT_STREAM_CLOSED`), plus {@link DOMException} for the
+ * abort/timeout cases. The fire-and-forget
  * {@link EspHomeClient.command} never throws - it logs and drops on encoder failures and unknown ids.
  */
 // #region command-error-handling
@@ -1263,7 +1264,7 @@ export async function commandErrorHandlingExample(client: EspHomeClient, lightId
 
         case "AWAIT_STREAM_CLOSED":
 
-          // The connection dropped before the matching state event arrived.
+          // The state stream ended before a matching state event arrived, which the client's own connection lifecycle never causes.
           break;
       }
 
