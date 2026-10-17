@@ -24,8 +24,6 @@ import { WireType } from "./wire-types.ts";
  * Maximum bytes a single varint may consume before its stop-bit. Hardcoded to the 64-bit-varint upper bound dictated by the protobuf encoding itself - no consumer-
  * tunable knob; the limit exists to prevent a runaway loop on a malformed varint without a stop bit, which would otherwise advance offset indefinitely until the buffer
  * ran out.
- *
- * @internal
  */
 export const MAX_VARINT_BYTES = 10;
 
@@ -35,8 +33,6 @@ export const MAX_VARINT_BYTES = 10;
  * - `Buffer` for length-delimited and fixed32 fields (callers interpret the contents per their schema)
  *
  * The union collapses to `Buffer | number` because the codec implements exactly these wire types; unknown wire types short-circuit decode without producing a value.
- *
- * @internal
  */
 export type FieldValue = Buffer | number;
 
@@ -47,8 +43,6 @@ export type FieldValue = Buffer | number;
  * full 64-bit range for wire fields declared `uint64`), `LENGTH_DELIMITED` expects a `Buffer`, `FIXED32` expects a `number` (encoded little-endian as `uint32`) or a
  * `Buffer` (copied verbatim into the four output bytes). `FIXED64` is not supported on the encoder side because the client never needs to send `fixed64` fields
  * outbound - if outbound fixed64 is ever required, extend the encoder rather than open-coding the encode at the call site.
- *
- * @internal
  */
 export interface ProtoField {
 
@@ -74,15 +68,11 @@ export interface ProtoField {
 /**
  * Optional warning hook for the decoder. Called once per unsupported wire type encountered. The decoder returns its partial result after the first such warning rather
  * than throwing, matching the forward-compatibility intent: a newer device adding a field with an unsupported wire type should not crash an older client.
- *
- * @internal
  */
 export type CodecWarn = (message: string) => void;
 
 /**
  * Configuration for {@link decodeProtobuf}.
- *
- * @internal
  */
 export interface DecodeOptions {
 
@@ -104,7 +94,6 @@ export interface DecodeOptions {
  * @param value - The non-negative integer to encode. Behavior is undefined for negative numbers; callers are expected to convert signed values via zigzag encoding
  *   before calling this.
  * @returns The encoded varint as a `Buffer`.
- * @internal
  */
 export function encodeVarint(value: number): Buffer {
 
@@ -136,7 +125,6 @@ export function encodeVarint(value: number): Buffer {
  *
  * @param value - The non-negative bigint to encode. Behavior is undefined for negative values - protobuf `uint64` is unsigned.
  * @returns The encoded varint as a `Buffer`.
- * @internal
  */
 export function encodeVarintBigInt(value: bigint): Buffer {
 
@@ -167,7 +155,6 @@ export function encodeVarintBigInt(value: bigint): Buffer {
  *
  * @param value - The signed 32-bit integer to encode.
  * @returns The unsigned zigzag-encoded representation.
- * @internal
  */
 export function zigzagEncode(value: number): number {
 
@@ -179,7 +166,6 @@ export function zigzagEncode(value: number): number {
  *
  * @param value - The unsigned zigzag-encoded value as read off the wire.
  * @returns The signed integer the encoder originally supplied.
- * @internal
  */
 export function zigzagDecode(value: number): number {
 
@@ -193,7 +179,6 @@ export function zigzagDecode(value: number): number {
  *
  * @param values - The signed integers to encode in order.
  * @returns The concatenated packed body.
- * @internal
  */
 export function encodePackedSint32(values: readonly number[]): Buffer {
 
@@ -215,7 +200,6 @@ export function encodePackedSint32(values: readonly number[]): Buffer {
  * @returns The decoded signed integers in wire order.
  *
  * @throws {@link MalformedVarintError} when a varint exceeds {@link MAX_VARINT_BYTES} without a stop bit.
- * @internal
  */
 export function decodePackedSint32(buffer: Buffer): number[] {
 
@@ -245,7 +229,6 @@ export function decodePackedSint32(buffer: Buffer): number[] {
  * @returns A tuple `[value, bytesRead]`. `bytesRead` is the number of bytes consumed; advance the caller's cursor by this amount.
  *
  * @throws {@link MalformedVarintError} when the encoding never sets a stop bit within {@link MAX_VARINT_BYTES} bytes.
- * @internal
  */
 export function readVarintBigInt(buffer: Buffer, offset: number): [ bigint, number ] {
 
@@ -295,8 +278,6 @@ export function readVarintBigInt(buffer: Buffer, offset: number): [ bigint, numb
  * `accuracy_decimals`) carries values that are non-negative in practice, so the unsigned return shape is the correct interpretation for every real-world consumer. If a
  * future inbound field genuinely needs a negative-value reading, the caller converts at the call site via `(value | 0)` - a one-character signed-int32 cast - rather
  * than asking this primitive to return signed numbers.
- *
- * @internal
  */
 export function readVarint(buffer: Buffer, offset: number): [ number, number ] {
 
@@ -346,8 +327,6 @@ export function readVarint(buffer: Buffer, offset: number): [ number, number ] {
  * cursor past the end. This reader refuses the overrun with the typed truncation error rather than clamping. {@link decodeProtobuf} reads every length-delimited field
  * through this function, and the hand-written decoders that walk a payload field by field call it directly, so the codec and the walkers share one bounds check and
  * fail closed the same way.
- *
- * @internal
  */
 export function readLengthDelimited(buffer: Buffer, offset: number, fieldNum?: number): [ Buffer, number ] {
 
@@ -368,7 +347,6 @@ export function readLengthDelimited(buffer: Buffer, offset: number, fieldNum?: n
  *
  * @param fields - Field definitions to encode in order.
  * @returns The encoded message as a `Buffer`.
- * @internal
  */
 export function encodeProtoFields(fields: readonly ProtoField[]): Buffer {
 
@@ -446,7 +424,6 @@ export function encodeProtoFields(fields: readonly ProtoField[]): Buffer {
  *
  * @throws {@link MalformedVarintError} on malformed varints, {@link MessageTooManyFieldsError} when the decoded value count exceeds the configured cap,
  * {@link TruncatedMessageError} when a FIXED32 / FIXED64 / LENGTH_DELIMITED field declares a width that runs past the end of the buffer.
- * @internal
  */
 export function decodeProtobuf(buffer: Buffer, options: DecodeOptions): Record<number, FieldValue[]> {
 

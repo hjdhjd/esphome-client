@@ -75,7 +75,6 @@ function isInt32(value: unknown): boolean {
  * @param valueType - The schema value type of the field being encoded.
  * @param value - The raw value supplied by the caller.
  * @returns `true` when the value is encodable for its value type.
- * @internal
  */
 export function isValueInRange(valueType: ValueType, value: unknown): boolean {
 

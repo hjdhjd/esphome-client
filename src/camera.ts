@@ -44,8 +44,6 @@ const DEFAULT_SNAPSHOT_TIMEOUT_MS = 5000;
  * Narrow interface the host implements for the camera sub-API: the bus (for the snapshot and stream subscriptions), the connection scope, a logger, the telemetry
  * publish hook for reassembled images, and the frame-and-send hook. The per-id filter branches on the branded entity id stamped on every `camera` event, so no
  * friendly-name resolver hook is required.
- *
- * @internal
  */
 export interface CameraHost {
 

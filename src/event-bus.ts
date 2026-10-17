@@ -70,8 +70,6 @@ export interface StreamOptions {
  *
  * @typeParam In - The channel's payload type.
  * @typeParam Out - The value the stream yields. Equals `In` when no selector is given.
- *
- * @internal
  */
 export interface StreamViewOptions<In, Out> extends StreamOptions {
 
@@ -347,8 +345,6 @@ export class EventBus<EventMap extends object> {
    * @param event - The event name. Narrowed to keys of `EventMap`.
    * @param options - The stream options, with the projecting selector.
    * @returns An `AsyncIterable<Out>`.
-   *
-   * @internal
    */
   public stream<K extends keyof EventMap & string, Out>(event: K, options: StreamViewOptions<EventMap[K], Out>): AsyncIterable<Out>;
 
@@ -445,8 +441,6 @@ export class EventBus<EventMap extends object> {
  * post-dispose ends cleanly (mirroring the defensive `on`/`once` handling) rather than parking forever: the one-shot `DISPOSE_CHANNEL` has already fired, so a freshly
  * constructed {@link BackpressureStream} would attach a dispose listener that never settles. The client and its test double return it too for a stream that can never
  * deliver, so no bus listener is attached for it. Exported for those callers only; the public barrel does not re-export this module's values.
- *
- * @internal
  */
 export function endedAsyncIterable<T>(): AsyncIterable<T> {
 

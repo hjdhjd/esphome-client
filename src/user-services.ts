@@ -32,8 +32,6 @@ import type { ServiceRegistry } from "./registries/service-registry.ts";
  * Narrow interface the {@link UserServicesApi} consumes from the host. Mirrors the other sub-API host interfaces (a few primitives plus the host's `frameAndSend`
  * hook), without the connection scope the hosts of awaiting sub-APIs carry, since executing a service awaits no reply. The api never reaches into host private
  * state - everything it needs flows through this object.
- *
- * @internal
  */
 export interface UserServicesApiHost {
 

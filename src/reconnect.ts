@@ -71,8 +71,6 @@ export interface ReconnectConfig {
 
 /**
  * Default predicate. Skip permanent errors; retry everything else.
- *
- * @internal
  */
 export function defaultShouldRetry(error: EspHomeError): boolean {
 
@@ -82,8 +80,6 @@ export function defaultShouldRetry(error: EspHomeError): boolean {
 /**
  * Resolved (defaults applied) reconnect config. Mirrors {@link ReconnectConfig} field-for-field with every default already applied by {@link resolveReconnectConfig},
  * so each field below carries the same semantics as its optional counterpart there; see that interface for the full rationale behind each default.
- *
- * @internal
  */
 export interface ResolvedReconnectConfig {
 
@@ -128,8 +124,6 @@ export interface ResolvedReconnectConfig {
  *
  * @param config - The user-supplied config, or `undefined` for full defaults.
  * @returns A resolved config with every field populated.
- *
- * @internal
  */
 export function resolveReconnectConfig(config: ReconnectConfig | undefined): ResolvedReconnectConfig {
 
@@ -149,8 +143,6 @@ export function resolveReconnectConfig(config: ReconnectConfig | undefined): Res
  * The fields {@link nextBackoffDelay} reads. Naming them as their own type lets a caller that has no reconnect supervisor at all - the construction-retry loop in the
  * client factory, which resolves its own defaults - share the formula by passing a plain object, without inventing values for the supervisor-only fields of
  * {@link ResolvedReconnectConfig}. A full resolved config satisfies this shape, so the supervisor passes its own config unchanged.
- *
- * @internal
  */
 export type BackoffParameters = Pick<ResolvedReconnectConfig, "backoffMultiplier" | "initialDelayMs" | "jitter" | "maxDelayMs">;
 
@@ -163,8 +155,6 @@ export type BackoffParameters = Pick<ResolvedReconnectConfig, "backoffMultiplier
  * @param attempt - 1-based attempt index.
  * @param config - The backoff parameters.
  * @returns The delay in milliseconds to wait before the next attempt.
- *
- * @internal
  */
 export function nextBackoffDelay(attempt: number, config: BackoffParameters): number {
 
@@ -181,8 +171,6 @@ export function nextBackoffDelay(attempt: number, config: BackoffParameters): nu
  *
  * @param ms - The delay in milliseconds.
  * @param signal - Optional cancellation signal.
- *
- * @internal
  */
 export async function backoffDelay(ms: number, signal?: AbortSignal): Promise<void> {
 

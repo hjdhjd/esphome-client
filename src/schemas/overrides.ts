@@ -23,8 +23,6 @@ import type { Buffer } from "node:buffer";
  * express. Enum-valued field narrowing (e.g. `entityCategory`, `number.mode`, `text.mode`, climate's supported* arrays) flows automatically through the schema's
  * listEntities-side `enumMappings`, so those entries do NOT belong here. The remaining entries are runtime-mutation prevention (light's effects and supportedColorModes
  * tightened to readonly arrays) - the schema engine has no way to express readonly on its own.
- *
- * @internal
  */
 export interface EntityOverrides {
 
@@ -42,8 +40,6 @@ export interface EntityOverrides {
  * so consumers narrowing on `event.type === "camera"` continue to see the assembled image rather than the wire chunk fields. Enum-valued state fields (lock state,
  * cover/valve currentOperation, climate mode/fanMode/preset/swingMode/action, fan direction, light colorMode, media-player state, water-heater mode) narrow to
  * literal-union types via the schema's state-side `enumMappings`; no override entry is needed for that narrowing.
- *
- * @internal
  */
 export interface EventOverrides {
 
@@ -76,8 +72,6 @@ export interface EventOverrides {
  *
  * @remarks Light's wire shape uses flat `red`/`green`/`blue`/`hasRgb`; the public API takes `rgb: { r, g, b }`. The runtime adapter expands the object before reaching
  * the schema-driven encoder. Siren accepts a number for `duration` that the wrapper rounds; no type override needed - the wire shape already accepts a number.
- *
- * @internal
  */
 export interface CommandOverrides {
 

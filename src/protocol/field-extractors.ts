@@ -18,16 +18,12 @@ import { decodeProtobuf } from "./codec.ts";
 /**
  * Width of a fixed32 protobuf field in bytes. Used to distinguish a 4-byte float from a UTF-8 string in {@link extractTelemetryValue}, to validate the fixed32
  * entity-key buffer width in {@link extractEntityKey}, and to validate the generic fixed32 field width in {@link extractFixed32Field}.
- *
- * @internal
  */
 export const FIXED32_FIELD_BYTES = 4;
 
 /**
  * Options accepted by {@link decodeWithLimits}. Mirrors the shape of the host's instance-bound decoder so a caller outside the host class can supply the same
  * per-message field-count cap and warn callback the host applies.
- *
- * @internal
  */
 export interface DecodeWithLimitsOptions {
 
@@ -50,7 +46,6 @@ export interface DecodeWithLimitsOptions {
  * @param buffer - The protobuf bytes to decode.
  * @param options - Decode limits and warn callback.
  * @returns The field map keyed by field number.
- * @internal
  */
 export function decodeWithLimits(buffer: Buffer, options: DecodeWithLimitsOptions): Record<number, FieldValue[]> {
 
@@ -64,7 +59,6 @@ export function decodeWithLimits(buffer: Buffer, options: DecodeWithLimitsOption
  * @param fields - Decoded field map.
  * @param fieldNum - The field number to read.
  * @returns The numeric entity key, or `undefined` when the field is missing or the wrong shape.
- * @internal
  */
 export function extractEntityKey(fields: Record<number, FieldValue[]>, fieldNum: number): number | undefined {
 
@@ -98,7 +92,6 @@ export function extractEntityKey(fields: Record<number, FieldValue[]>, fieldNum:
  * @param fields - Decoded field map.
  * @param fieldNum - The field number to read.
  * @returns The 32-bit unsigned integer value, or `undefined`.
- * @internal
  */
 export function extractFixed32Field(fields: Record<number, FieldValue[]>, fieldNum: number): number | undefined {
 
@@ -118,7 +111,6 @@ export function extractFixed32Field(fields: Record<number, FieldValue[]>, fieldN
  * @param fields - Decoded field map.
  * @param fieldNum - The field number to read.
  * @returns The decoded string, or `undefined`.
- * @internal
  */
 export function extractStringField(fields: Record<number, FieldValue[]>, fieldNum: number): string | undefined {
 
@@ -138,7 +130,6 @@ export function extractStringField(fields: Record<number, FieldValue[]>, fieldNu
  * @param fields - Decoded field map.
  * @param fieldNum - The field number to read.
  * @returns The numeric value, or `undefined`.
- * @internal
  */
 export function extractNumberField(fields: Record<number, FieldValue[]>, fieldNum: number): number | undefined {
 
@@ -155,7 +146,6 @@ export function extractNumberField(fields: Record<number, FieldValue[]>, fieldNu
  * @param fieldNum - The field number containing the repeated nested entries.
  * @param decode - The decoder to apply to each nested message's payload.
  * @returns A `Record<string, string>` from decoded entries; entries with missing keys or values are skipped.
- * @internal
  */
 export function extractRepeatedServiceMap(fields: Record<number, FieldValue[]>, fieldNum: number, decode: (buffer: Buffer) => Record<number, FieldValue[]>):
 Record<string, string> {
@@ -193,7 +183,6 @@ Record<string, string> {
  * @param fields - Decoded field map.
  * @param fieldNum - The field number to read.
  * @returns The decoded value, or `undefined`.
- * @internal
  */
 export function extractTelemetryValue(fields: Record<number, FieldValue[]>, fieldNum: number): number | string | undefined {
 

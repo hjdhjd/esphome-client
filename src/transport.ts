@@ -229,8 +229,6 @@ export interface TransportLike extends AsyncDisposable, Disposable, AsyncIterabl
  * @param host - A hostname, an IPv4 address, or an IPv6 literal.
  * @param port - The TCP port.
  * @returns The host and port as display text.
- *
- * @internal
  */
 export function formatHostPort(host: string, port: number): string {
 
@@ -255,8 +253,6 @@ export function formatHostPort(host: string, port: number): string {
  *
  * @param host - A hostname, an IPv4 address, or an IPv6 literal, optionally wrapped in the square brackets of URL notation.
  * @returns The host with one surrounding pair of square brackets removed, or the host unchanged when it carries no such pair.
- *
- * @internal
  */
 export function unbracketHost(host: string): string {
 

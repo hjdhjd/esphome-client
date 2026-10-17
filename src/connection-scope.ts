@@ -12,7 +12,6 @@
  * abort then ends every wait the connection carried, each with the reason of whichever source ended it. This module holds no controller of its own, because the host
  * owns the scope; it decides, composes, and builds the errors, so the host, the mock client, and every test fake report a fact and none of them decides.
  *
- * @internal
  * @module connection-scope
  */
 import { ConnectionLostError, NotConnectedError } from "./errors.ts";
@@ -22,16 +21,12 @@ import { ConnectionLostError, NotConnectedError } from "./errors.ts";
  * {@link ConnectionLostError} its teardown builds when that connection is torn down; `connecting` means a manual connect has not yet settled or the automatic
  * reconnect is active; `none` means neither is running and no connection is attached. Each reading describes the moment it was taken and forecasts nothing about
  * whether a connection follows.
- *
- * @internal
  */
 export type ConnectionScope = { readonly kind: "attached"; readonly signal: AbortSignal } | { readonly kind: "connecting" } | { readonly kind: "none" };
 
 /**
  * A request's composed signal and the release of the listeners that feed it. An awaiting call binds it with `using` and awaits its wait inside that block, so the
  * listeners leave every source the moment the wait settles.
- *
- * @internal
  */
 export interface RequestSignal extends Disposable {
 
@@ -54,8 +49,6 @@ const RELEASE_NOTHING = (): void => { /* Nothing was registered. */ };
  * @param cause - What ended the connection, when the teardown knows it. The error carries a `cause` only when it is given one.
  *
  * @returns The connection-lost error, coded `CONNECTION_LOST`.
- *
- * @internal
  */
 export function connectionLostError(cause?: unknown): ConnectionLostError {
 
@@ -73,8 +66,6 @@ export function connectionLostError(cause?: unknown): ConnectionLostError {
  *
  * @throws {NotConnectedError} coded `CONNECT_IN_PROGRESS` when a manual connect had not yet settled or the automatic reconnect was active, and `NOT_CONNECTED` when no
  * connection was attached and neither was running.
- *
- * @internal
  */
 export function requireConnection(scope: ConnectionScope, request: string): AbortSignal {
 
@@ -114,8 +105,6 @@ export function requireConnection(scope: ConnectionScope, request: string): Abor
  * @param options.timeoutMs - The call's timeout in milliseconds. A bus wait passes its resolved default here; a correlator wait keeps its timeout on the correlator.
  *
  * @returns The composed signal and the release of its listeners.
- *
- * @internal
  */
 export function composeRequestSignal(connection: AbortSignal, options: { signal?: AbortSignal | undefined; timeoutMs?: number } = {}): RequestSignal {
 

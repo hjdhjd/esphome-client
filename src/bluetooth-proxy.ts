@@ -228,8 +228,6 @@ export interface ConnectionParams {
  * Narrow interface the host implements for the Bluetooth-proxy sub-API. Mirrors {@link SerialProxyHost} in shape: a bus, a logger, a frame-send hook, and the
  * connection scope, plus a read-through accessor for the latest decoded {@link DeviceInfo} so the {@link BluetoothProxyApi.available} getter can consult the
  * BLE-proxy feature flags without reaching into host private fields.
- *
- * @internal
  */
 export interface BluetoothProxyHost {
 

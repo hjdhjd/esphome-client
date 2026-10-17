@@ -24,8 +24,6 @@ import type { CommandOverrides, EntityOverrides, EventOverrides } from "./overri
 /**
  * Maps a single {@link FieldSpec}'s `valueType` to its TypeScript wire type. Bool fields surface as `boolean`, string fields as `string`, all numeric variants
  * (varint, sint32, fixed32, float, enum) collapse to `number`. Anything outside the known set falls back to `unknown` so the type system surfaces the gap.
- *
- * @internal
  */
 export type WireFieldOutput<F extends FieldSpec> =
   F["valueType"] extends "bool" ? boolean :
@@ -36,8 +34,6 @@ export type WireFieldOutput<F extends FieldSpec> =
 
 /**
  * Same projection as {@link WireFieldOutput} for repeated fields.
- *
- * @internal
  */
 export type WireRepeatedFieldOutput<F extends RepeatedFieldSpec> =
   F["valueType"] extends "string" ? string[] :
@@ -47,8 +43,6 @@ export type WireRepeatedFieldOutput<F extends RepeatedFieldSpec> =
 /**
  * Same projection as {@link WireFieldOutput} for command has-pattern fields. The has-pattern pair (hasField boolean + valueField scalar) collapses to the value-side
  * type at the public surface; the boolean is implicit from "value is present."
- *
- * @internal
  */
 export type WireHasPatternFieldOutput<F extends HasPatternField> =
   F["valueType"] extends "bool" ? boolean :
@@ -60,8 +54,6 @@ export type WireHasPatternFieldOutput<F extends HasPatternField> =
 /**
  * Same projection as {@link WireFieldOutput} for command bitmask-has fields. The bit position is implicit from presence; the consumer-facing type is the value-side
  * scalar.
- *
- * @internal
  */
 export type WireBitmaskFieldOutput<F extends BitmaskField> =
   F["valueType"] extends "bool" ? boolean :
@@ -74,8 +66,6 @@ export type WireBitmaskFieldOutput<F extends BitmaskField> =
  * Extracts the literal-union of numeric values from one entry of a schema's `enumMappings` record. Given `{ LOCKED: 1, UNLOCKED: 2, ... }`, produces the union
  * `1 | 2 | ...`. The inbound narrowing helpers below consume this; command-side consumers read the parallel key-union (`keyof M`) instead since the encoder accepts
  * string aliases on input.
- *
- * @internal
  */
 export type EnumValueUnionFromMapping<M> = M extends Record<string, number> ? M[keyof M] : never;
 
@@ -87,8 +77,6 @@ export type EnumValueUnionFromMapping<M> = M extends Record<string, number> ? M[
  * @remarks The inbound narrowing pattern is shared by state events and discovery records...both surface raw wire enum values to consumers, and both should narrow
  * to numeric-literal unions when the schema declares the mapping. Extracting the helper keeps `WireStateEventFor` and `WireEntityFor` consistent and DRYs out the
  * nested conditional that would otherwise be duplicated.
- *
- * @internal
  */
 export type ApplyEnumMappingToFields<F, EM> =
   F extends Record<string, FieldSpec> ?
@@ -105,8 +93,6 @@ export type ApplyEnumMappingToFields<F, EM> =
  * @remarks Discovery-side `repeatedFields` carry the entity's capability declarations (`supportedFanModes`, `supportedModes`, etc.) which are most useful when
  * narrowed against the matching named constants. Without this projection, `entity.supportedFanModes: number[]` requires consumers to cast or compare against
  * magic numbers; with it, the type is `ClimateFanMode[]` (the literal-union array) and consumers iterate against the constant directly.
- *
- * @internal
  */
 export type ApplyEnumMappingToRepeatedFields<R, EM> =
   R extends Record<string, RepeatedFieldSpec> ?
@@ -118,8 +104,6 @@ export type ApplyEnumMappingToRepeatedFields<R, EM> =
 /**
  * Project a single {@link RepeatedMessageFieldSpec}'s inner field map to a TypeScript record shape. Reuses {@link ApplyEnumMappingToFields} so an inner enum field
  * declared in the spec's nested `enumMappings` narrows to the literal-union of the mapping's numeric values - exactly as the outer message's enum fields narrow.
- *
- * @internal
  */
 export type RepeatedMessageRecordFor<F extends RepeatedMessageFieldSpec> =
   ApplyEnumMappingToFields<F["fields"], F extends { enumMappings: infer EM } ? EM : undefined>;
@@ -132,8 +116,6 @@ export type RepeatedMessageRecordFor<F extends RepeatedMessageFieldSpec> =
  *
  * The record shape sits on the type parameter rather than only inside the body, so the projection has a concrete key source at this declaration and not merely at each
  * instantiation. The body's own conditional is what distributes the projection across a union of records.
- *
- * @internal
  */
 export type PackedBitNamesOf<P extends PackedBitsRecord> =
   P extends PackedBitsRecord ?
@@ -149,8 +131,6 @@ export type PackedBitNamesOf<P extends PackedBitsRecord> =
  * Across schema roles a name collision is intentional: climate's `listEntities.fields.supportsAction` (the deprecated boolean) and
  * `listEntities.packedBitsFields.featureFlags.bits.supportsAction` (the new bit) produce the same consumer-facing key. The decoder writes the newer source last, so
  * 1.14+ firmware data wins when both arrive; older firmware data sticks when only the boolean field is present.
- *
- * @internal
  */
 export type ApplyPackedBitsFields<P extends PackedBitsRecord> =
   PackedBitNamesOf<P> extends never ? unknown :
@@ -164,8 +144,6 @@ export type ApplyPackedBitsFields<P extends PackedBitsRecord> =
  * @remarks Repeated nested-message fields surface structured per-occurrence records (consumer's `entity.supportedFormats: Array<{ format, sampleRate, ... }>`) rather
  * than raw bytes. Inner enum-typed fields narrow to the literal-union of the spec's nested `enumMappings`, matching the outer-level narrowing semantics. Fields that
  * declare no inner enum mapping keep their wire-derived numeric/string types.
- *
- * @internal
  */
 export type ApplyRepeatedMessageFields<R> =
   R extends Record<string, RepeatedMessageFieldSpec> ?
@@ -175,8 +153,6 @@ export type ApplyRepeatedMessageFields<R> =
 /**
  * Extract the `enumMappings` block from a schema-role record, falling back to `undefined` when the role does not declare one. Lets the projection helpers above
  * take a single uniform input regardless of whether the schema has an enum mapping.
- *
- * @internal
  */
 export type EnumMappingOf<X> = X extends { enumMappings: infer EM } ? EM : undefined;
 
@@ -186,8 +162,6 @@ export type EnumMappingOf<X> = X extends { enumMappings: infer EM } ? EM : undef
  *
  * @remarks State-side narrowing uses {@link ApplyEnumMappingToFields} - the same helper that powers the discovery-side narrowing in {@link WireEntityFor}. Both
  * inbound schemas thread through the same enum-mapping logic so the consumer-facing type behavior is symmetric.
- *
- * @internal
  */
 export type WireStateEventFor<S extends EntitySchema> = {
 
@@ -206,8 +180,6 @@ export type WireStateEventFor<S extends EntitySchema> = {
  * {@link ApplyEnumMappingToRepeatedFields} for repeated enum fields (e.g. `climate.supportedModes`, `light.supportedColorModes`). The narrowing is symmetric with
  * state-side: when the schema's listEntities block declares an `enumMappings` entry for a field key, the field's type is the literal-union of the mapping's
  * numeric values rather than plain `number`.
- *
- * @internal
  */
 export type WireEntityFor<S extends EntitySchema> = {
 
@@ -236,8 +208,6 @@ export type WireEntityFor<S extends EntitySchema> = {
  * the wire type, the enum mapping declares the string aliases), the `enumMappings` projection wins. Otherwise the field's `valueType: "enum"` would collapse to plain
  * `number` and the intersection with the enum-key union would erase the string aliases. We exclude such keys from the field, has-pattern, and bitmask projections so
  * the enum-key union is the sole contributor.
- *
- * @internal
  */
 export type WireCommandFor<S extends EntitySchema> =
   S["command"] extends { enumMappings?: infer EM; fields: infer F; hasPatternFields: infer HP } ?
@@ -275,8 +245,6 @@ export type WireCommandFor<S extends EntitySchema> =
  * member of the result union, which is exactly the bug a naked `Omitted extends string` would introduce here.
  *
  * Adding a new override is a one-line edit to the relevant table; the application generic handles the entry shape automatically.
- *
- * @internal
  */
 export type ApplyOverride<Wire, T extends string, Table> =
   T extends keyof Table ?

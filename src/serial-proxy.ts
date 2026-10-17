@@ -116,8 +116,6 @@ export interface SerialProxyFlushResult {
 /**
  * Narrow interface the host implements for the serial-proxy sub-API. Mirrors {@link VoiceAssistantHost} in shape: a bus, a logger, a frame-send hook, and the
  * connection scope, plus a read-through accessor for the latest decoded {@link DeviceInfo}. The sub-API never reaches into host private fields.
- *
- * @internal
  */
 export interface SerialProxyHost {
 
@@ -624,7 +622,6 @@ export class SerialProxyApi implements SubscriptionLifecycle {
  * @param fieldNum - The repeated field number (`25` per `api.proto`).
  * @param decode - Decoder that the host injects for nested protobuf payloads (so per-message field-count caps and warn callbacks stay consistent).
  * @returns A list of {@link SerialProxyInfo} records. Empty when the field is absent or every entry is malformed.
- * @internal
  */
 export function extractSerialProxies(fields: Record<number, FieldValue[]>, fieldNum: number, decode: (buffer: Buffer) => Record<number, FieldValue[]>):
 SerialProxyInfo[] {

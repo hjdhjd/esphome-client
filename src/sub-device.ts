@@ -48,7 +48,6 @@ export interface SubDevice {
  * @param fieldNum - The repeated field number (`20` per `api.proto`).
  * @param decode - Decoder that the host injects for nested protobuf payloads (so per-message field-count caps and warn callbacks stay consistent).
  * @returns A list of {@link SubDevice} records. Empty when the field is absent, is not an array, or every entry lacks a non-zero device id.
- * @internal
  */
 export function extractSubDevices(fields: Record<number, FieldValue[]>, fieldNum: number, decode: (buffer: Buffer) => Record<number, FieldValue[]>): SubDevice[] {
 

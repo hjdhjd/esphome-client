@@ -257,8 +257,8 @@ const FIXTURE_DEVICE_INFO_MINIMAL = [
   "  Webserver Port: 0"
 ].join("\n");
 
-// 1. Exports - every @internal export imported above resolves to a callable / constructor / value.
-describe("Exports - every @internal symbol is importable and well-typed", () => {
+// 1. Exports - every CLI library export imported above resolves to a callable / constructor / value.
+describe("Exports - every CLI library symbol is importable and well-typed", () => {
 
   test("function exports resolve to callables", () => {
 

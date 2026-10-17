@@ -74,7 +74,6 @@ export function entityId<T extends string>(type: T, objectId: string): EntityId<
  *
  * @param name - The entity's display name (the `name` field of `ListEntities*Response`).
  * @returns The canonical `object_id` string. Empty input produces empty output.
- * @internal
  */
 export function deriveObjectId(name: string): string {
 

@@ -196,7 +196,6 @@ const MESSAGE_TYPE_NAMES = new Map<number, string>(Object.entries(MessageType).m
  *
  * @param type - Numeric message type id.
  * @returns The canonical name from {@link MessageType}, or `"Unknown(<id>)"` for unrecognized ids.
- * @internal
  */
 export function messageTypeName(type: number): string {
 

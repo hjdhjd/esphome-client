@@ -25,8 +25,6 @@
 /**
  * Concrete ESPHome API version. Mirrors the `{ major, minor }` shape on {@link ClientCapabilities.api} so the same record type flows through both
  * sides of the comparison.
- *
- * @internal
  */
 export interface ApiVersion {
 
@@ -42,8 +40,6 @@ export interface ApiVersion {
  *     client takes the modern path." Consumer code reads `caps.modernHandshake` as a fact about the connected device.
  *   - Booleans only. Numeric thresholds (counts, sizes) are not version-feature gates...they belong on a different data structure if we ever add one.
  *   - The table is the only place that names protocol-version constants. No `apiMinor >= 11` checks should live anywhere else in `src/`.
- *
- * @internal
  */
 export const API_FEATURE_VERSIONS = {
 
@@ -86,8 +82,6 @@ export const API_FEATURE_VERSIONS = {
 
 /**
  * Type-level enumeration of the feature names. Useful when functions take a feature key by name.
- *
- * @internal
  */
 export type ApiFeatureName = keyof typeof API_FEATURE_VERSIONS;
 
@@ -97,7 +91,6 @@ export type ApiFeatureName = keyof typeof API_FEATURE_VERSIONS;
  * @param deviceVersion - The version the connected device announced.
  * @param featureFloor - The minimum version at which the feature became available.
  * @returns Whether the device supports the feature.
- * @internal
  */
 export function deviceSupports(deviceVersion: ApiVersion, featureFloor: ApiVersion): boolean {
 

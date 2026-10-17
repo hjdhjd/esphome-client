@@ -162,7 +162,6 @@ export type ClimateFeature = typeof ClimateFeature[keyof typeof ClimateFeature];
  * @remarks This co-location pattern eliminates the dual-write between schema declaration and named constant that the previous shape `{ bit: ClimateFeature.X }` left
  * open: a schema author writing `bit: 5` (wrong) instead of `bit: ClimateFeature.SUPPORTS_ACTION` (32) would not trip equality assertions where both sides cited the
  * same wrong constant. With the bits embedded directly in the named constant, there is nothing to drift.
- * @internal
  */
 export const CLIMATE_FEATURE_BITS = {
 
@@ -192,10 +191,10 @@ export type WaterHeaterMode = typeof WaterHeaterMode[keyof typeof WaterHeaterMod
 
 /**
  * Water-heater state-flag bit positions packed into the `state` field on both `WaterHeaterStateResponse` (inbound) and `WaterHeaterCommandRequest` (outbound). The
- * proto's per-field comment ("bit 0 = away, bit 1 = on") is the authoritative source; this constant gives consumers a named alternative to magic-number bit math.
- * The schema's `packedBitsFields` declaration uses these positions to surface each flag as a named boolean (`awayState`, `onState`) on water-heater entities and to
- * accept the same names on water-heater commands.
- * @internal
+ * proto's per-field comment ("bit 0 = away, bit 1 = on") is the authoritative source; this constant names those positions for the packed-bits records declared
+ * below it, `WATER_HEATER_STATE_INBOUND_BITS` and `WATER_HEATER_STATE_COMMAND_BITS`, which the schema table references. Through those records, the schema's
+ * `packedBitsFields` declaration surfaces each flag as a named boolean (`awayState`, `onState`) on water-heater entities and accepts the same names on
+ * water-heater commands.
  */
 export const WaterHeaterStateFlags = {
 
@@ -203,9 +202,6 @@ export const WaterHeaterStateFlags = {
   ON:   2
 } as const;
 
-/**
- * @internal
- */
 export type WaterHeaterStateFlags = typeof WaterHeaterStateFlags[keyof typeof WaterHeaterStateFlags];
 
 /**
@@ -213,7 +209,6 @@ export type WaterHeaterStateFlags = typeof WaterHeaterStateFlags[keyof typeof Wa
  * carries the OR of these bits; each touched value field contributes its own bit. The deprecated `HAS_STATE = 4` is intentionally omitted - it was superseded in the
  * proto and no encoder path touches it. `HAS_ON_STATE` and `HAS_AWAY_STATE` are wired through the schema's `packedBitsFields.state.bits` declaration on the command
  * role, so encoder behavior derives from this single named-constant SSOT.
- * @internal
  */
 export const WaterHeaterCommandHasField = {
 
@@ -225,16 +220,12 @@ export const WaterHeaterCommandHasField = {
   HAS_AWAY_STATE:           64
 } as const;
 
-/**
- * @internal
- */
 export type WaterHeaterCommandHasField = typeof WaterHeaterCommandHasField[keyof typeof WaterHeaterCommandHasField];
 
 /**
  * Water-heater state-side packed-bits record (state response). Maps each consumer-facing boolean to its bit position in the packed `state` uint32 field
  * (field 6 on `WaterHeaterStateResponse`). The schema's `water_heater.state.packedBitsFields.state.bits` slot references this record by name; the regression test
  * asserts reference identity so the bit values live in exactly one place.
- * @internal
  */
 export const WATER_HEATER_STATE_INBOUND_BITS = {
 
@@ -246,7 +237,6 @@ export const WATER_HEATER_STATE_INBOUND_BITS = {
  * Water-heater command-side packed-bits record (command request). Mirrors {@link WATER_HEATER_STATE_INBOUND_BITS} but adds each bit's `hasFieldBit` - the bit the
  * encoder ORs into the `has_fields` carrier (field 2) when the consumer touches the named boolean. The schema's `water_heater.command.packedBitsFields.state.bits`
  * slot references this record by name; the regression test asserts reference identity.
- * @internal
  */
 export const WATER_HEATER_STATE_COMMAND_BITS = {
 
@@ -320,7 +310,6 @@ export type AlarmControlPanelState = typeof AlarmControlPanelState[keyof typeof 
  * Outbound device-request tag used in `BluetoothDeviceRequest` (`api.proto` §id 68). The deprecated `CONNECT=0` value is intentionally absent - this client
  * uses the V3 variants (`CONNECT_V3_WITH_CACHE`, `CONNECT_V3_WITHOUT_CACHE`) unconditionally so what decides cached-vs-uncached is the caller's explicit choice
  * rather than a silent default. Mirrors `api.proto` `BluetoothDeviceRequestType` (§api.proto, `BluetoothDeviceRequest.request_type`).
- * @internal
  */
 export const BluetoothDeviceRequestType = {
 
@@ -332,9 +321,6 @@ export const BluetoothDeviceRequestType = {
   CLEAR_CACHE:              6
 } as const;
 
-/**
- * @internal
- */
 export type BluetoothDeviceRequestType = typeof BluetoothDeviceRequestType[keyof typeof BluetoothDeviceRequestType];
 
 /**
@@ -762,7 +748,6 @@ export type UpdateCommand = typeof UpdateCommand[keyof typeof UpdateCommand];
  * - **Device-to-client** - `HOME_ID_CHANGE` notifies that the device's Z-Wave home id has changed. The new home id is carried in the request's `data` field, encoded as
  *   a 4-byte big-endian uint32 per the ESPHome firmware's `zwave_proxy` component. The proto does not document the encoding inline; the 4-byte big-endian assumption
  *   mirrors the only encoding the upstream component emits.
- * @internal
  */
 export const ZWaveProxyRequestType = {
 
@@ -771,9 +756,6 @@ export const ZWaveProxyRequestType = {
   HOME_ID_CHANGE: 2
 } as const;
 
-/**
- * @internal
- */
 export type ZWaveProxyRequestType = typeof ZWaveProxyRequestType[keyof typeof ZWaveProxyRequestType];
 
 /* eslint-enable sort-keys */

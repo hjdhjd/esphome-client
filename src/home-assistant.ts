@@ -94,8 +94,6 @@ export interface HomeAssistantStateRequest {
  * @remarks The {@link HomeAssistantApi} memoizes one of these objects in its constructor and exposes it via {@link HomeAssistantApi.inboundContext}. The host
  * forwards that accessor into the `RunPhaseHost` composition so the per-message dispatcher in `run-phase-handlers` reuses the same
  * cached context for every inbound HA-bridge frame, avoiding per-message allocation.
- *
- * @internal
  */
 export interface HomeAssistantInboundContext {
 
@@ -115,7 +113,6 @@ export interface HomeAssistantInboundContext {
  *   consistent).
  * @property send - Synchronous frame-send hook for the outbound `SUBSCRIBE_HOMEASSISTANT_SERVICES_REQUEST` / `SUBSCRIBE_HOME_ASSISTANT_STATES_REQUEST` /
  *   `HOME_ASSISTANT_STATE_RESPONSE` wires.
- * @internal
  */
 export interface HomeAssistantApiHost {
 
@@ -136,9 +133,6 @@ export interface HomeAssistantApiHost {
  * unconditional passthrough: {@link HomeAssistantApi.sendState}'s optional `attribute` argument encodes field 3 only when the caller passes a non-empty string, and
  * {@link HomeAssistantApi.respondToAction}'s `options.errorMessage` / `options.responseData` each encode their field only when the caller supplies a value, matching
  * ESPHome's proto contract for those optional fields.
- *
- * The {@link HomeAssistantApi.inboundContext} accessor returns a frozen object built once at construction time from the host's `bus`, `log`, and `decode` members.
- * The frozen-and-memoized shape means the per-message dispatch in `run-phase-handlers` performs zero allocations on the inbound HA-bridge hot path.
  */
 export class HomeAssistantApi implements SubscriptionLifecycle {
 
@@ -188,11 +182,13 @@ export class HomeAssistantApi implements SubscriptionLifecycle {
   }
 
   /**
-   * Read the memoized inbound-dispatcher context. The host forwards this accessor into `RunPhaseHost` at construction time so the
-   * per-message dispatcher in `run-phase-handlers` reuses one cached context across every inbound `HOMEASSISTANT_SERVICE_RESPONSE` /
-   * `SUBSCRIBE_HOME_ASSISTANT_STATE_RESPONSE` frame.
+   * Read the memoized inbound-dispatcher context, a frozen object built once at construction from the host's `bus`, `log`, and `decode` members. The host
+   * forwards this accessor into `RunPhaseHost` at construction time, so the per-message dispatcher in `run-phase-handlers` reuses that one object for every
+   * inbound `HOMEASSISTANT_SERVICE_RESPONSE` / `SUBSCRIBE_HOME_ASSISTANT_STATE_RESPONSE` frame.
    *
    * @returns The frozen inbound context built at construction time.
+   *
+   * @internal Only the host reads this, when it wires the run-phase dispatcher; consumer code does not.
    */
   public get inboundContext(): HomeAssistantInboundContext {
 
@@ -358,7 +354,6 @@ export class HomeAssistantApi implements SubscriptionLifecycle {
  *
  * @param payload - The raw protobuf bytes for the response.
  * @param ctx - Inbound context with bus, log, and nested decoder (memoized by {@link HomeAssistantApi.inboundContext}).
- * @internal
  */
 export function dispatchHomeassistantService(payload: Buffer, ctx: HomeAssistantInboundContext): void {
 
@@ -398,7 +393,6 @@ export function dispatchHomeassistantService(payload: Buffer, ctx: HomeAssistant
  *
  * @param payload - The raw protobuf bytes for the request.
  * @param ctx - Inbound context with bus, log, and nested decoder (memoized by {@link HomeAssistantApi.inboundContext}).
- * @internal
  */
 export function dispatchHomeAssistantStateRequest(payload: Buffer, ctx: HomeAssistantInboundContext): void {
 

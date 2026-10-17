@@ -50,8 +50,6 @@ const DEFAULT_VOICE_REQUEST_TIMEOUT_MS = 5000;
 
 /**
  * Narrow interface the host implements for the voice-assistant sub-API. The sub-API never touches host private fields directly.
- *
- * @internal
  */
 export interface VoiceAssistantHost {
 
@@ -560,8 +558,6 @@ export class VoiceAssistantApi implements SubscriptionLifecycle {
 /**
  * Decode-and-emit context shared by every voice-assistant inbound handler. Carries the bus the handlers emit through, the logger they tag debug breadcrumbs to, and
  * the decoder used for nested protobuf payloads (the host injects its own decoder so the per-message field-count cap and warn callback stay consistent).
- *
- * @internal
  */
 export interface VoiceAssistantInboundContext {
 
@@ -575,7 +571,6 @@ export interface VoiceAssistantInboundContext {
  *
  * @param payload - The raw protobuf bytes for the request.
  * @param ctx - Inbound context with bus, log, and nested decoder.
- * @internal
  */
 export function dispatchVoiceAssistantRequest(payload: Buffer, ctx: VoiceAssistantInboundContext): void {
 
@@ -623,7 +618,6 @@ export function dispatchVoiceAssistantRequest(payload: Buffer, ctx: VoiceAssista
  *
  * @param payload - The raw protobuf bytes for the response.
  * @param ctx - Inbound context with bus, log, and nested decoder.
- * @internal
  */
 export function dispatchVoiceAssistantAnnounceFinished(payload: Buffer, ctx: VoiceAssistantInboundContext): void {
 
@@ -639,7 +633,6 @@ export function dispatchVoiceAssistantAnnounceFinished(payload: Buffer, ctx: Voi
  *
  * @param payload - The raw protobuf bytes for the response.
  * @param ctx - Inbound context with bus, log, and nested decoder.
- * @internal
  */
 export function dispatchVoiceAssistantConfiguration(payload: Buffer, ctx: VoiceAssistantInboundContext): void {
 
@@ -705,7 +698,6 @@ export function dispatchVoiceAssistantConfiguration(payload: Buffer, ctx: VoiceA
  *
  * @param payload - The raw protobuf bytes for the audio chunk.
  * @param ctx - Inbound context with bus, log, and nested decoder.
- * @internal
  */
 export function dispatchVoiceAssistantAudio(payload: Buffer, ctx: VoiceAssistantInboundContext): void {
 

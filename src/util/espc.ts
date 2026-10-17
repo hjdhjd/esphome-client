@@ -44,8 +44,6 @@ import { parseEntityId } from "../entity-id.ts";
  * @remarks Adding a mode to {@link ENTITY_SCHEMAS} automatically extends the CLI's accepted vocabulary - no parallel list to maintain. The static-lookup path (no
  * optional chaining) is safe because `ENTITY_SCHEMAS` uses `as const satisfies`, so TS knows at compile time that the climate schema has a command with
  * `enumMappings.mode`.
- *
- * @internal
  */
 export const CLIMATE_MODE_NAMES: ReadonlySet<string> = new Set(Object.keys(ENTITY_SCHEMAS.climate.command.enumMappings.mode));
 
@@ -57,8 +55,6 @@ type ClimateModeName = keyof typeof ENTITY_SCHEMAS["climate"]["command"]["enumMa
 
 /**
  * Type predicate over the climate mode vocabulary. Returns `true` iff `value` is one of the keys in `CLIMATE_MODE_NAMES`.
- *
- * @internal
  */
 export function isClimateMode(value: string): value is ClimateModeName {
 
@@ -87,8 +83,6 @@ const STRICT_INT_PATTERN = /^-?\d+$/;
 /**
  * Parse a string as a strict base-10 integer. Returns the parsed number when the input is a valid integer literal; returns `null` otherwise. This is the lookup-style
  * variant for call sites that have a non-numeric fallback path (e.g. {@link findEntity}, where a non-numeric identifier is a valid entity id, not an error).
- *
- * @internal
  */
 export function tryParseIntStrict(value: string): Nullable<number> {
 
@@ -157,7 +151,6 @@ function assertInRange(input: AssertInRangeInput): void {
  * @param range - The optional inclusive bounds the parsed value must lie within.
  * @returns The parsed integer.
  * @throws {@link CliError} when `value` is not a strict base-10 integer literal, or when a `range` is given and the value lies outside it.
- * @internal
  */
 export function parseIntOption(value: string, flag: string, range?: { readonly max: number; readonly min: number }): number {
 
@@ -196,7 +189,6 @@ const STRICT_FLOAT_PATTERN = /^-?(\d+(\.\d+)?|\.\d+)$/;
  * @param label - The flag or argument name to surface in the error message (e.g. "--brightness", "valve position").
  * @returns The parsed number.
  * @throws {@link CliError} when `value` is not a strict decimal literal.
- * @internal
  */
 export function parseFloatOption(value: string, label: string): number {
 
@@ -237,7 +229,6 @@ function normalizeToWireUnit(value: string, label: string, max: number): number 
  * @param label - The flag or argument name to surface in the error message (e.g. "--brightness").
  * @returns The value as a 0.0-1.0 fraction.
  * @throws {@link CliError} when `value` is not a decimal in the inclusive range 0-100.
- * @internal
  */
 export function parsePercent(value: string, label: string): number {
 
@@ -259,7 +250,6 @@ export function parsePercent(value: string, label: string): number {
  * @param label - The flag name to surface in error messages (e.g. "--rgb").
  * @returns The color as `{ b, g, r }` fractions in 0.0-1.0.
  * @throws {@link CliError} when the spec is neither valid hex nor a valid 0-255 triple.
- * @internal
  */
 export function parseRgb(spec: string, label: string): { b: number; g: number; r: number } {
 
@@ -302,7 +292,6 @@ export function parseRgb(spec: string, label: string): { b: number; g: number; r
  * @param source - A human-readable label identifying where the JSON came from (e.g. "--reconnect" or a file path).
  * @returns The parsed value, typed as `unknown` - the caller narrows at the assignment site.
  * @throws {@link CliError} when the input is not valid JSON.
- * @internal
  */
 export function parseJsonOption(value: string, source: string): unknown {
 
@@ -348,8 +337,6 @@ function parsePskOption(value: string | undefined): string | undefined {
 /**
  * Minimal write-only stream contract that {@link Printer} consumes. Both `process.stdout` and `process.stderr` satisfy this; tests inject an in-memory writer that
  * captures calls.
- *
- * @internal
  */
 export interface PrinterWritable {
 
@@ -359,8 +346,6 @@ export interface PrinterWritable {
 /**
  * Closed set of color names the {@link Printer} actually emits. Constraining this to a dedicated union (instead of inheriting the wider {@link styleText} format type)
  * keeps {@link LEVEL_THEME} self-documenting and lets the compiler flag any typo in a theme entry.
- *
- * @internal
  */
 export type ColorName = "gray" | "green" | "red" | "yellow";
 
@@ -368,16 +353,12 @@ export type ColorName = "gray" | "green" | "red" | "yellow";
  * The semantic CLI output levels the {@link Printer} emits. Distinct from the protocol-level {@link import("../api-constants.ts").LogLevel} enum (which describes
  * device log severity on the wire); these are the Printer's own user-facing categories. Adding a level is a single new entry in {@link LEVEL_THEME} plus a one-line
  * public method on {@link Printer}; the writer pipeline is parameterized over the level and picks up the change automatically.
- *
- * @internal
  */
 export type PrinterLevel = "data" | "debug" | "error" | "info" | "success" | "warn";
 
 /**
  * Per-level rendering metadata. `label` is the bracketed prefix written before the message (empty string for unprefixed levels); `color` is the prefix's foreground
  * color when color is enabled (`null` means the prefix is never colored, even with color on); `stderr` routes the line to stderr instead of stdout.
- *
- * @internal
  */
 export interface LevelTheme {
 
@@ -389,8 +370,6 @@ export interface LevelTheme {
 /**
  * The single source of truth for how each log level renders. Every divergence between levels - prefix, color, target stream - lives in one row of this table, so a
  * change to one level cannot drift from the others. Adding a new level is one row here plus one shim method on {@link Printer}.
- *
- * @internal
  */
 export const LEVEL_THEME: Readonly<Record<PrinterLevel, LevelTheme>> = {
 
@@ -410,8 +389,6 @@ export const LEVEL_THEME: Readonly<Record<PrinterLevel, LevelTheme>> = {
  * `color` is the single authority on whether ANSI escape codes are emitted. `tty` is independent and governs only the readline-interleave dance: whether we should
  * clear the prompt line and redraw on each write. The two flags are kept separate: conflating them lets color emission silently disagree with the printer's stated
  * configuration.
- *
- * @internal
  */
 export interface PrinterIO {
 
@@ -430,8 +407,6 @@ export interface PrinterIO {
  *    the prompt with the user's in-progress input intact. The interleave dance is encapsulated here so handlers don't have to know about it.
  *
  * Construct directly with explicit flags for tests; use {@link Printer.fromEnvironment} for production where the runtime environment governs color and TTY detection.
- *
- * @internal
  */
 export class Printer {
 
@@ -571,8 +546,6 @@ export class Printer {
  * Adapter that satisfies {@link EspHomeLogging} by routing every level through the CLI's {@link Printer}. Verbose mode lifts `debug` and `info` from suppressed to
  * surfaced; `warn`/`error` always surface. Informational library messages are quieted to debug-level by default because the library is chatty about expected
  * operations.
- *
- * @internal
  */
 export class CLILogger implements EspHomeLogging {
 
@@ -620,8 +593,6 @@ export class CLILogger implements EspHomeLogging {
 /**
  * Stringify and concatenate a list of mixed string/number parts. Used throughout the CLI's formatters to assemble multi-segment output lines without resorting to
  * template literals (which the house style forbids).
- *
- * @internal
  */
 export function joinParts(parts: (string | number)[]): string {
 
@@ -633,8 +604,6 @@ export function joinParts(parts: (string | number)[]): string {
 /**
  * Parsed shape of the CLI's global flags. Every field is always present; absence is encoded as `undefined`/`null` per the schema below so call sites don't need a
  * separate `in` check.
- *
- * @internal
  */
 export interface ParsedOptions {
 
@@ -649,8 +618,6 @@ export interface ParsedOptions {
 /**
  * Parsed shape of the CLI's command-scoped flags (the `--brightness`/`--rgb`/`--type` family that varies by command). Every field is `string | undefined` directly
  * from parseArgs; numeric and boolean coercion happens at the consumer.
- *
- * @internal
  */
 export interface CommandOptions {
 
@@ -668,8 +635,6 @@ export interface CommandOptions {
 /**
  * Minimal entity shape consumed by the CLI's lookup and dispatch helpers. Both `EspHomeClient.getEntitiesWithIds()` and `MockClient.getEntitiesWithIds()` return values
  * structurally compatible with this interface; the CLI never reads more than these fields off an entity.
- *
- * @internal
  */
 export interface EntityWithId {
 
@@ -682,8 +647,6 @@ export interface EntityWithId {
 /**
  * Structural client shape consumed by the CLI's per-entity-type dispatch (`executeControl`, `runInteractiveControl`, `handleInteractiveCommand`). Both
  * {@link EspHomeClient} and the testing mock client satisfy this; the CLI never reaches outside these methods during entity control dispatch.
- *
- * @internal
  */
 export interface ControlClient {
 
@@ -698,8 +661,6 @@ export interface ControlClient {
  * {@link EspHomeClient} and the {@link MockClient} satisfy it; src/util/espc.types.ts asserts that with a compile-time drift-guard so
  * a method the CLI needs can never silently leave either. The `run*` read-command policies take this interface (not the concrete client) so they are
  * unit-testable against MockClient, exactly as executeControl/handleInteractiveCommand take ControlClient.
- *
- * @internal
  */
 export interface CliClient extends ControlClient {
 
@@ -718,8 +679,6 @@ export interface CliClient extends ControlClient {
  *
  * @remarks `as const satisfies` preserves the literal types (so parseArgs can narrow `values.host` to `string | undefined`) AND validates each entry at compile time
  * against the `ParseArgsConfig["options"]` shape - a typo like `type: "strring"` would fail the build immediately rather than surfacing at runtime via parseArgs.
- *
- * @internal
  */
 export const CLI_OPTIONS = {
 
@@ -745,8 +704,6 @@ export const CLI_OPTIONS = {
 /**
  * Resolve a user-supplied identifier (numeric key or branded id string) against an entity list. Numeric keys win when the identifier parses as a number AND a matching
  * entity exists; the string-id fallback is exact-match. Returns `undefined` when no entity matches either path.
- *
- * @internal
  */
 export function findEntity(entities: EntityWithId[], identifier: string): EntityWithId | undefined {
 
@@ -829,8 +786,6 @@ async function createClient(options: ParsedOptions, printer: Printer): Promise<E
 /**
  * Render a {@link DeviceInfo} record as the multi-line string the CLI prints for `info` and the interactive REPL's `info` command. Pure: every output byte is a
  * function of the input record.
- *
- * @internal
  */
 export function formatDeviceInfo(info: DeviceInfo): string {
 
@@ -896,8 +851,6 @@ export function formatDeviceInfo(info: DeviceInfo): string {
  * Read-command policy for 'info': read the cached device-info record and render it (or warn when absent). Isolated from {@link handleInfo}'s connection lifecycle so
  * it is unit-testable against {@link CliClient} (the MockClient satisfies it) with no live connection required, mirroring how {@link executeControl} takes
  * {@link ControlClient}. The handler owns client construction and disposal; this function never disposes the client.
- *
- * @internal
  */
 export function runInfo(client: CliClient, printer: Printer): void {
 
@@ -968,8 +921,6 @@ async function handleRecord(invocation: CommandInvocation, printer: Printer): Pr
 /**
  * Render the metadata block for the `replay` command. Pure: every output is a function of the metadata record and the binary byte count. Returns a list of
  * `{ kind, line }` records so handlers can route info-level header lines and data-level detail rows to the right Printer channel.
- *
- * @internal
  */
 export function formatReplayMetadata(metadata: Partial<CaptureMetadata>, binBytes: number): { kind: "info" | "data" | "warn"; line: string }[] {
 
@@ -1054,8 +1005,6 @@ async function handleReplay(invocation: CommandInvocation, printer: Printer): Pr
  * Render a {@link ClientCapabilities} record as the multi-section block the CLI's `capabilities` command prints. Each section header is an `info`-level line; each
  * detail row is a `data`-level line. Returning a flat list of `{ kind, line }` records keeps the formatter pure while letting handlers route each line to the right
  * Printer channel.
- *
- * @internal
  */
 export function formatCapabilities(caps: ClientCapabilities): { kind: "info" | "data"; line: string }[] {
 
@@ -1093,8 +1042,6 @@ export function formatCapabilities(caps: ClientCapabilities): { kind: "info" | "
 /**
  * Read-command policy for 'capabilities': render the structured capability record, routing each line to the right Printer channel. Kept separate from
  * {@link handleCapabilities}'s connection lifecycle so it is unit-testable against {@link CliClient} with no live connection required.
- *
- * @internal
  */
 export function runCapabilities(client: CliClient, printer: Printer): void {
 
@@ -1126,8 +1073,6 @@ async function handleCapabilities(invocation: CommandInvocation, printer: Printe
  * Render the latest-state cache as the JSON document the CLI's `snapshot` command prints. The optional type filter is matched against the entity-id prefix (e.g.,
  * `--type sensor` matches every id starting with `sensor-`), mirroring the public `client.snapshotFor(type)` semantics. Buffer values are encoded as
  * `{ __buffer: "<base64>" }` so the output round-trips through JSON.parse without binary corruption.
- *
- * @internal
  */
 export function formatSnapshotJson(cache: ReadonlyMap<string, unknown>, typeFilter: Nullable<string> = null): string {
 
@@ -1152,8 +1097,6 @@ export function formatSnapshotJson(cache: ReadonlyMap<string, unknown>, typeFilt
  * replacer, which produces `{ type: "Buffer", data: number[] }`; this replacer detects that converted shape and rewrites it so the JSON output is round-trippable. The
  * shape match is structurally narrow (`type === "Buffer"` AND `data` is an array of numbers) so user-supplied state objects that happen to have a `type: "Buffer"`
  * field do not false-positive.
- *
- * @internal
  */
 export function bufferAwareJsonReplacer(_key: string, value: unknown): unknown {
 
@@ -1192,8 +1135,6 @@ const SNAPSHOT_CEILING_MS = 5000;
  * @param options.initialGraceMs - How long to wait for the first event before settling (empty when none arrives).
  * @param options.quietMs - After the first event, settle once no further event has arrived for this many milliseconds.
  * @returns A promise that resolves (never rejects) when the stream settles or the ceiling is reached.
- *
- * @internal
  */
 export async function awaitQuietPeriod(subscribe: (onEvent: () => void) => Disposable,
   { ceilingMs, initialGraceMs, quietMs }: { ceilingMs: number; initialGraceMs: number; quietMs: number }): Promise<void> {
@@ -1230,8 +1171,6 @@ export async function awaitQuietPeriod(subscribe: (onEvent: () => void) => Dispo
  * {@link handleSnapshot}'s connection lifecycle so it is unit-testable against {@link CliClient} with no live connection required. The `--wait` parse stays in the
  * handler (it is a pre-connect fail-fast); the resolved `fixedWaitMs` is passed in. The options-object param carries heterogeneous args, matching the house
  * options-object rule and the {@link executeControl} precedent.
- *
- * @internal
  */
 export async function runSnapshot(client: CliClient, printer: Printer, options: { fixedWaitMs: number | undefined; typeFilter: Nullable<string> }): Promise<void> {
 
@@ -1267,8 +1206,6 @@ async function handleSnapshot(invocation: CommandInvocation, printer: Printer): 
  * Render the sub-device listing for the CLI's `devices` command. The first argument is the sub-device list; the second is a function that returns the entity count for
  * a given device id (decouples this formatter from the live `client.entitiesByDevice` so tests can pass a deterministic counter). Returns kind-tagged lines so handlers
  * route to the right Printer channel.
- *
- * @internal
  */
 export function formatSubDeviceList(subDevices: readonly { id: number; name?: string; areaId?: number }[],
   entityCountFor: (deviceId: number) => number): { kind: "info" | "data"; line: string }[] {
@@ -1302,8 +1239,6 @@ export function formatSubDeviceList(subDevices: readonly { id: number; name?: st
 /**
  * Read-command policy for 'devices': render the sub-device listing with per-device entity counts, routing each line to the right Printer channel. Kept separate from
  * {@link handleDevices}'s connection lifecycle so it is unit-testable against {@link CliClient} with no live connection required.
- *
- * @internal
  */
 export function runDevices(client: CliClient, printer: Printer): void {
 
@@ -1401,8 +1336,6 @@ async function handleWatch(invocation: CommandInvocation, printer: Printer): Pro
  * Render a list of entity records as the CLI's `list` output (one line per entity, optionally filtered by entity type substring). Pure: every output byte is a function
  * of the inputs. The type filter is matched case-insensitively as a substring of `entity.type`, mirroring the loose-match behavior consumers expect from a CLI flag
  * (e.g., `--type sensor` matches both `sensor` and `binary_sensor`).
- *
- * @internal
  */
 export function formatEntityList(entities: readonly EntityWithId[], typeFilter: Nullable<string> = null): string[] {
 
@@ -1425,8 +1358,6 @@ export function formatEntityList(entities: readonly EntityWithId[], typeFilter: 
  * Read-command policy for 'list': print the discovered-entities banner and one line per entity (optionally type-filtered). Kept separate from {@link handleList}'s
  * connection lifecycle so it is unit-testable against {@link CliClient} with no live connection required. The handler resolves `typeFilter` from its `--type` option
  * (null when absent) and passes it in, so the policy stays a pure render step with no option handling of its own.
- *
- * @internal
  */
 export function runList(client: CliClient, printer: Printer, typeFilter: Nullable<string>): void {
 
@@ -1452,8 +1383,6 @@ async function handleList(invocation: CommandInvocation, printer: Printer): Prom
  * Render one telemetry event as the line the CLI's `monitor` command prints: the time it arrived, the entity, its type and key, then the event as JSON. Pure: every
  * output byte is a function of the inputs. Buffer values such as a camera image are encoded as `{ __buffer: "<base64>" }` through {@link bufferAwareJsonReplacer}
  * rather than as an array of byte values.
- *
- * @internal
  */
 export function formatMonitorTelemetry(data: TelemetryEvent, receivedAt: Date): string {
 
@@ -1569,8 +1498,6 @@ async function handleControl(invocation: CommandInvocation, printer: Printer): P
  * set tracks the registry automatically: adding a controllable entity type to `ENTITY_SCHEMAS` extends this union with no parallel list to maintain, and the
  * {@link CONTROL_BUILDERS} mapped type then forces a builder to exist for it. A missing builder is a compile error, not a silently-unsupported entity the user only
  * discovers at runtime.
- *
- * @internal
  */
 export type ControllableEntityType = {
 
@@ -1580,8 +1507,6 @@ export type ControllableEntityType = {
 /**
  * Context handed to every control builder: the resolved entity plus the user's positional argument tokens (everything after the entity identifier) and the parsed
  * command flags. Both the non-interactive `control` command and the interactive REPL populate this shape, so a single builder serves both surfaces.
- *
- * @internal
  */
 export interface ControlContext {
 
@@ -1609,8 +1534,6 @@ export interface ControlContext {
  * @remarks A {@link TransmitEntityType} builder also returns `transmit: true`, which sends the options through the client's capability-checked `transmitRawTimings`
  * rather than `command()`. The conditional member makes the flag required on exactly those builders and absent on every other, so a table entry and its send path
  * cannot disagree.
- *
- * @internal
  */
 export type BuiltCommand<T extends ControllableEntityType> = {
 
@@ -1623,8 +1546,6 @@ export type BuiltCommand<T extends ControllableEntityType> = {
  * entity's argument grammar; the grammar genuinely diverges per type (a `switch` takes `on|off`, a `date` takes `YYYY-MM-DD`, an `alarm_control_panel` takes an
  * arm/disarm verb plus an optional code), so a per-type function reads more clearly than one table-driven parser - while the registry's mapped type still guarantees
  * coverage of every controllable entity.
- *
- * @internal
  */
 export type ControlBuilder<T extends ControllableEntityType> = (context: ControlContext) => BuiltCommand<T>;
 
@@ -1632,8 +1553,6 @@ export type ControlBuilder<T extends ControllableEntityType> = (context: Control
  * The type-erased result of {@link buildControlCommand}. The options are fully schema-typed inside each builder (where the checking matters); at the dispatch boundary
  * the per-type link is gone, so the options surface as `unknown` and are bridged to the client's send methods in exactly one place ({@link sendEntityCommand}), which
  * branches on the builder's `transmit` flag.
- *
- * @internal
  */
 export interface ResolvedControlCommand {
 
@@ -1851,8 +1770,6 @@ function parseTransmitArgs(args: readonly string[], label: string): { carrierFre
  * every entity type with a command block in {@link ENTITY_SCHEMAS} MUST have an entry, or the file fails to compile. Adding a new controllable entity type to the schema
  * surfaces here as a missing-property error rather than as a silently-unsupported entity discovered at runtime. Both the non-interactive `control` command
  * ({@link executeControl}) and the interactive REPL ({@link runInteractiveControl}) dispatch through this one table, so the two surfaces can never drift in coverage.
- *
- * @internal
  */
 /* eslint-disable camelcase */
 export const CONTROL_BUILDERS: { readonly [T in ControllableEntityType]: ControlBuilder<T> } = {
@@ -2153,8 +2070,6 @@ export const CONTROL_BUILDERS: { readonly [T in ControllableEntityType]: Control
 /**
  * Type guard: is `type` a controllable entity type (one with a command block in {@link ENTITY_SCHEMAS})? Drives the read-only-vs-controllable decision in
  * {@link buildControlCommand} straight from the schema, so read-only classification never drifts from the registry.
- *
- * @internal
  */
 export function isControllableType(type: string): type is ControllableEntityType {
 
@@ -2167,8 +2082,6 @@ export function isControllableType(type: string): type is ControllableEntityType
  * Resolve and run the control builder for an entity, returning the command options to send plus an action summary. Throws {@link CliError} for unknown entity types,
  * read-only entities (no command block in the schema), and any per-builder input violation. This is the single translation point both control surfaces share, which is
  * what keeps the non-interactive and interactive grammars from diverging.
- *
- * @internal
  */
 export function buildControlCommand(entity: EntityWithId, args: readonly string[], options: CommandOptions): ResolvedControlCommand {
 
@@ -2196,8 +2109,6 @@ export function buildControlCommand(entity: EntityWithId, args: readonly string[
  * send methods: {@link buildControlCommand} has already validated the options against the entity's schema, but the compiler cannot re-derive that link through the
  * runtime-narrowed type, so the casts live here and nowhere else. A transmit goes through `transmitRawTimings`, whose capability check refuses an entity without the
  * transmitter bit; every other command goes through `command()`.
- *
- * @internal
  */
 export function sendEntityCommand(client: ControlClient, entity: EntityWithId, resolved: ResolvedControlCommand): void {
 
@@ -2213,8 +2124,6 @@ export function sendEntityCommand(client: ControlClient, entity: EntityWithId, r
 
 /**
  * Options for {@link executeControl}.
- *
- * @internal
  */
 export interface ExecuteControlInput {
 
@@ -2249,8 +2158,6 @@ export interface ExecuteControlInput {
  * summary, sends the command, then reports completion with `success("Command sent.")`. Throws {@link CliError} on user input violations (read-only entities, unknown
  * types, malformed values, missing positional args); the caller `handleControl` propagates through the top-level catch so the process exits non-zero with a clean
  * message. Coverage of every controllable entity type is guaranteed by the registry's mapped type.
- *
- * @internal
  */
 export function executeControl(input: ExecuteControlInput): void {
 
@@ -2265,8 +2172,6 @@ export function executeControl(input: ExecuteControlInput): void {
 /**
  * Print the help text for the interactive REPL. Output flows through the supplied {@link Printer} so tests capture lines via `PrinterIO` rather than monkey-patching
  * `console`.
- *
- * @internal
  */
 export function printInteractiveHelp(printer: Printer): void {
 
@@ -2286,8 +2191,6 @@ export function printInteractiveHelp(printer: Printer): void {
 /**
  * Dispatch a single REPL command line. Returns `false` when the user typed `quit`/`exit` (the loop should terminate), `true` for every other input. Unknown commands
  * print a one-line warning and return `true` so the REPL stays alive across typos.
- *
- * @internal
  */
 export function handleInteractiveCommand(line: string, client: ControlClient, printer: Printer): boolean {
 
@@ -2363,8 +2266,6 @@ export function handleInteractiveCommand(line: string, client: ControlClient, pr
  * interactive and non-interactive surfaces can never drift in entity-type coverage. The only behavioral difference is failure handling: a user-facing failure
  * ({@link isUserFacingError}), such as a {@link CliError} from a builder or the client refusing a transmit, is reported via `printer.error()` and the loop continues,
  * rather than propagating to a top-level catch.
- *
- * @internal
  */
 export function runInteractiveControl(parts: string[], client: ControlClient, printer: Printer): void {
 
@@ -2412,8 +2313,6 @@ export function runInteractiveControl(parts: string[], client: ControlClient, pr
 /**
  * Render one telemetry event as the line interactive mode prints: the entity and its type, then the event as JSON. Pure: every output byte is a function of the input.
  * Buffer values such as a camera image are encoded as `{ __buffer: "<base64>" }` through {@link bufferAwareJsonReplacer} rather than as an array of byte values.
- *
- * @internal
  */
 export function formatInteractiveTelemetry(data: TelemetryEvent): string {
 
@@ -2478,8 +2377,6 @@ async function handleInteractive(invocation: CommandInvocation, printer: Printer
 /**
  * Shape of a single command in the CLI registry. Every command declares its description, usage, optional detailed-usage block (for commands with subcommand-like
  * syntax such as `control`), at least one example, and the handler function. Tests assert this shape directly to verify every registry entry is well-formed.
- *
- * @internal
  */
 export interface CliCommand {
 
@@ -2493,8 +2390,6 @@ export interface CliCommand {
 /**
  * Uniform handler signature shared by every command in {@link CLI_COMMANDS}. Each handler takes the typed invocation and the {@link Printer} and returns a promise
  * that resolves on success or rejects with {@link CliError} or a typed client `EspHomeError` for a user-facing failure (or another `Error` subclass for internal bugs).
- *
- * @internal
  */
 export type CommandHandler = (invocation: CommandInvocation, printer: Printer) => Promise<void>;
 
@@ -2502,8 +2397,6 @@ export type CommandHandler = (invocation: CommandInvocation, printer: Printer) =
  * Single source of truth for the CLI's command surface. The parser narrows positional command names against this table, the dispatcher routes to `handler` here, and
  * the help renderer iterates this table to render descriptions and examples. Adding a command is a one-line table extension; removing one drops every consumer's
  * reference automatically.
- *
- * @internal
  */
 export const CLI_COMMANDS = {
 
@@ -2624,24 +2517,18 @@ export const CLI_COMMANDS = {
 
 /**
  * Union of every command name accepted by the CLI. Derived from {@link CLI_COMMANDS} so adding/removing a command updates the type automatically.
- *
- * @internal
  */
 export type CommandName = keyof typeof CLI_COMMANDS;
 
 /**
  * Discriminated union describing every valid CLI invocation. The parser produces exactly one of these variants; the dispatcher's exhaustiveness check (the
  * `_exhaustive: never` assignment) guarantees every variant is handled.
- *
- * @internal
  */
 export type Invocation = { kind: "help" } | CommandInvocation;
 
 /**
  * Concrete invocation variant for an actionable command. Carries the resolved command name, the post-command positional args, the command-scoped flags, and the
  * global options.
- *
- * @internal
  */
 export interface CommandInvocation {
 
@@ -2656,8 +2543,6 @@ export interface CommandInvocation {
  * Type predicate that narrows a runtime string to a {@link CommandName}. Used by {@link parseInvocation} after positional resolution. Uses `Object.hasOwn` rather than
  * the `in` operator so prototype-chain keys (`__proto__`, `toString`, `hasOwnProperty`) are correctly rejected as unknown commands instead of crashing the dispatcher
  * downstream when it tries to invoke `.handler` on a non-spec value.
- *
- * @internal
  */
 export function isCommandName(value: string): value is CommandName {
 
@@ -2670,8 +2555,6 @@ export function isCommandName(value: string): value is CommandName {
 /**
  * Parse the CLI invocation from a list of argv tokens. Defaults to `process.argv.slice(2)` when `argv` is omitted, matching production behaviour. Exposed for
  * direct unit testing without spawning a subprocess.
- *
- * @internal
  */
 export function parseInvocation(argv: readonly string[] = process.argv.slice(2)): Invocation {
 
@@ -2741,8 +2624,6 @@ export function parseInvocation(argv: readonly string[] = process.argv.slice(2))
 /**
  * Dispatch a parsed {@link Invocation} to the corresponding side effect. `command` invocations route through the {@link CLI_COMMANDS} registry; `help` invocations
  * render the help text. The exhaustiveness check on the switch's default branch ensures a new {@link Invocation} variant cannot ship without an explicit dispatch.
- *
- * @internal
  */
 export async function dispatch(invocation: Invocation, printer: Printer): Promise<void> {
 
@@ -2772,8 +2653,6 @@ export async function dispatch(invocation: Invocation, printer: Printer): Promis
 /**
  * Render the help text by iterating {@link CLI_COMMANDS}. Output flows through the supplied {@link Printer} so tests capture lines via `PrinterIO`; adding or removing
  * a command updates the help automatically because the registry is the contract.
- *
- * @internal
  */
 export function showUsage(printer: Printer): void {
 

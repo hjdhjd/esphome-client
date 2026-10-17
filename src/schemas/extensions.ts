@@ -55,8 +55,6 @@ export type SchemaForExtended<T extends string, Extras extends ExtraSchemaSet> =
  * Per-instance schemas table. The runtime SSOT every downstream consumer (run-phase dispatcher, command encoder, discovery decoder, telemetry decoder) consults for
  * schema lookups. Built once at client construction by {@link buildSchemasTable} as the union of {@link ENTITY_SCHEMAS} and the consumer's optional
  * {@link ExtraSchemaSet}; immutable afterwards. Keyed by entity-type string for O(1) `getSchema()` access.
- *
- * @internal
  */
 export type SchemasTable = Readonly<Record<string, EntitySchema>>;
 
@@ -72,7 +70,6 @@ export type SchemasTable = Readonly<Record<string, EntitySchema>>;
  * @param extras - The consumer-supplied extras, or `undefined` when no extras were provided.
  * @returns A merged table keyed by entity-type string. With no extras, the table reduces to a frozen view over the base.
  * @throws {@link ConfigurationError} when an extras key collides with a builtin entity-type key.
- * @internal
  */
 export function buildSchemasTable(base: typeof ENTITY_SCHEMAS, extras: ExtraSchemaSet | undefined): SchemasTable {
 
@@ -99,7 +96,6 @@ export function buildSchemasTable(base: typeof ENTITY_SCHEMAS, extras: ExtraSche
  *
  * @param table - The per-instance schemas table.
  * @returns A read-only (by type) set of `LIST_ENTITIES_*_RESPONSE` message-type identifiers (plus `LIST_ENTITIES_SERVICES_RESPONSE`).
- * @internal
  */
 export function buildListEntitiesMessageTypes(table: SchemasTable): ReadonlySet<number> {
 
@@ -125,7 +121,6 @@ export function buildListEntitiesMessageTypes(table: SchemasTable): ReadonlySet<
  *
  * @param table - The per-instance schemas table.
  * @returns A read-only (by type) set of `*_STATE_RESPONSE` (and the button-echo) message-type identifiers.
- * @internal
  */
 export function buildStateMessageTypes(table: SchemasTable): ReadonlySet<number> {
 
@@ -152,7 +147,6 @@ export function buildStateMessageTypes(table: SchemasTable): ReadonlySet<number>
  *
  * @param table - The per-instance schemas table.
  * @returns A read-only (by type) map from state-response message-type identifier to the schema that resolves it.
- * @internal
  */
 export function buildSchemaByStateMessageType(table: SchemasTable): ReadonlyMap<number, EntitySchema> {
 
@@ -173,7 +167,6 @@ export function buildSchemaByStateMessageType(table: SchemasTable): ReadonlyMap<
  *
  * @param table - The per-instance schemas table.
  * @returns A read-only (by type) map from `LIST_ENTITIES_*_RESPONSE` message-type identifier to the schema that resolves it.
- * @internal
  */
 export function buildSchemaByListEntitiesMessageType(table: SchemasTable): ReadonlyMap<number, EntitySchema> {
 
@@ -195,7 +188,6 @@ export function buildSchemaByListEntitiesMessageType(table: SchemasTable): Reado
  * @param table - The per-instance schemas table.
  * @param type - The entity-type string (e.g. `"light"`, `"door_cover"`).
  * @returns The matching {@link EntitySchema}, or `undefined` when no schema is registered for that type.
- * @internal
  */
 export function getSchemaIn(table: SchemasTable, type: string): EntitySchema | undefined {
 

@@ -19,8 +19,6 @@ import type { ENTITY_SCHEMAS } from "./entity-schemas.ts";
 /**
  * The shape returned by an adapter is a Record<string, unknown> that the schema-driven encoder consumes. Adapters are pure - they take the consumer's options object
  * and return a freshly-shaped object without mutating the input.
- *
- * @internal
  */
 export type CommandAdapter = (options: Record<string, unknown>) => Record<string, unknown>;
 
@@ -32,8 +30,6 @@ export type CommandAdapter = (options: Record<string, unknown>) => Record<string
  * `omit: "red" | "green" | "blue" | "hasRgb"` and `add: { rgb }`, the runtime adapter for light must accept the `rgb` key and emit the four flat keys. Adding a new
  * type-level override is two coordinated entries: the type table in `overrides.ts` and the runtime function here. Not every adapter has a matching override entry,
  * though - an adapter may exist purely for runtime normalization (see `siren`, which rounds a numeric field with no corresponding `CommandOverrides` entry).
- *
- * @internal
  */
 export const COMMAND_ADAPTERS: { [K in keyof typeof ENTITY_SCHEMAS]?: CommandAdapter } = {
 

@@ -166,8 +166,6 @@ export interface ClientCapabilities {
 
 /**
  * Inputs to the capability parser.
- *
- * @internal
  */
 export interface ParseCapabilitiesInput {
 
@@ -216,7 +214,6 @@ export function disconnectedCapabilities(): ClientCapabilities {
  *
  * @param input - Parser inputs.
  * @returns A populated capability record. Returns the {@link disconnectedCapabilities} shape when `deviceInfo` is null.
- * @internal
  */
 export function parseCapabilities(input: ParseCapabilitiesInput): ClientCapabilities {
 

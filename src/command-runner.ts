@@ -284,7 +284,6 @@ interface CommandEncoding {
  *
  * @param input - The {@link EncodeCommandInput} bag.
  * @returns The encode result paired with the adapted wire options.
- * @internal
  */
 export function encodeCommand(input: EncodeCommandInput): CommandEncoding {
 

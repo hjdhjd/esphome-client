@@ -126,8 +126,6 @@ export interface CommandPackedBitsField {
  * supply {@link InboundPackedBitsField} entries and command roles supply {@link CommandPackedBitsField} entries, so the union covers every role. The
  * `PackedBitNamesOf` and `ApplyPackedBitsFields` projections in `derived.ts` take this as their parameter constraint, and the `infer` at each of their call sites
  * narrows to it.
- *
- * @internal
  */
 export type PackedBitsRecord = Record<string, InboundPackedBitsField | CommandPackedBitsField>;
 
@@ -1709,7 +1707,6 @@ export const ENTITY_SCHEMAS = {
   }
 } as const satisfies Record<string, EntitySchema>;
 
-
 /**
  * Look up an entity schema by its runtime entity-type string. Use this when the entity type is only known at runtime (for example, from a parsed message); for static
  * lookups where the entity type is a known literal, prefer `ENTITY_SCHEMAS.foo` directly so consumers retain the literal types.
@@ -1719,7 +1716,6 @@ export const ENTITY_SCHEMAS = {
  *
  * @param type - The entity type string (e.g., "climate", "light").
  * @returns The matching entity schema, or undefined if no schema is registered for that type.
- * @internal
  */
 export function getEntitySchema(type: string): EntitySchema | undefined {
 

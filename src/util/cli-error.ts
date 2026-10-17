@@ -21,8 +21,6 @@ import { EspHomeError } from "../errors.ts";
  *
  * @remarks Throwing one of these is the canonical way to abort a command - the pattern lets handlers `throw` instead of `process.exit`, which keeps `using` cleanup
  * working and lets ESLint and TypeScript see case-block bodies as terminated (no `break` after `process.exit` and no unreachable code).
- *
- * @internal
  */
 export class CliError extends Error {
 
@@ -36,8 +34,6 @@ export class CliError extends Error {
 /**
  * Whether a thrown value is a user-facing failure: a CLI usage error ({@link CliError}) or a typed client `EspHomeError` is the user's to read and prints as its message
  * alone, while anything else is a bug and stays "Fatal".
- *
- * @internal
  */
 export function isUserFacingError(error: unknown): error is CliError | EspHomeError {
 
@@ -53,8 +49,6 @@ export function isUserFacingError(error: unknown): error is CliError | EspHomeEr
  * @param attempt - The pending connect.
  * @returns What the connect resolved with.
  * @throws {@link CliError} naming the host, with the `TimeoutError` as its `cause`, when the connect timed out; any other rejection as it is.
- *
- * @internal
  */
 export async function translateConnectFailure<T>(host: string, attempt: Promise<T>): Promise<T> {
 
