@@ -5,12 +5,14 @@
 import { describe, test } from "node:test";
 import { Buffer } from "node:buffer";
 import type { ClientEventsMap } from "./esphome-client.ts";
+import { ConnectionError } from "./errors.ts";
 import { EventBus } from "./event-bus.ts";
 import { MessageType } from "./protocol/message-types.ts";
 import { VoiceAssistantApi } from "./voice-assistant.ts";
 import type { VoiceAssistantHost } from "./voice-assistant.ts";
 import assert from "node:assert/strict";
 import { decodeProtobuf } from "./protocol/codec.ts";
+import { inspect } from "node:util";
 
 interface CapturedFrame {
 
@@ -30,6 +32,12 @@ function makeHost(): VoiceAssistantHost & { bus: EventBus<ClientEventsMap>; sent
     send: (type: number, payload: Buffer): void => { sent.push({ payload, type }); },
     sent
   };
+}
+
+// A teardown hands a pending configuration read its own cause-less AbortError, named for the read. A timeout or caller abort carries its reason as an own `cause`.
+function isConfigurationTeardown(err: unknown): boolean {
+
+  return (err instanceof DOMException) && (err.name === "AbortError") && !Object.hasOwn(err, "cause") && err.message.includes("configuration read");
 }
 
 describe("VoiceAssistantApi.subscribe / unsubscribe / isSubscribed", () => {
@@ -460,7 +468,7 @@ describe("VoiceAssistantApi.announce", () => {
 
     const announcePromise = api.announce({ mediaId: "alert.mp3" }, { timeoutMs: 1000 });
 
-    // Yield so the announce subscribes to voiceAssistantAnnounceFinished before we emit.
+    // Yield so the announce claims its pending slot before we emit.
     await new Promise((resolve) => setImmediate(resolve));
 
     assert.equal(host.sent[0]?.type, MessageType.VOICE_ASSISTANT_ANNOUNCE_REQUEST);
@@ -480,7 +488,7 @@ describe("VoiceAssistantApi.announce", () => {
     const announcePromise = api.announce(
       { conversationId: "conv-7", mediaId: "alert.mp3", preannounceMediaId: "ding.mp3", startConversation: true }, { timeoutMs: 1000 });
 
-    // Yield so the announce subscribes and sends before we inspect the captured frame.
+    // Yield so the announce claims its slot and sends before we inspect the captured frame.
     await new Promise((resolve) => setImmediate(resolve));
 
     assert.equal(host.sent[0]?.type, MessageType.VOICE_ASSISTANT_ANNOUNCE_REQUEST);
@@ -495,7 +503,7 @@ describe("VoiceAssistantApi.announce", () => {
     assert.equal(fields[4]?.[0], 1, "field 4 carries startConversation=true -> 1");
     assert.equal(Buffer.isBuffer(conversationIdBuf) && conversationIdBuf.toString("utf8"), "conv-7", "field 5 carries the conversationId");
 
-    // Resolve the outstanding once-promise so the test does not leak an open handle.
+    // Resolve the outstanding announce so the test does not leak an open handle.
     host.bus.emit("voiceAssistantAnnounceFinished", true);
     await announcePromise;
   });
@@ -520,6 +528,177 @@ describe("VoiceAssistantApi.announce", () => {
     controller.abort();
 
     await assert.rejects(promise, { name: "AbortError" }, "the caller's aborted signal rejects the announce");
+  });
+
+  test("a second overlapping announce throws ANNOUNCE_IN_FLIGHT and the first resolves with its own reply", async () => {
+
+    const host = makeHost();
+    const api = new VoiceAssistantApi(host);
+    const first = api.announce({ text: "first" }, { timeoutMs: 1000 });
+
+    await assert.rejects(api.announce({ text: "second" }, { timeoutMs: 1000 }), (err: unknown) => {
+
+      return (err instanceof ConnectionError) && (err.code === "ANNOUNCE_IN_FLIGHT");
+    });
+
+    assert.equal(host.sent.length, 1, "the refused announce sends no request");
+
+    // A false reply shows the first call resolves with the value its reply carried rather than a fixed success flag.
+    host.bus.emit("voiceAssistantAnnounceFinished", false);
+
+    assert.equal(await first, false, "the first announce resolves with the reply to its own request");
+  });
+
+  test("an announce after a timed-out announce is admitted and resolves", async () => {
+
+    const host = makeHost();
+    const api = new VoiceAssistantApi(host);
+
+    await assert.rejects(api.announce({ text: "first" }, { timeoutMs: 10 }), { name: "AbortError" });
+
+    const next = api.announce({ text: "second" }, { timeoutMs: 1000 });
+
+    host.bus.emit("voiceAssistantAnnounceFinished", true);
+
+    assert.equal(await next, true, "the timeout releases the slot for the next announce");
+    assert.equal(host.sent.length, 2, "each announce sends its own request");
+  });
+
+  test("clearConnectionState() rejects a pending announce with an AbortError that carries no cause", async () => {
+
+    const host = makeHost();
+    const api = new VoiceAssistantApi(host);
+
+    // A long timeout ensures the rejection comes from the connection reset, not the timeout source.
+    const pending = api.announce({ text: "hi" }, { timeoutMs: 10000 });
+
+    api.clearConnectionState();
+
+    await assert.rejects(pending, (err: unknown) => (err instanceof DOMException) && (err.name === "AbortError") && (err.cause === undefined));
+
+    // The reset releases the slot, so a following announce is admitted.
+    const next = api.announce({ text: "again" }, { timeoutMs: 1000 });
+
+    host.bus.emit("voiceAssistantAnnounceFinished", true);
+
+    assert.equal(await next, true);
+  });
+
+  test("a timeout rejects with an AbortError whose cause is the TimeoutError", async () => {
+
+    const host = makeHost();
+    const api = new VoiceAssistantApi(host);
+
+    await assert.rejects(api.announce({ text: "hi" }, { timeoutMs: 10 }), (err: unknown) => {
+
+      return (err instanceof DOMException) && (err.name === "AbortError") && (err.cause instanceof DOMException) && (err.cause.name === "TimeoutError");
+    });
+  });
+
+  test("a caller abort with a custom reason rejects with an AbortError whose cause is that reason", async () => {
+
+    const host = makeHost();
+    const api = new VoiceAssistantApi(host);
+    const controller = new AbortController();
+    const reason = new Error("The caller gave up on the announcement.");
+
+    // A long timeout ensures the rejection comes from the caller's signal, not the timeout source.
+    const promise = api.announce({ text: "hi" }, { signal: controller.signal, timeoutMs: 10000 });
+
+    controller.abort(reason);
+
+    await assert.rejects(promise, (err: unknown) => (err instanceof DOMException) && (err.name === "AbortError") && (err.cause === reason));
+  });
+
+  test("a reply delivered synchronously inside the send resolves the announce", async () => {
+
+    const host = makeHost();
+
+    // The reply reaches the bus before send returns, so it only settles the call when the pending slot was claimed ahead of the send.
+    const api = new VoiceAssistantApi({
+
+      ...host,
+      send: (type: number, payload: Buffer): void => {
+
+        host.send(type, payload);
+        host.bus.emit("voiceAssistantAnnounceFinished", true);
+      }
+    });
+
+    assert.equal(await api.announce({ text: "hi" }, { timeoutMs: 1000 }), true);
+  });
+
+  test("a late reply after a timed-out announce is logged at debug and still reaches bus consumers once", async () => {
+
+    const host = makeHost();
+    const debugLines: string[] = [];
+    const api = new VoiceAssistantApi({ ...host, log: { ...host.log, debug: (message: string): void => { debugLines.push(message); } } });
+    let delivered = 0;
+
+    host.bus.on("voiceAssistantAnnounceFinished", (): void => { delivered++; });
+
+    await assert.rejects(api.announce({ text: "hi" }, { timeoutMs: 10 }), { name: "AbortError" });
+
+    host.bus.emit("voiceAssistantAnnounceFinished", true);
+
+    assert.equal(delivered, 1, "the late reply reaches bus consumers exactly once");
+    assert.equal(debugLines.length, 1, "the late reply is noted once at debug");
+    assert.match(debugLines[0] ?? "", /no announcement in flight/);
+  });
+
+  test("an announce whose caller signal is already aborted rejects with that reason as its cause and sends nothing", async () => {
+
+    const host = makeHost();
+    const api = new VoiceAssistantApi(host);
+    const controller = new AbortController();
+    const reason = new Error("The caller cancelled before the announcement was issued.");
+
+    controller.abort(reason);
+
+    await assert.rejects(api.announce({ text: "hi" }, { signal: controller.signal, timeoutMs: 1000 }), (err: unknown) => {
+
+      return (err instanceof DOMException) && (err.name === "AbortError") && (err.cause === reason);
+    });
+
+    assert.equal(host.sent.length, 0, "a pre-aborted announce puts nothing on the wire");
+  });
+
+  test("a pre-aborted announce rejects as cancelled rather than in flight while another announcement is pending", async () => {
+
+    const host = makeHost();
+    const api = new VoiceAssistantApi(host);
+    const first = api.announce({ text: "first" }, { timeoutMs: 1000 });
+    const controller = new AbortController();
+
+    controller.abort();
+
+    await assert.rejects(api.announce({ text: "second" }, { signal: controller.signal, timeoutMs: 1000 }), (err: unknown) => {
+
+      return (err instanceof DOMException) && (err.name === "AbortError") && (err.cause === controller.signal.reason);
+    });
+
+    assert.equal(host.sent.length, 1, "only the pending announcement reached the wire");
+
+    host.bus.emit("voiceAssistantAnnounceFinished", true);
+
+    assert.equal(await first, true, "the pending announcement still settles on its own reply");
+  });
+
+  test("the disconnect rejection reaches the caller as issued rather than rewrapped as a timeout or caller abort", async () => {
+
+    const host = makeHost();
+    const api = new VoiceAssistantApi(host);
+
+    // A long timeout keeps the composed signal unaborted, so only the connection reset can settle the call.
+    const pending = api.announce({ text: "hi" }, { timeoutMs: 10000 });
+
+    api.clearConnectionState();
+
+    // A rewrapped rejection would carry the abort message and an own `cause` property, even an undefined one; the reset's own error carries neither.
+    await assert.rejects(pending, (err: unknown) => {
+
+      return (err instanceof DOMException) && (err.name === "AbortError") && !Object.hasOwn(err, "cause") && err.message.includes("torn down");
+    });
   });
 });
 
@@ -591,6 +770,175 @@ describe("VoiceAssistantApi.configuration", () => {
     controller.abort();
 
     await assert.rejects(promise, { name: "AbortError" }, "the caller's aborted signal rejects the configuration read");
+  });
+
+  test("a timeout rejects with an AbortError whose cause is the TimeoutError", async () => {
+
+    const host = makeHost();
+    const api = new VoiceAssistantApi(host);
+
+    await assert.rejects(api.configuration({ timeoutMs: 10 }), (err: unknown) => {
+
+      return (err instanceof DOMException) && (err.name === "AbortError") && (err.cause instanceof DOMException) && (err.cause.name === "TimeoutError");
+    });
+  });
+
+  test("a caller abort with a custom reason rejects with an AbortError whose cause is that reason", async () => {
+
+    const host = makeHost();
+    const api = new VoiceAssistantApi(host);
+    const controller = new AbortController();
+    const reason = new Error("The caller gave up on the configuration read.");
+
+    // A long timeout ensures the rejection comes from the caller's signal, not the timeout source.
+    const promise = api.configuration({ signal: controller.signal, timeoutMs: 10000 });
+
+    controller.abort(reason);
+
+    await assert.rejects(promise, (err: unknown) => (err instanceof DOMException) && (err.name === "AbortError") && (err.cause === reason));
+  });
+
+  test("a configuration read whose caller signal is already aborted rejects with that reason as its cause and sends nothing", async () => {
+
+    const host = makeHost();
+    const api = new VoiceAssistantApi(host);
+    const controller = new AbortController();
+    const reason = new Error("The caller cancelled before the configuration read.");
+
+    controller.abort(reason);
+
+    await assert.rejects(api.configuration({ signal: controller.signal, timeoutMs: 1000 }), (err: unknown) => {
+
+      return (err instanceof DOMException) && (err.name === "AbortError") && (err.cause === reason);
+    });
+
+    assert.equal(host.sent.length, 0, "a pre-aborted configuration read puts nothing on the wire");
+  });
+
+  test("a pre-aborted configuration read rejects even when a cached configuration could answer it", async () => {
+
+    const host = makeHost();
+    const api = new VoiceAssistantApi(host);
+    const controller = new AbortController();
+
+    host.bus.emit("voiceAssistantConfiguration", { activeWakeWords: [], availableWakeWords: [], maxActiveWakeWords: 4 });
+    controller.abort();
+
+    await assert.rejects(api.configuration({ signal: controller.signal }), (err: unknown) => {
+
+      return (err instanceof DOMException) && (err.name === "AbortError") && (err.cause === controller.signal.reason);
+    });
+
+    assert.equal(host.sent.length, 0, "the cached path sends nothing either way");
+  });
+
+  test("clearConnectionState() rejects a pending configuration read at once with an AbortError that carries no cause", async () => {
+
+    const host = makeHost();
+    const api = new VoiceAssistantApi(host);
+
+    // A long timeout ensures the rejection comes from the connection reset, not the timeout source.
+    const pending = api.configuration({ timeoutMs: 10000 });
+
+    api.clearConnectionState();
+
+    await assert.rejects(pending, isConfigurationTeardown);
+  });
+
+  test("a configuration read issued after a teardown settles on a later reply, and the teardown settles only the read issued before it", async () => {
+
+    const host = makeHost();
+    const api = new VoiceAssistantApi(host);
+    const config = { activeWakeWords: [], availableWakeWords: [], maxActiveWakeWords: 2 };
+
+    // A long timeout keeps the earlier read pending until the teardown settles it.
+    const earlier = api.configuration({ timeoutMs: 10000 });
+
+    api.clearConnectionState();
+
+    const later = api.configuration({ timeoutMs: 1000 });
+
+    // One reply reaches every read still waiting, so it would settle the earlier read too had the teardown left it pending.
+    host.bus.emit("voiceAssistantConfiguration", config);
+
+    await assert.rejects(earlier, isConfigurationTeardown, "the read issued before the teardown is settled by it rather than by the later reply");
+    assert.deepEqual(await later, config, "the read issued after the teardown resolves from the later reply");
+  });
+
+  test("clearConnectionState() rejects every overlapping pending configuration read", async () => {
+
+    const host = makeHost();
+    const api = new VoiceAssistantApi(host);
+
+    // Long timeouts keep the reads pending until the teardown settles them.
+    const first = api.configuration({ timeoutMs: 10000 });
+    const second = api.configuration({ timeoutMs: 10000 });
+
+    assert.equal(host.sent.length, 2, "each overlapping read sends its own request");
+
+    api.clearConnectionState();
+
+    await Promise.all([ assert.rejects(first, isConfigurationTeardown), assert.rejects(second, isConfigurationTeardown) ]);
+  });
+
+  test("a teardown inside the send settles the read it interrupts with the teardown's own rejection", async () => {
+
+    const host = makeHost();
+
+    // The connection drops while the request goes out, so the teardown installs the next connection's controller before the read starts waiting. The read still
+    // belongs to the connection it was issued on.
+    const api: VoiceAssistantApi = new VoiceAssistantApi({
+
+      ...host,
+      send: (type: number, payload: Buffer): void => {
+
+        host.send(type, payload);
+        api.clearConnectionState();
+      }
+    });
+
+    await assert.rejects(api.configuration({ timeoutMs: 10000 }), isConfigurationTeardown);
+  });
+
+  test("a read settles in the shape of the source that ended it when a caller abort and a teardown land in the same tick", async () => {
+
+    const host = makeHost();
+    const api = new VoiceAssistantApi(host);
+    const abortedFirst = new AbortController();
+    const tornDownFirst = new AbortController();
+    const reason = new Error("The caller gave up on the configuration read.");
+    const callerRead = api.configuration({ signal: abortedFirst.signal, timeoutMs: 10000 });
+    const teardownRead = api.configuration({ signal: tornDownFirst.signal, timeoutMs: 10000 });
+
+    // Every source aborts before either rejection is observed, so only the order in which the sources fired tells the reads apart.
+    abortedFirst.abort(reason);
+    api.clearConnectionState();
+    tornDownFirst.abort();
+
+    await Promise.all([
+      assert.rejects(callerRead, (err: unknown) => (err instanceof DOMException) && (err.name === "AbortError") && (err.cause === reason)),
+      assert.rejects(teardownRead, isConfigurationTeardown)
+    ]);
+  });
+});
+
+describe("VoiceAssistantApi - util.inspect output", () => {
+
+  test("util.inspect reports the pending announcement count beside the cache and subscription flags", async () => {
+
+    const host = makeHost();
+    const api = new VoiceAssistantApi(host);
+
+    assert.equal(inspect(api), "VoiceAssistantApi {\"hasConfig\":false,\"pendingAnnouncements\":0,\"subscribed\":false}");
+
+    const pending = api.announce({ text: "hi" }, { timeoutMs: 1000 });
+
+    assert.equal(inspect(api), "VoiceAssistantApi {\"hasConfig\":false,\"pendingAnnouncements\":1,\"subscribed\":false}", "a pending announcement shows in the count");
+
+    host.bus.emit("voiceAssistantAnnounceFinished", true);
+    await pending;
+
+    assert.equal(inspect(api), "VoiceAssistantApi {\"hasConfig\":false,\"pendingAnnouncements\":0,\"subscribed\":false}", "a settled announcement leaves the count");
   });
 });
 
