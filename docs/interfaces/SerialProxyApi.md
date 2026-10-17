@@ -4,9 +4,9 @@
 
 [Home](../README.md) / SerialProxyApi
 
-# Class: SerialProxyApi
+# Interface: SerialProxyApi
 
-Serial-proxy sub-API. Single instance per client; created lazily on first access via [EspHomeClient.serial](EspHomeClient.md#serial).
+Serial-proxy sub-API. Single instance per client; created lazily on first access via [EspHomeClient.serial](../classes/EspHomeClient.md#serial).
 
 ## Implements
 
@@ -20,11 +20,11 @@ Serial-proxy sub-API. Single instance per client; created lazily on first access
 clearConnectionState(): void;
 ```
 
-Reset ONLY connection-scoped state. Called by the host on every disconnect and again at the top of every connect attempt. Rejects every pending [flush](#flush) and
-[getModemPins](#getmodempins) await with an `AbortError` (in-flight request/response state cannot outlive the connection it was issued on) and clears the data
-subscription's connection-scoped wire cache (the device starts every fresh connection with no subscription). The subscriber ledger is PRESERVED: iterators alive
-across the reconnect cycle stay live, and the host's [reissueOnReconnect](#reissueonreconnect) call after the new connection is up re-issues SUBSCRIBE for each instance with
-surviving subscribers.
+Reset ONLY connection-scoped state. Called by the host on every disconnect and again at the top of every connect attempt. Clears the data subscription's
+connection-scoped wire cache (the device starts every fresh connection with no subscription) and ends no wait: a pending [flush](#flush) or [getModemPins](#getmodempins)
+follows the connection scope, whose abort rejects it with the connection-lost error before this runs. The subscriber ledger is PRESERVED: iterators alive across
+the reconnect cycle stay live, and the host's [reissueOnReconnect](#reissueonreconnect) call after the new connection is up re-issues SUBSCRIBE for each instance with surviving
+subscribers.
 
 #### Returns
 
@@ -51,7 +51,7 @@ Configure UART parameters for an instance. Sends `SerialProxyConfigureRequest`; 
 | Parameter | Type | Description |
 | ------ | ------ | ------ |
 | `instance` | `number` | Zero-based instance index. |
-| `options` | [`SerialProxyConfigureOptions`](../interfaces/SerialProxyConfigureOptions.md) | UART parameters. See [SerialProxyConfigureOptions](../interfaces/SerialProxyConfigureOptions.md). |
+| `options` | [`SerialProxyConfigureOptions`](SerialProxyConfigureOptions.md) | UART parameters. See [SerialProxyConfigureOptions](SerialProxyConfigureOptions.md). |
 
 #### Returns
 
@@ -59,7 +59,7 @@ Configure UART parameters for an instance. Sends `SerialProxyConfigureRequest`; 
 
 #### Remarks
 
-Validates `dataSize` in 5..8 and `stopBits` in 1..2 before the wire send. Out-of-range values throw [ConnectionError](ConnectionError.md) with code
+Validates `dataSize` in 5..8 and `stopBits` in 1..2 before the wire send. Out-of-range values throw [ConnectionError](../classes/ConnectionError.md) with code
 `INVALID_SERIAL_CONFIG` synchronously - the wire accepts arbitrary values but the device rejects silently, so the client-side guard is the only way the caller
 sees the misconfiguration.
 
@@ -99,11 +99,11 @@ refcounted-subscription pattern keyed by instance.
 | Parameter | Type | Description |
 | ------ | ------ | ------ |
 | `instance` | `number` | Zero-based instance index. |
-| `options?` | [`StreamOptions`](../interfaces/StreamOptions.md) | Optional backpressure policy and cancellation signal forwarded to the underlying `bus.stream("serialData", options)`. |
+| `options?` | [`StreamOptions`](StreamOptions.md) | Optional backpressure policy and cancellation signal forwarded to the underlying `bus.stream("serialData", options)`. |
 
 #### Returns
 
-`AsyncIterable`\<[`SerialDataChunk`](../interfaces/SerialDataChunk.md)\>
+`AsyncIterable`\<[`SerialDataChunk`](SerialDataChunk.md)\>
 
 An `AsyncIterable<SerialDataChunk>` that yields chunks until the consumer aborts, returns, or throws, or the underlying EventBus stream ends. A reconnect
 does not end it: the subscriber survives in the ledger and [reissueOnReconnect](#reissueonreconnect) re-arms the wire-side subscription on the new connection.
@@ -160,18 +160,18 @@ Blocks until the device confirms drain (status `OK` / `ASSUMED_SUCCESS`) or fail
 | Parameter | Type | Description |
 | ------ | ------ | ------ |
 | `instance` | `number` | Zero-based instance index. |
-| `options?` | [`SerialProxyAwaitOptions`](../interfaces/SerialProxyAwaitOptions.md) | Optional cancellation signal and custom timeout (default 5000ms). |
+| `options?` | [`SerialProxyAwaitOptions`](SerialProxyAwaitOptions.md) | Optional cancellation signal and custom timeout (default 5000ms). |
 
 #### Returns
 
-`Promise`\<[`SerialProxyFlushResult`](../interfaces/SerialProxyFlushResult.md)\>
+`Promise`\<[`SerialProxyFlushResult`](SerialProxyFlushResult.md)\>
 
-A promise that resolves with the [SerialProxyFlushResult](../interfaces/SerialProxyFlushResult.md). Consumers switch on `status` to distinguish success from failure.
+A promise that resolves with the [SerialProxyFlushResult](SerialProxyFlushResult.md). Consumers switch on `status` to distinguish success from failure.
 
 #### Remarks
 
-Concurrent calls for the same instance throw [ConnectionError](ConnectionError.md) with code `FLUSH_IN_FLIGHT`. The composed signal layers the caller's optional
-`AbortSignal` over the timeout via `AbortSignal.any`; the default timeout is 5000ms.
+Concurrent calls for the same instance throw [ConnectionError](../classes/ConnectionError.md) with code `FLUSH_IN_FLIGHT`. The wait follows the caller's optional `AbortSignal`
+and the connection the request was issued on, and the correlator holds the timeout; the default timeout is 5000ms.
 
 Usage:
 
@@ -217,12 +217,21 @@ export async function serialFlushExample(client: EspHomeClient): Promise<void> {
 
 #### Throws
 
+(`CONNECT_IN_PROGRESS`) when the call is issued while a manual connect has not yet settled or the automatic reconnect is active, and
+(`NOT_CONNECTED`) when it is issued with no connection otherwise. Nothing is sent, and this check runs before the in-flight check.
+
+#### Throws
+
 ConnectionError with code `FLUSH_IN_FLIGHT` when another await for the same instance is still pending.
 
 #### Throws
 
-DOMException with name `AbortError` on either timeout or caller-signal abort. `Correlator.await` manufactures the timeout error itself; it
-does not propagate [AbortSignal.timeout](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal/timeout_static)'s native `TimeoutError`.
+when the connection the request was issued on is torn down before the device replies.
+
+#### Throws
+
+The signal's reason, as it is, when `options.signal` aborts, including when it was already aborted at call time, and the timeout's `TimeoutError` when
+the reply outlasts `options.timeoutMs`.
 
 ***
 
@@ -240,7 +249,7 @@ Read the current RTS / DTR modem-control line states for an instance. Sends `Ser
 | Parameter | Type | Description |
 | ------ | ------ | ------ |
 | `instance` | `number` | Zero-based instance index. |
-| `options?` | [`SerialProxyAwaitOptions`](../interfaces/SerialProxyAwaitOptions.md) | Optional cancellation signal and custom timeout (default 5000ms). |
+| `options?` | [`SerialProxyAwaitOptions`](SerialProxyAwaitOptions.md) | Optional cancellation signal and custom timeout (default 5000ms). |
 
 #### Returns
 
@@ -250,8 +259,8 @@ A promise that resolves with the line-states bitmask. Decode against [SerialProx
 
 #### Remarks
 
-Concurrent calls for the same instance throw [ConnectionError](ConnectionError.md) with code `MODEM_PINS_IN_FLIGHT`. The composed signal layers the caller's optional
-`AbortSignal` over the timeout via `AbortSignal.any`; the default timeout is 5000ms.
+Concurrent calls for the same instance throw [ConnectionError](../classes/ConnectionError.md) with code `MODEM_PINS_IN_FLIGHT`. The wait follows the caller's optional
+`AbortSignal` and the connection the request was issued on, and the correlator holds the timeout; the default timeout is 5000ms.
 
 Usage:
 
@@ -272,12 +281,21 @@ export async function serialModemPinsExample(client: EspHomeClient): Promise<voi
 
 #### Throws
 
+(`CONNECT_IN_PROGRESS`) when the call is issued while a manual connect has not yet settled or the automatic reconnect is active, and
+(`NOT_CONNECTED`) when it is issued with no connection otherwise. Nothing is sent, and this check runs before the in-flight check.
+
+#### Throws
+
 ConnectionError with code `MODEM_PINS_IN_FLIGHT` when another await for the same instance is still pending.
 
 #### Throws
 
-DOMException with name `AbortError` on either timeout or caller-signal abort. `Correlator.await` manufactures the timeout error itself; it
-does not propagate [AbortSignal.timeout](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal/timeout_static)'s native `TimeoutError`.
+when the connection the request was issued on is torn down before the device replies.
+
+#### Throws
+
+The signal's reason, as it is, when `options.signal` aborts, including when it was already aborted at call time, and the timeout's `TimeoutError` when
+the reply outlasts `options.timeoutMs`.
 
 ***
 
@@ -326,9 +344,9 @@ export function serialListExample(client: EspHomeClient): void {
 
 #### Returns
 
-readonly [`SerialProxyInfo`](../interfaces/SerialProxyInfo.md)[]
+readonly [`SerialProxyInfo`](SerialProxyInfo.md)[]
 
-The list of [SerialProxyInfo](../interfaces/SerialProxyInfo.md) entries, in declaration order.
+The list of [SerialProxyInfo](SerialProxyInfo.md) entries, in declaration order.
 
 ***
 

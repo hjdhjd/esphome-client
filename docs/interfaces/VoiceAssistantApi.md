@@ -4,7 +4,7 @@
 
 [Home](../README.md) / VoiceAssistantApi
 
-# Class: VoiceAssistantApi
+# Interface: VoiceAssistantApi
 
 Voice-assistant sub-API. Single instance per client; created lazily on first access.
 
@@ -20,14 +20,14 @@ Voice-assistant sub-API. Single instance per client; created lazily on first acc
 announce(options, awaitOptions?): Promise<boolean>;
 ```
 
-Trigger a TTS announcement on the device. Resolves with the success flag from the matching `voiceAssistantAnnounceFinished` event, or rejects on
-timeout/abort.
+Trigger a TTS announcement on the device. Resolves with the success flag from the matching `voiceAssistantAnnounceFinished` event, or rejects with the reason of
+whichever source ended the wait.
 
 #### Parameters
 
 | Parameter | Type | Description |
 | ------ | ------ | ------ |
-| `options` | [`VoiceAssistantAnnounceOptions`](../interfaces/VoiceAssistantAnnounceOptions.md) | The announce request fields. |
+| `options` | [`VoiceAssistantAnnounceOptions`](VoiceAssistantAnnounceOptions.md) | The announce request fields. |
 | `awaitOptions?` | \{ `signal?`: [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal); `timeoutMs?`: `number`; \} | Optional cancellation signal and custom timeout (default 5000ms). |
 | `awaitOptions.signal?` | [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal) | - |
 | `awaitOptions.timeoutMs?` | `number` | - |
@@ -40,8 +40,12 @@ A promise that resolves with the success flag from the device's response.
 
 #### Remarks
 
-Pre-subscribes to the matching response event before issuing the wire request so a fast device cannot beat the listener. The default timeout is 5000ms;
-supply `awaitOptions.timeoutMs` to override. The composed signal layers the caller's optional `AbortSignal` over the timeout via [AbortSignal.any](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal/any_static).
+One announcement can be in flight at a time. The device's reply carries no per-call identity, so a call made while another is pending throws rather than
+settling on the other call's reply. The pending slot is claimed before the wire request goes out so a fast device cannot beat it, and a disconnect rejects the
+pending call at once rather than leaving it to its timeout. A caller signal that is already aborted rejects the call before anything else, and a call issued with
+no connection is refused next, so neither claims the slot or sends anything. The default timeout is 5000ms; supply `awaitOptions.timeoutMs` to override. The wait
+follows the caller's optional `AbortSignal` and the connection the announcement was issued on, and holds the timeout itself, so a cancellation, a teardown, and a
+timeout each reject with their own reason, unwrapped.
 
 Usage:
 
@@ -64,8 +68,21 @@ export async function voiceAssistantAnnounceExample(client: EspHomeClient): Prom
 
 #### Throws
 
-DOMException named `AbortError` (code `ABORT_ERR`) on timeout or caller-signal abort. The originating reason is carried as the error's `cause`: a
-`TimeoutError` when the [AbortSignal.timeout](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal/timeout_static) elapses, or the caller signal's abort reason.
+(`CONNECT_IN_PROGRESS`) when the call is issued while a manual connect has not yet settled or the automatic reconnect is active, and
+(`NOT_CONNECTED`) when it is issued with no connection otherwise. Nothing is sent and no slot is claimed.
+
+#### Throws
+
+(`ANNOUNCE_IN_FLIGHT`) when another announcement is still pending.
+
+#### Throws
+
+when the connection the announcement was issued on is torn down before the device finishes it.
+
+#### Throws
+
+The signal's reason, as it is, when `awaitOptions.signal` aborts, including when it was already aborted at call time, which sends nothing, and the
+timeout's `TimeoutError` when the device does not finish the announcement within `awaitOptions.timeoutMs`.
 
 ***
 
@@ -99,11 +116,11 @@ export async function voiceAssistantExample(client: EspHomeClient): Promise<void
 
 | Parameter | Type | Description |
 | ------ | ------ | ------ |
-| `options?` | [`StreamOptions`](../interfaces/StreamOptions.md) | Optional backpressure policy and cancellation signal. |
+| `options?` | [`StreamOptions`](StreamOptions.md) | Optional backpressure policy and cancellation signal. |
 
 #### Returns
 
-`AsyncIterable`\<[`VoiceAssistantAudioData`](../interfaces/VoiceAssistantAudioData.md)\>
+`AsyncIterable`\<[`VoiceAssistantAudioData`](VoiceAssistantAudioData.md)\>
 
 An `AsyncIterable<VoiceAssistantAudioData>`.
 
@@ -143,11 +160,11 @@ export function webStreamsInteropExample(client: EspHomeClient): void {
 
 | Parameter | Type | Description |
 | ------ | ------ | ------ |
-| `options?` | [`StreamOptions`](../interfaces/StreamOptions.md) | Optional backpressure policy and cancellation signal. |
+| `options?` | [`StreamOptions`](StreamOptions.md) | Optional backpressure policy and cancellation signal. |
 
 #### Returns
 
-`ReadableStream`\<[`VoiceAssistantAudioData`](../interfaces/VoiceAssistantAudioData.md)\>
+`ReadableStream`\<[`VoiceAssistantAudioData`](VoiceAssistantAudioData.md)\>
 
 A `ReadableStream<VoiceAssistantAudioData>`.
 
@@ -159,10 +176,12 @@ A `ReadableStream<VoiceAssistantAudioData>`.
 clearConnectionState(): void;
 ```
 
-Reset ONLY connection-scoped state. Called by the host at the disconnect boundary and again at connect-top via the `SubscriptionLifecycle` contract. Clears
-the cached configuration the device re-pushes on a fresh connection. It deliberately does NOT touch `desired`: the consumer subscription intent (including
-its flags) is PRESERVED across the reconnect cycle so [reissueOnReconnect](#reissueonreconnect) re-arms the device with the originally-requested flags. Clearing the intent here
-would be the precise reconnect-drops-the-subscription bug this split exists to prevent.
+Reset ONLY connection-scoped state. Called by the host at the disconnect boundary and again at connect-top via the `SubscriptionLifecycle` contract. Clears the
+cached configuration the device re-pushes on a fresh connection, and ends no wait: a pending [announce](#announce) and every pending [configuration](#configuration) read follow
+the connection they were issued on, and the host's teardown ends them through that connection's abort, ahead of this reset, with the connection-lost error. It
+deliberately does NOT touch `desired`: the consumer subscription intent (including its flags) is PRESERVED across the reconnect cycle so
+[reissueOnReconnect](#reissueonreconnect) re-arms the device with the originally-requested flags. Clearing the intent here would be the precise reconnect-drops-the-subscription
+bug this split exists to prevent.
 
 #### Returns
 
@@ -196,15 +215,18 @@ otherwise issues a fresh `VoiceAssistantConfigurationRequest` and resolves on th
 
 #### Returns
 
-`Promise`\<[`VoiceAssistantConfiguration`](../interfaces/VoiceAssistantConfiguration.md)\>
+`Promise`\<[`VoiceAssistantConfiguration`](VoiceAssistantConfiguration.md)\>
 
 A promise that resolves with the configuration record.
 
 #### Remarks
 
 The cache is populated by the inbound `voiceAssistantConfiguration` event listener installed in the constructor, so any prior request (or an unsolicited
-configuration push from the device) seeds the cache. Pass `refresh: true` to force a fresh request even when a cached value exists. The default timeout is 5000ms;
-the composed signal layers the caller's optional `AbortSignal` over the timeout via [AbortSignal.any](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal/any_static).
+configuration push from the device) seeds the cache. Pass `refresh: true` to force a fresh request even when a cached value exists. The default timeout is 5000ms.
+The wait follows the caller's optional `AbortSignal`, the timeout, and the connection the read was issued on, so a cancellation, a timeout, and a teardown each
+reject with their own reason, unwrapped. Overlapping calls that reach the device each send their own request, and every one resolves with the device's
+configuration. A disconnect rejects every pending read at once rather than leaving it to its timeout, and a read issued on a later connection waits for a reply of
+its own.
 
 Usage:
 
@@ -226,7 +248,17 @@ export async function voiceAssistantConfigurationExample(client: EspHomeClient):
 
 #### Throws
 
-DOMException with name `AbortError` (timeout or caller signal) when no cached value is available and the await aborts.
+(`CONNECT_IN_PROGRESS`) when the call is issued while a manual connect has not yet settled or the automatic reconnect is active, and
+(`NOT_CONNECTED`) when it is issued with no connection otherwise. Nothing is sent, and the refusal comes ahead of the cache, which every teardown clears.
+
+#### Throws
+
+when the connection the read was issued on is torn down before the device answers.
+
+#### Throws
+
+The signal's reason, as it is, when `options.signal` aborts, including when it was already aborted at call time, which sends nothing and rejects even
+when a cached configuration is available, and the timeout's `TimeoutError` when the device does not answer within `options.timeoutMs`.
 
 ***
 
@@ -255,7 +287,7 @@ Last-known configuration record. Returns `null` when no configuration has been r
 
 #### Returns
 
-[`Nullable`](../type-aliases/Nullable.md)\<[`VoiceAssistantConfiguration`](../interfaces/VoiceAssistantConfiguration.md)\>
+[`Nullable`](../type-aliases/Nullable.md)\<[`VoiceAssistantConfiguration`](VoiceAssistantConfiguration.md)\>
 
 ***
 
@@ -293,11 +325,11 @@ Async-iterable view of inbound `voiceAssistantRequest` events. Yields one entry 
 
 | Parameter | Type | Description |
 | ------ | ------ | ------ |
-| `options?` | [`StreamOptions`](../interfaces/StreamOptions.md) | Optional backpressure policy and cancellation signal. |
+| `options?` | [`StreamOptions`](StreamOptions.md) | Optional backpressure policy and cancellation signal. |
 
 #### Returns
 
-`AsyncIterable`\<[`VoiceAssistantRequest`](../interfaces/VoiceAssistantRequest.md)\>
+`AsyncIterable`\<[`VoiceAssistantRequest`](VoiceAssistantRequest.md)\>
 
 An `AsyncIterable<VoiceAssistantRequest>`.
 
@@ -351,7 +383,7 @@ export async function voiceAssistantRespondExample(client: EspHomeClient): Promi
 respondToRequest(options?): void;
 ```
 
-Respond to an inbound [VoiceAssistantRequest](../interfaces/VoiceAssistantRequest.md) by sending `VoiceAssistantResponse` (wire id 91) to the device. The device sends a request with `start=true`
+Respond to an inbound [VoiceAssistantRequest](VoiceAssistantRequest.md) by sending `VoiceAssistantResponse` (wire id 91) to the device. The device sends a request with `start=true`
 when it wants to begin a voice pipeline; the device expects the client to acknowledge before proceeding. Three semantic forms:
 
 - **Accept with API audio (default).** Pass no arguments. Equivalent to `{ port: 0, error: false }`. The device routes audio over the API channel (wire message
@@ -507,7 +539,7 @@ export async function voiceAssistantStreamingExample(client: EspHomeClient, gene
 | Parameter | Type | Default value | Description |
 | ------ | ------ | ------ | ------ |
 | `eventType` | [`VoiceAssistantEvent`](../type-aliases/VoiceAssistantEvent.md) | `undefined` | The pipeline event kind. |
-| `data` | [`VoiceAssistantEventData`](../interfaces/VoiceAssistantEventData.md)[] | `[]` | Optional event data payload. |
+| `data` | [`VoiceAssistantEventData`](VoiceAssistantEventData.md)[] | `[]` | Optional event data payload. |
 
 #### Returns
 
@@ -544,7 +576,7 @@ export function voiceAssistantTimerExample(client: EspHomeClient): void {
 
 | Parameter | Type | Description |
 | ------ | ------ | ------ |
-| `timerData` | [`VoiceAssistantTimerEventData`](../interfaces/VoiceAssistantTimerEventData.md) | The timer event data. |
+| `timerData` | [`VoiceAssistantTimerEventData`](VoiceAssistantTimerEventData.md) | The timer event data. |
 
 #### Returns
 

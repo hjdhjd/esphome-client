@@ -14,10 +14,11 @@ Generic connection-lifecycle failure. Parent class for transport-level errors th
 
 ## Extended by
 
-- [`HandshakeError`](HandshakeError.md)
-- [`ConnectionTimeoutError`](ConnectionTimeoutError.md)
-- [`ConnectionRefusedError`](ConnectionRefusedError.md)
 - [`ConnectionClosedByPeerError`](ConnectionClosedByPeerError.md)
+- [`ConnectionLostError`](ConnectionLostError.md)
+- [`ConnectionRefusedError`](ConnectionRefusedError.md)
+- [`ConnectionTimeoutError`](ConnectionTimeoutError.md)
+- [`HandshakeError`](HandshakeError.md)
 - [`HeartbeatStalledError`](HeartbeatStalledError.md)
 
 ## Constructors

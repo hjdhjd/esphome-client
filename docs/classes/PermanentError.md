@@ -10,19 +10,21 @@ Marker class for errors that auto-reconnect should not retry.
 
 ## Remarks
 
-The default reconnect supervisor filters with `!(error instanceof PermanentError)`. Subclasses include encryption misconfigurations, authentication
-failures, and major-version mismatches. Adding a new permanent failure mode is one new subclass and the filter picks it up automatically.
+The default reconnect supervisor filters with `!(error instanceof PermanentError)`. The subclasses the library throws cover encryption misconfigurations
+and version-negotiation failures. Adding a new permanent failure mode is one new subclass and the filter picks it up automatically.
 
 Abstract on purpose: the marker is meaningful only when applied to a concrete subclass.
 
 Usage:
 
 ```ts
-export async function permanentVsTransientExample(): Promise<void> {
+export async function permanentVsTransientExample(): Promise<EspHomeClient> {
 
+  const maxAttempts = 10;
   let attempts = 0;
+  let lastError: unknown;
 
-  while(attempts < 10) {
+  while(attempts < maxAttempts) {
 
     try {
 
@@ -32,7 +34,7 @@ export async function permanentVsTransientExample(): Promise<void> {
 
       log.info("The device accepted the connection.", client.isEncrypted);
 
-      return;
+      return client;
 
     } catch(error) {
 
@@ -42,13 +44,21 @@ export async function permanentVsTransientExample(): Promise<void> {
         throw error;
       }
 
+      lastError = error;
       attempts++;
 
-      // The retry loop is intentionally sequential because each attempt must observe the result of the previous one before deciding whether to back off.
-      // eslint-disable-next-line no-await-in-loop
-      await delay(500 * (2 ** attempts));
+      // The final attempt skips the backoff, because no attempt follows it to wait for.
+      if(attempts < maxAttempts) {
+
+        // The retry loop is intentionally sequential because each attempt must observe the result of the previous one before deciding whether to back off.
+        // eslint-disable-next-line no-await-in-loop
+        await delay(500 * (2 ** attempts));
+      }
     }
   }
+
+  // Every attempt failed transiently, so the last failure propagates and the caller sees its real cause.
+  throw lastError;
 }
 ```
 
@@ -58,10 +68,8 @@ export async function permanentVsTransientExample(): Promise<void> {
 
 ## Extended by
 
-- [`AuthenticationError`](AuthenticationError.md)
-- [`IncompatibleApiVersionError`](IncompatibleApiVersionError.md)
-- [`EncryptionKeyMissingError`](EncryptionKeyMissingError.md)
 - [`EncryptionKeyInvalidError`](EncryptionKeyInvalidError.md)
+- [`EncryptionKeyMissingError`](EncryptionKeyMissingError.md)
 - [`EncryptionRequiredError`](EncryptionRequiredError.md)
 - [`NegotiationFailedError`](NegotiationFailedError.md)
 

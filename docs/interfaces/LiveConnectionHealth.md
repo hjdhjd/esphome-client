@@ -15,11 +15,11 @@ via [connectionUptimeMs](../functions/connectionUptimeMs.md). Both `connected` a
 
 ## Properties
 
-| Property | Type | Description | Inherited from |
-| ------ | ------ | ------ | ------ |
-| <a id="connectedatms"></a> `connectedAtMs` | `number` | Timestamp of the most recent successful connect in epoch milliseconds. The single source of truth for connection uptime; derive it via [connectionUptimeMs](../functions/connectionUptimeMs.md). | - |
-| <a id="consecutivestalls"></a> `consecutiveStalls` | `number` | Number of consecutive ping stalls. Resets to 0 on successful inbound activity. | `ConnectionHealthBase.consecutiveStalls` |
-| <a id="encrypted"></a> `encrypted` | `boolean` | Whether the current session's transport is encrypted. False during reconnecting and disconnected states. | `ConnectionHealthBase.encrypted` |
-| <a id="lastinboundactivityat"></a> `lastInboundActivityAt` | `number` | Timestamp of the most recent inbound message in epoch milliseconds. `0` before the first inbound message. | `ConnectionHealthBase.lastInboundActivityAt` |
-| <a id="lastpingrttms"></a> `lastPingRttMs?` | `number` | Round-trip time of the most recent successful ping in milliseconds. Undefined until the first ping completes. | `ConnectionHealthBase.lastPingRttMs` |
-| <a id="state"></a> `state` | `"connected"` \| `"stalled"` | Current health state - the "socket up" subset of [HealthState](../variables/HealthState.md). | - |
+| Property | Modifier | Type | Description | Inherited from |
+| ------ | ------ | ------ | ------ | ------ |
+| <a id="connectedatms"></a> `connectedAtMs` | `readonly` | `number` | Timestamp of the most recent successful connect in epoch milliseconds. The single source of truth for connection uptime; derive it via [connectionUptimeMs](../functions/connectionUptimeMs.md). | - |
+| <a id="consecutivestalls"></a> `consecutiveStalls` | `readonly` | `number` | Number of consecutive ping stalls. Resets to 0 on successful inbound activity. | `ConnectionHealthBase.consecutiveStalls` |
+| <a id="encrypted"></a> `encrypted` | `readonly` | `boolean` | Whether the current session's transport is encrypted. False during reconnecting and disconnected states. | `ConnectionHealthBase.encrypted` |
+| <a id="lastinboundactivityat"></a> `lastInboundActivityAt` | `readonly` | `number` | Timestamp of the most recent inbound message in epoch milliseconds. `0` before the first inbound message. | `ConnectionHealthBase.lastInboundActivityAt` |
+| <a id="lastpingrttms"></a> `lastPingRttMs?` | `readonly` | `number` | Round-trip time of the most recent successful ping in milliseconds. Undefined until the first ping completes. | `ConnectionHealthBase.lastPingRttMs` |
+| <a id="state"></a> `state` | `readonly` | `"connected"` \| `"stalled"` | Current health state - the "socket up" subset of [HealthState](../variables/HealthState.md). | - |

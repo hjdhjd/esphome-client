@@ -19,4 +19,4 @@ Used by the water-heater command schema today, where `awayState`/`onState` map b
 | ------ | ------ |
 | <a id="bits"></a> `bits` | `Record`\<`string`, [`CommandPackedBitSpec`](CommandPackedBitSpec.md)\> |
 | <a id="fieldnumber"></a> `fieldNumber` | `number` |
-| <a id="wiretype"></a> `wireType` | `WireType` |
+| <a id="wiretype"></a> `wireType` | [`WireType`](../type-aliases/WireType.md) |

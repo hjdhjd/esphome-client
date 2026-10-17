@@ -6,7 +6,7 @@
 
 # Interface: SerialProxyConfigureOptions
 
-Options accepted by [SerialProxyApi.configure](../classes/SerialProxyApi.md#configure). Mirrors the wire-side `SerialProxyConfigureRequest` (field numbers per `api.proto`): `baudrate` (2),
+Options accepted by [SerialProxyApi.configure](SerialProxyApi.md#configure). Mirrors the wire-side `SerialProxyConfigureRequest` (field numbers per `api.proto`): `baudrate` (2),
 `flowControl` (3), `parity` (4), `stopBits` (5), `dataSize` (6).
 
 Both `dataSize` and `stopBits` are validated client-side before the wire send. The wire accepts arbitrary integers but the device silently rejects out-of-range values;

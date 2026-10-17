@@ -4,10 +4,10 @@
 
 [Home](../README.md) / HomeAssistantApi
 
-# Class: HomeAssistantApi
+# Interface: HomeAssistantApi
 
 Owns the entire Home-Assistant-bridge surface: the outbound subscribe-and-respond wire pipeline plus the memoized inbound-dispatcher context. Constructed once per
-[EspHomeClient](EspHomeClient.md), which exposes this instance directly through its `homeAssistant` getter rather than through client-level delegate methods.
+[EspHomeClient](../classes/EspHomeClient.md), which exposes this instance directly through its `homeAssistant` getter rather than through client-level delegate methods.
 
 ## Remarks
 
@@ -19,32 +19,9 @@ unconditional passthrough: [HomeAssistantApi.sendState](#sendstate)'s optional `
 [HomeAssistantApi.respondToAction](#respondtoaction)'s `options.errorMessage` / `options.responseData` each encode their field only when the caller supplies a value, matching
 ESPHome's proto contract for those optional fields.
 
-The [HomeAssistantApi.inboundContext](#inboundcontext) accessor returns a frozen object built once at construction time from the host's `bus`, `log`, and `decode` members.
-The frozen-and-memoized shape means the per-message dispatch in `run-phase-handlers` performs zero allocations on the inbound HA-bridge hot path.
-
 ## Implements
 
 - `SubscriptionLifecycle`
-
-## Accessors
-
-### inboundContext
-
-#### Get Signature
-
-```ts
-get inboundContext(): HomeAssistantInboundContext;
-```
-
-Read the memoized inbound-dispatcher context. The host forwards this accessor into `RunPhaseHost` at construction time so the
-per-message dispatcher in `run-phase-handlers` reuses one cached context across every inbound `HOMEASSISTANT_SERVICE_RESPONSE` /
-`SUBSCRIBE_HOME_ASSISTANT_STATE_RESPONSE` frame.
-
-##### Returns
-
-`HomeAssistantInboundContext`
-
-The frozen inbound context built at construction time.
 
 ## Methods
 
@@ -136,11 +113,11 @@ is omitted when the caller passes an empty string).
 Usage:
 
 ```ts
-export function homeAssistantStateBridgeExample(client: EspHomeClient, lookup: (entity: string, attribute: string) => string): void {
+export function homeAssistantStateBridgeExample(client: EspHomeClient, lookup: (entity: string, attribute: string) => string): Disposable {
 
   client.homeAssistant.subscribeStates();
 
-  using sub = client.on("homeassistantStateRequest", (request) => {
+  return client.on("homeassistantStateRequest", (request) => {
 
     const value = lookup(request.entityId, request.attribute);
 
@@ -176,11 +153,11 @@ the connection drops, and the client re-issues it on every successful reconnect,
 Usage:
 
 ```ts
-export function homeAssistantServicesExample(client: EspHomeClient): void {
+export function homeAssistantServicesExample(client: EspHomeClient): Disposable {
 
   client.homeAssistant.subscribeServices();
 
-  using sub = client.on("homeassistantService", (event) => {
+  return client.on("homeassistantService", (event) => {
 
     log.info("The device called a Home Assistant action.", event.service, event.data, event.dataTemplate, event.variables, event.isEvent);
   });
@@ -206,11 +183,11 @@ client re-issues it on every successful reconnect, so a consumer subscribes once
 Usage:
 
 ```ts
-export function homeAssistantStateBridgeExample(client: EspHomeClient, lookup: (entity: string, attribute: string) => string): void {
+export function homeAssistantStateBridgeExample(client: EspHomeClient, lookup: (entity: string, attribute: string) => string): Disposable {
 
   client.homeAssistant.subscribeStates();
 
-  using sub = client.on("homeassistantStateRequest", (request) => {
+  return client.on("homeassistantStateRequest", (request) => {
 
     const value = lookup(request.entityId, request.attribute);
 

@@ -19,8 +19,8 @@ Narrowing parent. The library does not throw this class directly - decoder failu
 
 ## Extended by
 
-- [`MessageTooManyFieldsError`](MessageTooManyFieldsError.md)
 - [`MalformedVarintError`](MalformedVarintError.md)
+- [`MessageTooManyFieldsError`](MessageTooManyFieldsError.md)
 - [`TruncatedMessageError`](TruncatedMessageError.md)
 
 ## Constructors

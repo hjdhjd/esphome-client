@@ -50,17 +50,11 @@ export async function errorClassEnumerationExample(): Promise<void> {
       return;
     }
 
-    // Noise-handshake-specific failures. Order matters: the timeout and peer-closed subclasses must come before the NoiseHandshakeError parent so the tagged
-    // `code` field on those subclasses (HANDSHAKE_TIMEOUT / PEER_CLOSED_NOISE / PEER_PLAINTEXT_DURING_NOISE) does not collapse into the parent branch.
-    if(error instanceof NoiseHandshakeTimeoutError) {
-
-      // Per-step handshake timeout elapsed.
-      return;
-    }
-
+    // Noise-handshake-specific failures. Order matters: the peer-closed subclass must come before the NoiseHandshakeError parent so its tagged `code`
+    // (PEER_CLOSED_NOISE / PEER_PLAINTEXT_DURING_NOISE) does not collapse into the parent branch.
     if(error instanceof PeerClosedDuringNoiseError) {
 
-      // Peer closed mid-handshake or sent a plaintext indicator byte.
+      // Peer ended the connection mid-handshake or sent a plaintext indicator byte.
       log.error("The peer abandoned the noise handshake.", error.code);
 
       return;
@@ -68,15 +62,10 @@ export async function errorClassEnumerationExample(): Promise<void> {
 
     if(error instanceof NoiseHandshakeError) {
 
-      // Generic noise-protocol failure; inspect `code` for the specific cause.
+      // Generic noise-protocol failure; inspect `code` for the specific cause, such as SERVER_NAME_MISMATCH when the device announced a server name other than the
+      // configured `serverName`.
       log.error("The noise handshake failed.", error.code);
 
-      return;
-    }
-
-    if(error instanceof PlaintextHandshakeError) {
-
-      // Plaintext handshake (server-name mismatch, unexpected response).
       return;
     }
 
@@ -102,6 +91,13 @@ export async function errorClassEnumerationExample(): Promise<void> {
     if(error instanceof ConnectionClosedByPeerError) {
 
       // Peer closed the socket cleanly or unexpectedly mid-session.
+      return;
+    }
+
+    if(error instanceof ConnectionLostError) {
+
+      // The connection a request was issued on was torn down before the request completed, or a disconnect cut a manual connect short. `cause` carries what ended
+      // the connection when the teardown knew it.
       return;
     }
 
@@ -144,17 +140,24 @@ export async function errorClassEnumerationExample(): Promise<void> {
       return;
     }
 
-    // Operational stream-closed: the bus stream backing `camera(id).snapshot()` ended (transport dropped) before an image arrived. Carries the branded `cameraId`
-    // and the tagged `STREAM_CLOSED` code so a consumer awaiting multiple cameras can correlate which snapshot failed.
-    if(error instanceof CameraStreamClosedError) {
+    // An awaiting request issued with no connection to carry it, so nothing was sent. `code` is CONNECT_IN_PROGRESS when a connect was running as the call was
+    // issued, so the call can be issued again from a connect listener, and NOT_CONNECTED otherwise.
+    if(error instanceof NotConnectedError) {
 
-      log.error("The camera stream closed before an image arrived.", error.cameraId, error.code);
+      log.error("The request was issued with no connection to carry it.", error.code);
 
       return;
     }
 
     // Library-level catch-all. Any EspHomeError subclass not narrowed above (ConfigurationError from a misuse path, etc.) falls here.
     if(error instanceof EspHomeError) {
+
+      return;
+    }
+
+    // The library's connect or handshake timeout elapsed. The open was given no signal of its own, so a platform TimeoutError here can only be the library's; the
+    // step it elapsed in is logged at debug level.
+    if((error instanceof DOMException) && (error.name === "TimeoutError")) {
 
       return;
     }
@@ -171,13 +174,12 @@ export async function errorClassEnumerationExample(): Promise<void> {
 
 ## Extended by
 
-- [`PermanentError`](PermanentError.md)
+- [`BackpressureError`](BackpressureError.md)
+- [`ConfigurationError`](ConfigurationError.md)
 - [`ConnectionError`](ConnectionError.md)
 - [`NotConnectedError`](NotConnectedError.md)
+- [`PermanentError`](PermanentError.md)
 - [`ProtocolError`](ProtocolError.md)
-- [`BackpressureError`](BackpressureError.md)
-- [`CameraStreamClosedError`](CameraStreamClosedError.md)
-- [`ConfigurationError`](ConfigurationError.md)
 - [`UnsupportedCapabilityError`](UnsupportedCapabilityError.md)
 
 ## Constructors

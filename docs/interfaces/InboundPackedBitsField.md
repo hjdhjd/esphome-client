@@ -19,4 +19,4 @@ named-constant in `api-constants.ts` is the SSOT for consumer-facing label names
 | ------ | ------ |
 | <a id="bits"></a> `bits` | `Record`\<`string`, [`InboundPackedBitSpec`](InboundPackedBitSpec.md)\> |
 | <a id="fieldnumber"></a> `fieldNumber` | `number` |
-| <a id="wiretype"></a> `wireType` | `WireType` |
+| <a id="wiretype"></a> `wireType` | [`WireType`](../type-aliases/WireType.md) |

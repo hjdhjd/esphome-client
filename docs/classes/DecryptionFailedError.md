@@ -6,7 +6,8 @@
 
 # Class: DecryptionFailedError
 
-A single inbound noise frame failed the ChaCha20-Poly1305 tag check on an already-handshaked session.
+A single inbound noise frame failed to decrypt on an already-handshaked session: the ChaCha20-Poly1305 tag check failed, the frame was shorter than the tag, or the
+receive nonce was exhausted, each raised by the receive cipher and wrapped here.
 
 ## Remarks
 

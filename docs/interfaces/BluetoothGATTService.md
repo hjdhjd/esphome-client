@@ -6,7 +6,7 @@
 
 # Interface: BluetoothGATTService
 
-GATT service metadata. Surfaced from [BluetoothProxyApi.getServices](../classes/BluetoothProxyApi.md#getservices) as an array of services; the device streams services across multiple wire frames terminated
+GATT service metadata. Surfaced from [BluetoothProxyApi.getServices](BluetoothProxyApi.md#getservices) as an array of services; the device streams services across multiple wire frames terminated
 by a sentinel, and the sub-API accumulates them transparently.
 
 ## Properties

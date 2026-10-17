@@ -4,9 +4,9 @@
 
 [Home](../README.md) / ZWaveProxyApi
 
-# Class: ZWaveProxyApi
+# Interface: ZWaveProxyApi
 
-Z-Wave-proxy sub-API. Single instance per client; created lazily on first access via [EspHomeClient.zwave](EspHomeClient.md#zwave).
+Z-Wave-proxy sub-API. Single instance per client; created lazily on first access via [EspHomeClient.zwave](../classes/EspHomeClient.md#zwave).
 
 ## Implements
 
@@ -22,7 +22,7 @@ Z-Wave-proxy sub-API. Single instance per client; created lazily on first access
 get available(): boolean;
 ```
 
-Whether the connected device advertises Z-Wave-proxy support. Reads `zwaveProxyFeatureFlags` from the latest [DeviceInfo](../interfaces/DeviceInfo.md); returns `false`
+Whether the connected device advertises Z-Wave-proxy support. Reads `zwaveProxyFeatureFlags` from the latest [DeviceInfo](DeviceInfo.md); returns `false`
 when discovery has not completed or when the device firmware was not compiled with `USE_ZWAVE_PROXY`. Any nonzero feature-flag bitmask reads as `true`; the
 individual bit semantics are upstream concerns not surfaced here.
 
@@ -136,7 +136,7 @@ export async function zwaveBytePipeExample(client: EspHomeClient): Promise<void>
 
 | Parameter | Type | Description |
 | ------ | ------ | ------ |
-| `options?` | [`StreamOptions`](../interfaces/StreamOptions.md) | Optional backpressure policy and cancellation signal forwarded to the underlying `bus.stream("zwaveFrame", options)`. |
+| `options?` | [`StreamOptions`](StreamOptions.md) | Optional backpressure policy and cancellation signal forwarded to the underlying `bus.stream("zwaveFrame", options)`. |
 
 #### Returns
 
@@ -153,7 +153,7 @@ end it: the subscriber survives in the ledger and [reissueOnReconnect](#reissueo
 homeId(): Nullable<number>;
 ```
 
-The Z-Wave home id reported by the device. On first read after discovery, falls back to [DeviceInfo.zwaveHomeId](../interfaces/DeviceInfo.md#zwavehomeid); subsequent reads return the
+The Z-Wave home id reported by the device. On first read after discovery, falls back to [DeviceInfo.zwaveHomeId](DeviceInfo.md#zwavehomeid); subsequent reads return the
 cached value updated by the most recent `HOME_ID_CHANGE` push. Returns `null` when no Z-Wave network is joined (home id zero) or when the device does not advertise
 Z-Wave proxy support.
 
@@ -178,7 +178,7 @@ network. Each yielded `number` is the new home id (or `0` when the network is le
 
 | Parameter | Type | Description |
 | ------ | ------ | ------ |
-| `options?` | [`StreamOptions`](../interfaces/StreamOptions.md) | Optional backpressure policy and cancellation signal forwarded to the underlying `bus.stream("zwaveHomeIdChange", options)`. |
+| `options?` | [`StreamOptions`](StreamOptions.md) | Optional backpressure policy and cancellation signal forwarded to the underlying `bus.stream("zwaveHomeIdChange", options)`. |
 
 #### Returns
 

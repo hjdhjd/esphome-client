@@ -6,7 +6,7 @@
 
 # Interface: BluetoothGATTDescriptor
 
-GATT descriptor metadata. Carried inside [BluetoothGATTCharacteristic.descriptors](BluetoothGATTCharacteristic.md#descriptors); surfaced from [BluetoothProxyApi.getServices](../classes/BluetoothProxyApi.md#getservices). The wire fields are
+GATT descriptor metadata. Carried inside [BluetoothGATTCharacteristic.descriptors](BluetoothGATTCharacteristic.md#descriptors); surfaced from [BluetoothProxyApi.getServices](BluetoothProxyApi.md#getservices). The wire fields are
 (`uuid: repeated uint64`, `handle`, `short_uuid`) - 128-bit UUIDs arrive as two-element uint64 arrays; shorter assigned-number UUIDs arrive on `shortUuid`.
 
 ## Properties

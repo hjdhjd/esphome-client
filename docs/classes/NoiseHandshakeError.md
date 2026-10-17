@@ -6,7 +6,7 @@
 
 # Class: NoiseHandshakeError
 
-Failure during the Noise NNpsk0 handshake itself. Carries a narrowed [NoiseHandshakeErrorCode](../type-aliases/NoiseHandshakeErrorCode.md) for precise dispatch.
+Failure during the Noise NNpsk0 handshake, or in the cipher state it establishes. Carries a narrowed [NoiseHandshakeErrorCode](../type-aliases/NoiseHandshakeErrorCode.md) for precise dispatch.
 
 ## Extends
 
@@ -14,7 +14,6 @@ Failure during the Noise NNpsk0 handshake itself. Carries a narrowed [NoiseHands
 
 ## Extended by
 
-- [`NoiseHandshakeTimeoutError`](NoiseHandshakeTimeoutError.md)
 - [`PeerClosedDuringNoiseError`](PeerClosedDuringNoiseError.md)
 
 ## Constructors

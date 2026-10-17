@@ -14,4 +14,4 @@ Defines the wire format for a single protobuf field.
 | ------ | ------ |
 | <a id="fieldnumber"></a> `fieldNumber` | `number` |
 | <a id="valuetype"></a> `valueType` | [`ValueType`](../type-aliases/ValueType.md) |
-| <a id="wiretype"></a> `wireType` | `WireType` |
+| <a id="wiretype"></a> `wireType` | [`WireType`](../type-aliases/WireType.md) |

@@ -8,7 +8,6 @@
 
 ```ts
 type ConfigurationErrorCode = 
-  | "AWAIT_STREAM_CLOSED"
   | "COMMAND_UNSUPPORTED"
   | "ENUM_VALUE_UNKNOWN"
   | "EXTRA_SCHEMA_OVERRIDES_BUILTIN"

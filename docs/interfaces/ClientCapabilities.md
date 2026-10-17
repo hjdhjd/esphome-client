@@ -16,7 +16,7 @@ export async function capabilityFeatureGatingExample(client: EspHomeClient): Pro
 
   const caps = client.capabilities();
 
-  // Feature: voice-assistant subscribe. The handshake sends SUBSCRIBE_VOICE_ASSISTANT_REQUEST; sending it to a device without VA support is a silent no-op on the
+  // Feature: voice-assistant subscribe. `subscribe()` sends SUBSCRIBE_VOICE_ASSISTANT_REQUEST; sending it to a device without VA support is a silent no-op on the
   // wire but a confusing dead path for the consumer. Gate it.
   if(caps.voiceAssistant.supported) {
 
@@ -63,7 +63,7 @@ export async function capabilityFeatureGatingExample(client: EspHomeClient): Pro
 | `voiceAssistant.stereoAudio` | `boolean` | - |
 | `voiceAssistant.supported` | `boolean` | - |
 | `voiceAssistant.timerEvents` | `boolean` | - |
-| <a id="zwaveproxy"></a> `zwaveProxy` | \{ `featureFlags`: `number`; `homeId`: [`Nullable`](../type-aliases/Nullable.md)\<`number`\>; `supported`: `boolean`; \} | Z-Wave-proxy support details. `supported` is true when the device advertises a nonzero `zwave_proxy_feature_flags` bitmask (field 23); `featureFlags` exposes that bitmask verbatim for forward compatibility with future ESPHome feature bits. `homeId` mirrors `DeviceInfoResponse.zwave_home_id` (field 24), normalised so a value of `0` (no Z-Wave network joined) surfaces as `null`; absent device-info field 24 also surfaces as `null`. The runtime-authoritative home id - updated by inbound `HOME_ID_CHANGE` request pushes - is read via [ZWaveProxyApi.homeId](../classes/ZWaveProxyApi.md#homeid); this record carries the snapshot observed at the most recent connect. |
+| <a id="zwaveproxy"></a> `zwaveProxy` | \{ `featureFlags`: `number`; `homeId`: [`Nullable`](../type-aliases/Nullable.md)\<`number`\>; `supported`: `boolean`; \} | Z-Wave-proxy support details. `supported` is true when the device advertises a nonzero `zwave_proxy_feature_flags` bitmask (field 23); `featureFlags` exposes that bitmask verbatim for forward compatibility with future ESPHome feature bits. `homeId` mirrors `DeviceInfoResponse.zwave_home_id` (field 24), normalised so a value of `0` (no Z-Wave network joined) surfaces as `null`; absent device-info field 24 also surfaces as `null`. The runtime-authoritative home id - updated by inbound `HOME_ID_CHANGE` request pushes - is read via [ZWaveProxyApi.homeId](ZWaveProxyApi.md#homeid); this record carries the snapshot observed at the most recent connect. |
 | `zwaveProxy.featureFlags` | `number` | - |
 | `zwaveProxy.homeId` | [`Nullable`](../type-aliases/Nullable.md)\<`number`\> | - |
 | `zwaveProxy.supported` | `boolean` | - |

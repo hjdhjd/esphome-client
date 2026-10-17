@@ -7,7 +7,7 @@
 # Interface: NotifyDataChunk
 
 One inbound GATT notify chunk. Emitted on the `bluetoothNotifyData` bus event whenever the device pushes a `BluetoothGATTNotifyDataResponse` (id 79); the
-[BluetoothProxyApi.notify](../classes/BluetoothProxyApi.md#notify) iterator filters by `(address, handle)` so consumers see only the notifications they subscribed to.
+[BluetoothProxyApi.notify](BluetoothProxyApi.md#notify) iterator filters by `(address, handle)` so consumers see only the notifications they subscribed to.
 
 ## Properties
 

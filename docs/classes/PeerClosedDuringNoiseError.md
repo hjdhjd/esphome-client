@@ -6,7 +6,8 @@
 
 # Class: PeerClosedDuringNoiseError
 
-Peer (the device) closed the socket while the noise handshake was still in flight. Triggers fallback to plaintext when applicable.
+Peer (the device) ended the connection, whether as a close, a reset or a failed write, during the noise handshake before sending a Noise frame (`PEER_CLOSED_NOISE`),
+or answered the handshake with the plaintext indicator byte (`PEER_PLAINTEXT_DURING_NOISE`). Triggers fallback to plaintext when applicable.
 
 ## Extends
 

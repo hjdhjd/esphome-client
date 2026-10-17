@@ -4,9 +4,9 @@
 
 [Home](../README.md) / BluetoothProxyApi
 
-# Class: BluetoothProxyApi
+# Interface: BluetoothProxyApi
 
-Bluetooth-proxy sub-API. Single instance per client; created lazily on first access via [EspHomeClient.bluetooth](EspHomeClient.md#bluetooth).
+Bluetooth-proxy sub-API. Single instance per client; created lazily on first access via [EspHomeClient.bluetooth](../classes/EspHomeClient.md#bluetooth).
 
 ## Implements
 
@@ -22,7 +22,7 @@ Bluetooth-proxy sub-API. Single instance per client; created lazily on first acc
 get available(): boolean;
 ```
 
-Whether the connected device advertises Bluetooth-proxy support. Reads `bluetoothProxyFeatureFlags` from the latest [DeviceInfo](../interfaces/DeviceInfo.md); returns
+Whether the connected device advertises Bluetooth-proxy support. Reads `bluetoothProxyFeatureFlags` from the latest [DeviceInfo](DeviceInfo.md); returns
 `false` when discovery has not completed or when the device firmware was not compiled with `USE_BLUETOOTH_PROXY`. Any nonzero feature-flag bitmask reads as `true`;
 the individual bit semantics are upstream concerns not surfaced here.
 
@@ -59,7 +59,7 @@ Backpressured async-iterable view of inbound BLE advertisements. First iterator 
 the last iterator to detach issues `UNSUBSCRIBE_BLUETOOTH_LE_ADVERTISEMENTS_REQUEST`. Concurrent iterators share the wire-side subscription (only one SUBSCRIBE is
 sent regardless of consumer count). The subscription survives reconnect via [reissueOnReconnect](#reissueonreconnect).
 
-Each yielded [BluetoothLERawAdvertisement](../interfaces/BluetoothLERawAdvertisement.md) is a single advertisement. The device batches multiple ads into one wire message
+Each yielded [BluetoothLERawAdvertisement](BluetoothLERawAdvertisement.md) is a single advertisement. The device batches multiple ads into one wire message
 (`BluetoothLERawAdvertisementsResponse.advertisements`); the handler fans them out before they reach the iterator so consumers filter / count / aggregate
 per-advertisement, not per-batch.
 
@@ -70,11 +70,11 @@ The view releases its subscriber once, on whichever ends it first: the signal ab
 
 | Parameter | Type | Description |
 | ------ | ------ | ------ |
-| `options?` | [`StreamOptions`](../interfaces/StreamOptions.md) | Optional backpressure policy and cancellation signal forwarded to the underlying `bus.stream("bluetoothAdvertisement", options)`. |
+| `options?` | [`StreamOptions`](StreamOptions.md) | Optional backpressure policy and cancellation signal forwarded to the underlying `bus.stream("bluetoothAdvertisement", options)`. |
 
 #### Returns
 
-`AsyncIterable`\<[`BluetoothLERawAdvertisement`](../interfaces/BluetoothLERawAdvertisement.md)\>
+`AsyncIterable`\<[`BluetoothLERawAdvertisement`](BluetoothLERawAdvertisement.md)\>
 
 An `AsyncIterable<BluetoothLERawAdvertisement>` that yields ads until the consumer aborts, returns, or throws, or the underlying EventBus stream ends. A
 reconnect does not end it: the subscriber survives in the ledger and [reissueOnReconnect](#reissueonreconnect) re-arms the wire-side subscription on the new connection.
@@ -141,11 +141,25 @@ firmware upgrade changes its GATT layout - clearing the cache forces a fresh ser
 
 #### Throws
 
-[ConnectionError](ConnectionError.md) with code `"GATT_CLEAR_CACHE_FAILED"` when the device reports `success=false` or a nonzero `error` field.
+[ConnectionError](../classes/ConnectionError.md) with code `"GATT_CLEAR_CACHE_FAILED"` when the device reports `success=false` or a nonzero `error` field.
 
 #### Throws
 
-[ConnectionError](ConnectionError.md) with code `"GATT_CLEAR_CACHE_IN_FLIGHT"` when another clearCache for the same address is already pending.
+[ConnectionError](../classes/ConnectionError.md) with code `"GATT_CLEAR_CACHE_IN_FLIGHT"` when another clearCache for the same address is already pending.
+
+#### Throws
+
+[NotConnectedError](../classes/NotConnectedError.md) with code `"CONNECT_IN_PROGRESS"` when the call is issued while a manual connect has not yet settled or the automatic reconnect is
+active, and with code `"NOT_CONNECTED"` when it is issued with no connection otherwise. Nothing is sent.
+
+#### Throws
+
+[ConnectionLostError](../classes/ConnectionLostError.md) when the connection the request was issued on is torn down before the device replies.
+
+#### Throws
+
+The signal's reason, as it is, when `options.signal` aborts, including when it was already aborted at call time, in which case nothing is sent, and the
+timeout's `TimeoutError` when the device does not reply within `options.timeoutMs`.
 
 ***
 
@@ -155,17 +169,17 @@ firmware upgrade changes its GATT layout - clearing the cache forces a fresh ser
 clearConnectionState(): void;
 ```
 
-Reset ONLY connection-scoped state. Called by the host at disconnect and again at connect-top. Rejects every pending GATT Correlator with an `AbortError`
-(in-flight request/response state cannot outlive the connection it was issued on), clears the connection-scoped caches and accumulators (scanner-state,
-connections-free, connection-state, inflight-services), and clears each subscription's connection-scoped wire cache (the device starts every fresh connection with no
-subscription). The consumer
-subscriber ledgers are PRESERVED: iterators alive across the reconnect cycle stay live, and the host's [reissueOnReconnect](#reissueonreconnect) call after the new connection is up
-re-issues SUBSCRIBE (advertisement, connections-free) and NOTIFY(enable=1) (notify) for the surviving consumers.
+Reset ONLY connection-scoped state. Called by the host at disconnect and again at connect-top. Clears the connection-scoped caches and accumulators (scanner-state,
+connections-free, connection-state, inflight-services) and each subscription's connection-scoped wire cache (the device starts every fresh connection with no
+subscription), and ends no wait. The consumer subscriber ledgers are PRESERVED: iterators alive across the reconnect cycle stay live, and the host's
+[reissueOnReconnect](#reissueonreconnect) call after the new connection is up re-issues SUBSCRIBE (advertisement, connections-free) and NOTIFY(enable=1) (notify) for the surviving
+consumers.
 
 Notes for callers:
 
-- In-flight `connect`, `disconnect`, `pair`, `unpair`, `clearCache`, `read`, `write`, `setNotify`, `getServices`, `setConnectionParams` awaits all reject with
-  `DOMException("AbortError")` so callers see a uniform abort signal regardless of which Correlator was holding them.
+- Every pending GATT wait (`connect`, `disconnect`, `pair`, `unpair`, `clearCache`, `getServices`, the reads, the writes that await a response, `setNotify`,
+  `setConnectionParams`) composes the connection it was issued on, so the teardown that ends that connection rejects each one with its
+  [ConnectionLostError](../classes/ConnectionLostError.md) before this reset runs, whichever Correlator was holding it.
 - `connectionStateCache` is cleared so [isConnected](#isconnected) reports `false` for every previously-connected address. Consumers that want to reconnect must
   call [connect](#connect) again; we do NOT auto-reconnect peripherals across a host-level reconnect because the consumer's intent for each address is application-level
   policy, not library-level policy.
@@ -230,17 +244,31 @@ export async function bluetoothConnectExample(client: EspHomeClient): Promise<vo
 
 #### Returns
 
-`Promise`\<[`ConnectionStateData`](../interfaces/ConnectionStateData.md)\>
+`Promise`\<[`ConnectionStateData`](ConnectionStateData.md)\>
 
-The resolved [ConnectionStateData](../interfaces/ConnectionStateData.md).
-
-#### Throws
-
-[ConnectionError](ConnectionError.md) with code `"GATT_CONNECT_FAILED"` when the device reports `connected=false` with a nonzero `error` field.
+The resolved [ConnectionStateData](ConnectionStateData.md).
 
 #### Throws
 
-[ConnectionError](ConnectionError.md) with code `"GATT_CONNECT_IN_FLIGHT"` when another connect for the same address is already pending.
+[ConnectionError](../classes/ConnectionError.md) with code `"GATT_CONNECT_FAILED"` when the device reports `connected=false` with a nonzero `error` field.
+
+#### Throws
+
+[ConnectionError](../classes/ConnectionError.md) with code `"GATT_CONNECT_IN_FLIGHT"` when another connect for the same address is already pending.
+
+#### Throws
+
+[NotConnectedError](../classes/NotConnectedError.md) with code `"CONNECT_IN_PROGRESS"` when the call is issued while a manual connect has not yet settled or the automatic reconnect is
+active, and with code `"NOT_CONNECTED"` when it is issued with no connection otherwise. Nothing is sent.
+
+#### Throws
+
+[ConnectionLostError](../classes/ConnectionLostError.md) when the connection the request was issued on is torn down before the device replies.
+
+#### Throws
+
+The signal's reason, as it is, when `options.signal` aborts, including when it was already aborted at call time, in which case nothing is sent, and the
+timeout's `TimeoutError` when the device does not reply within `options.timeoutMs`.
 
 ***
 
@@ -289,11 +317,11 @@ export async function bluetoothConnectionsFreeExample(client: EspHomeClient): Pr
 
 | Parameter | Type | Description |
 | ------ | ------ | ------ |
-| `options?` | [`StreamOptions`](../interfaces/StreamOptions.md) | Optional backpressure policy and cancellation signal. |
+| `options?` | [`StreamOptions`](StreamOptions.md) | Optional backpressure policy and cancellation signal. |
 
 #### Returns
 
-`AsyncIterable`\<[`ConnectionsFreeData`](../interfaces/ConnectionsFreeData.md)\>
+`AsyncIterable`\<[`ConnectionsFreeData`](ConnectionsFreeData.md)\>
 
 An `AsyncIterable<ConnectionsFreeData>`.
 
@@ -305,7 +333,7 @@ An `AsyncIterable<ConnectionsFreeData>`.
 connectionState(address): Nullable<ConnectionStateData>;
 ```
 
-Synchronous accessor for the cached [ConnectionStateData](../interfaces/ConnectionStateData.md) for an address, or `null` if no connection-state push has been observed for that address on the
+Synchronous accessor for the cached [ConnectionStateData](ConnectionStateData.md) for an address, or `null` if no connection-state push has been observed for that address on the
 current connection. For the streaming view, see [connectionStates](#connectionstates).
 
 #### Parameters
@@ -316,7 +344,7 @@ current connection. For the streaming view, see [connectionStates](#connectionst
 
 #### Returns
 
-[`Nullable`](../type-aliases/Nullable.md)\<[`ConnectionStateData`](../interfaces/ConnectionStateData.md)\>
+[`Nullable`](../type-aliases/Nullable.md)\<[`ConnectionStateData`](ConnectionStateData.md)\>
 
 The cached state, or `null`.
 
@@ -335,11 +363,11 @@ sends - typically one connected-true at successful connect, one connected-false 
 
 | Parameter | Type | Description |
 | ------ | ------ | ------ |
-| `options?` | [`StreamOptions`](../interfaces/StreamOptions.md) | Optional backpressure policy and cancellation signal. |
+| `options?` | [`StreamOptions`](StreamOptions.md) | Optional backpressure policy and cancellation signal. |
 
 #### Returns
 
-`AsyncIterable`\<[`ConnectionStateData`](../interfaces/ConnectionStateData.md)\>
+`AsyncIterable`\<[`ConnectionStateData`](ConnectionStateData.md)\>
 
 An `AsyncIterable<ConnectionStateData>`.
 
@@ -393,7 +421,21 @@ export async function bluetoothConnectExample(client: EspHomeClient): Promise<vo
 
 #### Throws
 
-[ConnectionError](ConnectionError.md) with code `"GATT_DISCONNECT_IN_FLIGHT"` when another disconnect for the same address is already pending.
+[ConnectionError](../classes/ConnectionError.md) with code `"GATT_DISCONNECT_IN_FLIGHT"` when another disconnect for the same address is already pending.
+
+#### Throws
+
+[NotConnectedError](../classes/NotConnectedError.md) with code `"CONNECT_IN_PROGRESS"` when the call is issued while a manual connect has not yet settled or the automatic reconnect is
+active, and with code `"NOT_CONNECTED"` when it is issued with no connection otherwise. Nothing is sent.
+
+#### Throws
+
+[ConnectionLostError](../classes/ConnectionLostError.md) when the connection the request was issued on is torn down before the device replies.
+
+#### Throws
+
+The signal's reason, as it is, when `options.signal` aborts, including when it was already aborted at call time, in which case nothing is sent, and the
+timeout's `TimeoutError` when the device does not reply within `options.timeoutMs`.
 
 ***
 
@@ -443,13 +485,27 @@ export async function bluetoothGetServicesExample(client: EspHomeClient): Promis
 
 #### Returns
 
-`Promise`\<[`BluetoothGATTService`](../interfaces/BluetoothGATTService.md)[]\>
+`Promise`\<[`BluetoothGATTService`](BluetoothGATTService.md)[]\>
 
 The full service list as an array, preserving wire-order.
 
 #### Throws
 
-[ConnectionError](ConnectionError.md) with code `"GATT_GET_SERVICES_IN_FLIGHT"` when another getServices for the same address is already pending.
+[ConnectionError](../classes/ConnectionError.md) with code `"GATT_GET_SERVICES_IN_FLIGHT"` when another getServices for the same address is already pending.
+
+#### Throws
+
+[NotConnectedError](../classes/NotConnectedError.md) with code `"CONNECT_IN_PROGRESS"` when the call is issued while a manual connect has not yet settled or the automatic reconnect is
+active, and with code `"NOT_CONNECTED"` when it is issued with no connection otherwise. Nothing is sent.
+
+#### Throws
+
+[ConnectionLostError](../classes/ConnectionLostError.md) when the connection the request was issued on is torn down before the device replies.
+
+#### Throws
+
+The signal's reason, as it is, when `options.signal` aborts, including when it was already aborted at call time, in which case nothing is sent, and the
+timeout's `TimeoutError` when the device does not reply within `options.timeoutMs`.
 
 ***
 
@@ -541,9 +597,9 @@ export async function bluetoothConnectionsFreeExample(client: EspHomeClient): Pr
 
 #### Returns
 
-[`Nullable`](../type-aliases/Nullable.md)\<[`ConnectionsFreeData`](../interfaces/ConnectionsFreeData.md)\>
+[`Nullable`](../type-aliases/Nullable.md)\<[`ConnectionsFreeData`](ConnectionsFreeData.md)\>
 
-The cached [ConnectionsFreeData](../interfaces/ConnectionsFreeData.md), or `null`.
+The cached [ConnectionsFreeData](ConnectionsFreeData.md), or `null`.
 
 ***
 
@@ -583,9 +639,9 @@ export async function bluetoothScannerStateExample(client: EspHomeClient): Promi
 
 #### Returns
 
-[`Nullable`](../type-aliases/Nullable.md)\<[`BluetoothScannerStateData`](../interfaces/BluetoothScannerStateData.md)\>
+[`Nullable`](../type-aliases/Nullable.md)\<[`BluetoothScannerStateData`](BluetoothScannerStateData.md)\>
 
-The cached [BluetoothScannerStateData](../interfaces/BluetoothScannerStateData.md), or `null` when no push has been observed on the current connection.
+The cached [BluetoothScannerStateData](BluetoothScannerStateData.md), or `null` when no push has been observed on the current connection.
 
 ***
 
@@ -650,11 +706,11 @@ export async function bluetoothNotifyExample(client: EspHomeClient): Promise<voi
 | ------ | ------ | ------ |
 | `address` | `bigint` | Device BLE address. |
 | `handle` | `number` | Characteristic handle (matching what was passed to [setNotify](#setnotify)). |
-| `options?` | [`StreamOptions`](../interfaces/StreamOptions.md) | Optional backpressure policy and cancellation signal. |
+| `options?` | [`StreamOptions`](StreamOptions.md) | Optional backpressure policy and cancellation signal. |
 
 #### Returns
 
-`AsyncIterable`\<[`NotifyDataChunk`](../interfaces/NotifyDataChunk.md)\>
+`AsyncIterable`\<[`NotifyDataChunk`](NotifyDataChunk.md)\>
 
 An `AsyncIterable<NotifyDataChunk>`.
 
@@ -730,11 +786,25 @@ export async function bluetoothPairUnpairExample(client: EspHomeClient): Promise
 
 #### Throws
 
-[ConnectionError](ConnectionError.md) with code `"GATT_PAIR_FAILED"` when the device reports `paired=false` or a nonzero `error` field.
+[ConnectionError](../classes/ConnectionError.md) with code `"GATT_PAIR_FAILED"` when the device reports `paired=false` or a nonzero `error` field.
 
 #### Throws
 
-[ConnectionError](ConnectionError.md) with code `"GATT_PAIR_IN_FLIGHT"` when another pair for the same address is already pending.
+[ConnectionError](../classes/ConnectionError.md) with code `"GATT_PAIR_IN_FLIGHT"` when another pair for the same address is already pending.
+
+#### Throws
+
+[NotConnectedError](../classes/NotConnectedError.md) with code `"CONNECT_IN_PROGRESS"` when the call is issued while a manual connect has not yet settled or the automatic reconnect is
+active, and with code `"NOT_CONNECTED"` when it is issued with no connection otherwise. Nothing is sent.
+
+#### Throws
+
+[ConnectionLostError](../classes/ConnectionLostError.md) when the connection the request was issued on is torn down before the device replies.
+
+#### Throws
+
+The signal's reason, as it is, when `options.signal` aborts, including when it was already aborted at call time, in which case nothing is sent, and the
+timeout's `TimeoutError` when the device does not reply within `options.timeoutMs`.
 
 ***
 
@@ -790,11 +860,25 @@ The characteristic value bytes.
 
 #### Throws
 
-[ConnectionError](ConnectionError.md) with code `"GATT_READ_IN_FLIGHT"` when another read for the same (address, handle) is already pending.
+[ConnectionError](../classes/ConnectionError.md) with code `"GATT_READ_IN_FLIGHT"` when another read for the same (address, handle) is already pending.
 
 #### Throws
 
-[ConnectionError](ConnectionError.md) with code `"GATT_ERROR"` when the device returns an error for the operation.
+[ConnectionError](../classes/ConnectionError.md) with code `"GATT_ERROR"` when the device returns an error for the operation.
+
+#### Throws
+
+[NotConnectedError](../classes/NotConnectedError.md) with code `"CONNECT_IN_PROGRESS"` when the call is issued while a manual connect has not yet settled or the automatic reconnect is
+active, and with code `"NOT_CONNECTED"` when it is issued with no connection otherwise. Nothing is sent.
+
+#### Throws
+
+[ConnectionLostError](../classes/ConnectionLostError.md) when the connection the request was issued on is torn down before the device replies.
+
+#### Throws
+
+The signal's reason, as it is, when `options.signal` aborts, including when it was already aborted at call time, in which case nothing is sent, and the
+timeout's `TimeoutError` when the device does not reply within `options.timeoutMs`.
 
 ***
 
@@ -847,11 +931,25 @@ The descriptor value bytes.
 
 #### Throws
 
-[ConnectionError](ConnectionError.md) with code `"GATT_READ_IN_FLIGHT"` when another read for the same (address, handle) is already pending.
+[ConnectionError](../classes/ConnectionError.md) with code `"GATT_READ_IN_FLIGHT"` when another read for the same (address, handle) is already pending.
 
 #### Throws
 
-[ConnectionError](ConnectionError.md) with code `"GATT_ERROR"` when the device returns an error.
+[ConnectionError](../classes/ConnectionError.md) with code `"GATT_ERROR"` when the device returns an error.
+
+#### Throws
+
+[NotConnectedError](../classes/NotConnectedError.md) with code `"CONNECT_IN_PROGRESS"` when the call is issued while a manual connect has not yet settled or the automatic reconnect is
+active, and with code `"NOT_CONNECTED"` when it is issued with no connection otherwise. Nothing is sent.
+
+#### Throws
+
+[ConnectionLostError](../classes/ConnectionLostError.md) when the connection the request was issued on is torn down before the device replies.
+
+#### Throws
+
+The signal's reason, as it is, when `options.signal` aborts, including when it was already aborted at call time, in which case nothing is sent, and the
+timeout's `TimeoutError` when the device does not reply within `options.timeoutMs`.
 
 ***
 
@@ -905,11 +1003,11 @@ Does NOT issue any subscribe/unsubscribe at the wire level - scanner-state pushe
 
 | Parameter | Type | Description |
 | ------ | ------ | ------ |
-| `options?` | [`StreamOptions`](../interfaces/StreamOptions.md) | Optional backpressure policy and cancellation signal forwarded to the underlying `bus.stream("bluetoothScannerState", options)`. |
+| `options?` | [`StreamOptions`](StreamOptions.md) | Optional backpressure policy and cancellation signal forwarded to the underlying `bus.stream("bluetoothScannerState", options)`. |
 
 #### Returns
 
-`AsyncIterable`\<[`BluetoothScannerStateData`](../interfaces/BluetoothScannerStateData.md)\>
+`AsyncIterable`\<[`BluetoothScannerStateData`](BluetoothScannerStateData.md)\>
 
 An `AsyncIterable<BluetoothScannerStateData>`.
 
@@ -978,7 +1076,7 @@ export async function bluetoothConnectionParamsExample(client: EspHomeClient): P
 | Parameter | Type | Description |
 | ------ | ------ | ------ |
 | `address` | `bigint` | Device BLE address. |
-| `params` | [`ConnectionParams`](../interfaces/ConnectionParams.md) | Connection-interval bounds, slave latency, and supervision timeout. See [ConnectionParams](../interfaces/ConnectionParams.md) for units. |
+| `params` | [`ConnectionParams`](ConnectionParams.md) | Connection-interval bounds, slave latency, and supervision timeout. See [ConnectionParams](ConnectionParams.md) for units. |
 | `options?` | \{ `signal?`: [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal); `timeoutMs?`: `number`; \} | Optional cancellation signal and timeout. |
 | `options.signal?` | [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal) | - |
 | `options.timeoutMs?` | `number` | - |
@@ -989,11 +1087,25 @@ export async function bluetoothConnectionParamsExample(client: EspHomeClient): P
 
 #### Throws
 
-[ConnectionError](ConnectionError.md) with code `"GATT_SET_CONNECTION_PARAMS_FAILED"` when the device returns a nonzero `error` field.
+[ConnectionError](../classes/ConnectionError.md) with code `"GATT_SET_CONNECTION_PARAMS_FAILED"` when the device returns a nonzero `error` field.
 
 #### Throws
 
-[ConnectionError](ConnectionError.md) with code `"GATT_SET_CONNECTION_PARAMS_IN_FLIGHT"` when another setConnectionParams for the same address is already pending.
+[ConnectionError](../classes/ConnectionError.md) with code `"GATT_SET_CONNECTION_PARAMS_IN_FLIGHT"` when another setConnectionParams for the same address is already pending.
+
+#### Throws
+
+[NotConnectedError](../classes/NotConnectedError.md) with code `"CONNECT_IN_PROGRESS"` when the call is issued while a manual connect has not yet settled or the automatic reconnect is
+active, and with code `"NOT_CONNECTED"` when it is issued with no connection otherwise. Nothing is sent.
+
+#### Throws
+
+[ConnectionLostError](../classes/ConnectionLostError.md) when the connection the request was issued on is torn down before the device replies.
+
+#### Throws
+
+The signal's reason, as it is, when `options.signal` aborts, including when it was already aborted at call time, in which case nothing is sent, and the
+timeout's `TimeoutError` when the device does not reply within `options.timeoutMs`.
 
 ***
 
@@ -1061,11 +1173,25 @@ export async function bluetoothNotifyExample(client: EspHomeClient): Promise<voi
 
 #### Throws
 
-[ConnectionError](ConnectionError.md) with code `"GATT_NOTIFY_SETUP_IN_FLIGHT"` when another setNotify for the same (address, handle) is already pending.
+[ConnectionError](../classes/ConnectionError.md) with code `"GATT_NOTIFY_SETUP_IN_FLIGHT"` when another setNotify for the same (address, handle) is already pending.
 
 #### Throws
 
-[ConnectionError](ConnectionError.md) with code `"GATT_ERROR"` when the device returns an error.
+[ConnectionError](../classes/ConnectionError.md) with code `"GATT_ERROR"` when the device returns an error.
+
+#### Throws
+
+[NotConnectedError](../classes/NotConnectedError.md) with code `"CONNECT_IN_PROGRESS"` when the call is issued while a manual connect has not yet settled or the automatic reconnect is
+active, and with code `"NOT_CONNECTED"` when it is issued with no connection otherwise. Nothing is sent.
+
+#### Throws
+
+[ConnectionLostError](../classes/ConnectionLostError.md) when the connection the request was issued on is torn down before the device replies.
+
+#### Throws
+
+The signal's reason, as it is, when `options.signal` aborts, including when it was already aborted at call time, in which case nothing is sent, and the
+timeout's `TimeoutError` when the device does not reply within `options.timeoutMs`.
 
 ***
 
@@ -1168,11 +1294,25 @@ export async function bluetoothPairUnpairExample(client: EspHomeClient): Promise
 
 #### Throws
 
-[ConnectionError](ConnectionError.md) with code `"GATT_UNPAIR_FAILED"` when the device reports `success=false` or a nonzero `error` field.
+[ConnectionError](../classes/ConnectionError.md) with code `"GATT_UNPAIR_FAILED"` when the device reports `success=false` or a nonzero `error` field.
 
 #### Throws
 
-[ConnectionError](ConnectionError.md) with code `"GATT_UNPAIR_IN_FLIGHT"` when another unpair for the same address is already pending.
+[ConnectionError](../classes/ConnectionError.md) with code `"GATT_UNPAIR_IN_FLIGHT"` when another unpair for the same address is already pending.
+
+#### Throws
+
+[NotConnectedError](../classes/NotConnectedError.md) with code `"CONNECT_IN_PROGRESS"` when the call is issued while a manual connect has not yet settled or the automatic reconnect is
+active, and with code `"NOT_CONNECTED"` when it is issued with no connection otherwise. Nothing is sent.
+
+#### Throws
+
+[ConnectionLostError](../classes/ConnectionLostError.md) when the connection the request was issued on is torn down before the device replies.
+
+#### Throws
+
+The signal's reason, as it is, when `options.signal` aborts, including when it was already aborted at call time, in which case nothing is sent, and the
+timeout's `TimeoutError` when the device does not reply within `options.timeoutMs`.
 
 ***
 
@@ -1229,11 +1369,30 @@ export async function bluetoothReadWriteExample(client: EspHomeClient): Promise<
 
 #### Throws
 
-[ConnectionError](ConnectionError.md) with code `"GATT_WRITE_IN_FLIGHT"` when `response=true` and another write for the same (address, handle) is already pending.
+[ConnectionError](../classes/ConnectionError.md) with code `"GATT_WRITE_IN_FLIGHT"` when `response=true` and another write for the same (address, handle) is already pending.
 
 #### Throws
 
-[ConnectionError](ConnectionError.md) with code `"GATT_ERROR"` when `response=true` and the device returns an error.
+[ConnectionError](../classes/ConnectionError.md) with code `"GATT_ERROR"` when `response=true` and the device returns an error.
+
+#### Throws
+
+[NotConnectedError](../classes/NotConnectedError.md) with code `"CONNECT_IN_PROGRESS"` when `response=true` and the call is issued while a manual connect has not yet settled or the
+automatic reconnect is active, and with code `"NOT_CONNECTED"` when `response=true` and it is issued with no connection otherwise. Nothing is sent. A write that
+awaits no response is never refused for a missing connection.
+
+#### Throws
+
+[ConnectionLostError](../classes/ConnectionLostError.md) when `response=true` and the connection the request was issued on is torn down before the device replies.
+
+#### Throws
+
+The signal's reason, as it is, when `options.signal` was already aborted at call time, with or without a response. Nothing is sent.
+
+#### Throws
+
+The signal's reason, as it is, when `response=true` and `options.signal` aborts before the device replies, and the timeout's `TimeoutError` when
+`response=true` and the device does not reply within `options.timeoutMs`.
 
 ***
 
@@ -1285,8 +1444,22 @@ export async function bluetoothDescriptorsExample(client: EspHomeClient): Promis
 
 #### Throws
 
-[ConnectionError](ConnectionError.md) with code `"GATT_WRITE_IN_FLIGHT"` when another write for the same (address, handle) is already pending.
+[ConnectionError](../classes/ConnectionError.md) with code `"GATT_WRITE_IN_FLIGHT"` when another write for the same (address, handle) is already pending.
 
 #### Throws
 
-[ConnectionError](ConnectionError.md) with code `"GATT_ERROR"` when the device returns an error.
+[ConnectionError](../classes/ConnectionError.md) with code `"GATT_ERROR"` when the device returns an error.
+
+#### Throws
+
+[NotConnectedError](../classes/NotConnectedError.md) with code `"CONNECT_IN_PROGRESS"` when the call is issued while a manual connect has not yet settled or the automatic reconnect is
+active, and with code `"NOT_CONNECTED"` when it is issued with no connection otherwise. Nothing is sent.
+
+#### Throws
+
+[ConnectionLostError](../classes/ConnectionLostError.md) when the connection the request was issued on is torn down before the device replies.
+
+#### Throws
+
+The signal's reason, as it is, when `options.signal` aborts, including when it was already aborted at call time, in which case nothing is sent, and the
+timeout's `TimeoutError` when the device does not reply within `options.timeoutMs`.

@@ -76,6 +76,11 @@ Transition from `noise-handshake` to `noise-data`. Installs the cipher pair used
 
 `void`
 
+#### Throws
+
+The fault that ended the transport, or a `TRANSPORT_CLOSED` error after a dispose without one, when the transport has already ended; the cipher pair
+  is not stored and stays the caller's to destroy.
+
 ***
 
 ### nextNoiseHandshakeFrame()

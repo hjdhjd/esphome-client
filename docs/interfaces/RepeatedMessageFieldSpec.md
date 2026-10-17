@@ -21,4 +21,4 @@ literal-union of the mapping's numeric values, exactly as the parent-level `enum
 | <a id="enummappings"></a> `enumMappings?` | `Record`\<`string`, [`EnumMapping`](../type-aliases/EnumMapping.md)\> |
 | <a id="fieldnumber"></a> `fieldNumber` | `number` |
 | <a id="fields"></a> `fields` | `Record`\<`string`, [`FieldSpec`](FieldSpec.md)\> |
-| <a id="wiretype"></a> `wireType` | `WireType` |
+| <a id="wiretype"></a> `wireType` | [`WireType`](../type-aliases/WireType.md) |

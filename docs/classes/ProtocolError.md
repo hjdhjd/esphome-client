@@ -14,13 +14,13 @@ Generic wire-protocol error. Parent class for framing, encoding, and decoding fa
 
 ## Extended by
 
-- [`DecryptionFailedError`](DecryptionFailedError.md)
+- [`BufferOverflowError`](BufferOverflowError.md)
 - [`DecodingError`](DecodingError.md)
+- [`DecryptionFailedError`](DecryptionFailedError.md)
 - [`EncodingError`](EncodingError.md)
+- [`FrameTooLargeError`](FrameTooLargeError.md)
 - [`UnknownEntityTypeError`](UnknownEntityTypeError.md)
 - [`UnknownMessageTypeError`](UnknownMessageTypeError.md)
-- [`FrameTooLargeError`](FrameTooLargeError.md)
-- [`BufferOverflowError`](BufferOverflowError.md)
 
 ## Constructors
 

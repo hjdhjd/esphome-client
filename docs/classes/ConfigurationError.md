@@ -6,7 +6,7 @@
 
 # Class: ConfigurationError
 
-Construction-time misconfiguration: bad PSK length, missing host, conflicting options, etc. Caught at the boundary so internal code can trust validated structures.
+Construction-time misconfiguration: missing host, conflicting options, etc. Caught at the boundary so internal code can trust validated structures.
 
 ## Remarks
 
@@ -14,8 +14,6 @@ Carries a required [ConfigurationErrorCode](../type-aliases/ConfigurationErrorCo
 
 Code table:
 
-- `AWAIT_STREAM_CLOSED` - The state stream [EspHomeClient.commandAndAwait](EspHomeClient.md#commandandawait) was awaiting ended before a matching state event arrived, typically because the
-  connection dropped while the await was pending.
 - `COMMAND_UNSUPPORTED` - [EspHomeClient.commandAndAwait](EspHomeClient.md#commandandawait) was called for an entity type whose schema declares no command. Nothing is sent.
 - `ENUM_VALUE_UNKNOWN` - A [EspHomeClient.commandAndAwait](EspHomeClient.md#commandandawait) command field received a string that is not one of the field's enum aliases. The message names the
   field and the value. Nothing is sent.
@@ -32,11 +30,31 @@ Usage:
 ```ts
 export async function commandErrorHandlingExample(client: EspHomeClient, lightId: EntityId<"light">): Promise<void> {
 
+  const deadline = AbortSignal.timeout(2000);
+
   try {
 
-    await client.commandAndAwait(lightId, { state: true }, { signal: AbortSignal.timeout(2000) });
+    await client.commandAndAwait(lightId, { state: true }, { signal: deadline });
 
   } catch(error) {
+
+    if(error === deadline.reason) {
+
+      // Our own deadline elapsed first.
+      return;
+    }
+
+    if(error instanceof NotConnectedError) {
+
+      // No connection could carry the command, so nothing was sent. CONNECT_IN_PROGRESS means a connect was running; a connect listener can issue it again.
+      return;
+    }
+
+    if(error instanceof ConnectionLostError) {
+
+      // The connection was torn down before the light confirmed the command.
+      return;
+    }
 
     if(error instanceof ConfigurationError) {
 
@@ -49,21 +67,16 @@ export async function commandErrorHandlingExample(client: EspHomeClient, lightId
 
         case "UNKNOWN_ENTITY_ID":
 
-          // The id parses but the entity is not registered on the current connection - typically discovery has not completed.
-          break;
-
-        case "AWAIT_STREAM_CLOSED":
-
-          // The connection dropped before the matching state event arrived.
+          // The id parses but the entity is not registered on the current connection.
           break;
       }
 
       return;
     }
 
-    if((error instanceof DOMException) && ((error.name === "AbortError") || (error.name === "TimeoutError"))) {
+    if((error instanceof DOMException) && (error.name === "TimeoutError")) {
 
-      // Caller signal aborted or the 2000ms default deadline elapsed.
+      // The default deadline elapsed before the light confirmed the command.
       return;
     }
 

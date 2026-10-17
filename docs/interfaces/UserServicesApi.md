@@ -4,7 +4,7 @@
 
 [Home](../README.md) / UserServicesApi
 
-# Class: UserServicesApi
+# Interface: UserServicesApi
 
 User-defined services sub-API. Exposes the discovered service catalog and the two execution paths (by key or by name).
 
@@ -53,7 +53,7 @@ export function serviceExecutionExample(client: EspHomeClient): void {
 | Parameter | Type | Default value | Description |
 | ------ | ------ | ------ | ------ |
 | `key` | `number` | `undefined` | The service key (numeric identifier). |
-| `args` | [`ExecuteServiceArgumentValue`](../interfaces/ExecuteServiceArgumentValue.md)[] | `[]` | An array of argument values matching the service definition. |
+| `args` | [`ExecuteServiceArgumentValue`](ExecuteServiceArgumentValue.md)[] | `[]` | An array of argument values matching the service definition. |
 
 #### Returns
 
@@ -99,7 +99,7 @@ export function serviceExecutionExample(client: EspHomeClient): void {
 | Parameter | Type | Default value | Description |
 | ------ | ------ | ------ | ------ |
 | `name` | `string` | `undefined` | The service name as declared in the device's YAML. |
-| `args` | [`ExecuteServiceArgumentValue`](../interfaces/ExecuteServiceArgumentValue.md)[] | `[]` | An array of argument values matching the service definition. |
+| `args` | [`ExecuteServiceArgumentValue`](ExecuteServiceArgumentValue.md)[] | `[]` | An array of argument values matching the service definition. |
 
 #### Returns
 
@@ -143,6 +143,6 @@ export function serviceExecutionExample(client: EspHomeClient): void {
 
 #### Returns
 
-[`ServiceEntity`](../interfaces/ServiceEntity.md)[]
+[`ServiceEntity`](ServiceEntity.md)[]
 
 An array of discovered service entities, in discovery order.

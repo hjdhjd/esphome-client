@@ -12,4 +12,4 @@ Options accepted by [withReconnect](../functions/withReconnect.md).
 
 | Property | Type | Description |
 | ------ | ------ | ------ |
-| <a id="signal"></a> `signal?` | [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal) | Cancellation signal. Aborting drains the iterator and returns from the helper. |
+| <a id="signal"></a> `signal?` | [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal) | Cancellation signal. Aborting ends the lifecycle stream, aborts the running body's signal, and rejects the helper's promise with this signal's reason once the body has settled. |

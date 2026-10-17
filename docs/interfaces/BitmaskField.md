@@ -19,4 +19,4 @@ Water heater commands use this shape, and any entity type whose wire format carr
 | <a id="bit"></a> `bit` | `number` |
 | <a id="fieldnumber"></a> `fieldNumber` | `number` |
 | <a id="valuetype"></a> `valueType` | [`ValueType`](../type-aliases/ValueType.md) |
-| <a id="wiretype"></a> `wireType` | `WireType` |
+| <a id="wiretype"></a> `wireType` | [`WireType`](../type-aliases/WireType.md) |

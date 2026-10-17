@@ -6,7 +6,7 @@
 
 # Interface: VoiceAssistantAnnounceOptions
 
-Options accepted by [VoiceAssistantApi.announce](../classes/VoiceAssistantApi.md#announce). Mirrors the wire-side `VoiceAssistantAnnounceRequest`.
+Options accepted by [VoiceAssistantApi.announce](VoiceAssistantApi.md#announce). Mirrors the wire-side `VoiceAssistantAnnounceRequest`.
 
 ## Properties
 

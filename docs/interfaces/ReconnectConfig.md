@@ -43,4 +43,4 @@ export async function reconnectWithPermanentErrorExample(): Promise<void> {
 | <a id="maxattempts"></a> `maxAttempts?` | `number` | Maximum number of attempts. Default `undefined` (unlimited). |
 | <a id="maxdelayms"></a> `maxDelayMs?` | `number` | Upper bound on a single delay in milliseconds. Default 30000. |
 | <a id="onattempt"></a> `onAttempt?` | (`attempt`, `delayMs`) => `void` | Called before each attempt. Useful for logging and metrics integration. |
-| <a id="shouldretry"></a> `shouldRetry?` | (`error`, `attempts`) => `boolean` | Predicate determining whether to retry. Default: `!(error instanceof PermanentError)` - skip permanent errors (encryption, auth, version mismatch). |
+| <a id="shouldretry"></a> `shouldRetry?` | (`error`, `attempts`) => `boolean` | Predicate determining whether to retry. Default: `!(error instanceof PermanentError)` - skip permanent errors (encryption misconfigurations and version-negotiation failures). |

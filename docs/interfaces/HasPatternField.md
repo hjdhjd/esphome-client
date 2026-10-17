@@ -15,4 +15,4 @@ Defines a field that uses the has_* pattern common in ESPHome commands. These fi
 | <a id="hasfieldnumber"></a> `hasFieldNumber` | `number` |
 | <a id="valuefieldnumber"></a> `valueFieldNumber` | `number` |
 | <a id="valuetype"></a> `valueType` | [`ValueType`](../type-aliases/ValueType.md) |
-| <a id="wiretype"></a> `wireType` | `WireType` |
+| <a id="wiretype"></a> `wireType` | [`WireType`](../type-aliases/WireType.md) |

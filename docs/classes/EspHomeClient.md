@@ -12,7 +12,7 @@ The host class composes - never inherits - the carved subsystems that own the cl
 socket lifetime); a run-phase `MessageReceiver` for the inbound dispatch pump; an `EventBus` for typed event delivery; a typed [EspHomeError](EspHomeError.md)
 hierarchy for failures; the schema-derived encode/decode pipeline for entity payloads; an `EntityRegistry` and a
 `ServiceRegistry` as the single sources of truth for entity and service identity; a `LogSubscriptionManager` for
-refcounted device-log subscriptions; a [HomeAssistantApi](HomeAssistantApi.md) for the
+refcounted device-log subscriptions; a [HomeAssistantApi](../interfaces/HomeAssistantApi.md) for the
 ESPHome `homeassistant.*` action / state-import surface; the run-phase handler table built by `buildRunPhaseHandlers`; the command
 runners exported from `command-runner.ts` for [EspHomeClient.command](#command) and [EspHomeClient.commandAndAwait](#commandandawait); a `HeartbeatScheduler` for keepalive
 and stall detection; a `LatestStateCache` for synchronous latest-state reads; and a [ClientCapabilities](../interfaces/ClientCapabilities.md) record built from the negotiated session.
@@ -30,10 +30,10 @@ Two construction paths:
 
 ## Connection lifecycle
 
-`connect()` runs the linear handshake: TCP connect, `HelloRequest`/`HelloResponse`, optional Noise NNpsk0 handshake (with plaintext fallback when the peer closes
-mid-noise or returns a plaintext frame), `ConnectRequest`/`ConnectResponse`, `DeviceInfoRequest`, `ListEntitiesRequest`, `SubscribeStatesRequest`. Failures surface
-as typed errors from [EspHomeError](EspHomeError.md) subclasses. Auto-reconnect is on by default with `PermanentError`-filtered retry; pass `reconnect: false` to opt out. Lazy
-heartbeat (30s idle / 60s stall) is on by default; pass `keepAlive: false` to opt out. Live state is observable via [EspHomeClient.health](#health),
+`connect()` runs the linear handshake: TCP connect, `HelloRequest`/`HelloResponse`, optional Noise NNpsk0 handshake (with plaintext fallback when the peer ends the
+connection mid-noise or returns a plaintext frame), `ConnectRequest`/`ConnectResponse`, `DeviceInfoRequest`, `ListEntitiesRequest`, `SubscribeStatesRequest`. Failures
+surface as typed errors from [EspHomeError](EspHomeError.md) subclasses. Auto-reconnect is on by default with `PermanentError`-filtered retry; pass `reconnect: false` to opt out.
+Lazy heartbeat (30s idle / 60s stall) is on by default; pass `keepAlive: false` to opt out. Live state is observable via [EspHomeClient.health](#health),
 [EspHomeClient.onHealthChange](#onhealthchange), [EspHomeClient.healthStream](#healthstream), and the typed [EspHomeClient.lifecycle](#lifecycle) stream.
 
 ## Entity model
@@ -46,8 +46,8 @@ entity list with [EspHomeClient.entitiesByDevice](#entitiesbydevice).
 
 ## Sub-APIs
 
-- **[EspHomeClient.voiceAssistant](#voiceassistant)** - lazy single-instance voice-assistant API ([VoiceAssistantApi](VoiceAssistantApi.md)).
-- **[EspHomeClient.camera](#camera)**(id) - per-id camera API ([CameraApi](CameraApi.md)) with image buffering owned by the sub-API.
+- **[EspHomeClient.voiceAssistant](#voiceassistant)** - lazy single-instance voice-assistant API ([VoiceAssistantApi](../interfaces/VoiceAssistantApi.md)).
+- **[EspHomeClient.camera](#camera)**(id) - per-id camera API ([CameraApi](../interfaces/CameraApi.md)) with image buffering owned by the sub-API.
 
 The Home-Assistant integration surface lives under [EspHomeClient.homeAssistant](#homeassistant) as a sub-API matching the pattern used by camera, voice-assistant,
 bluetooth, serial, and zwave. The sub-API owns the outbound subscribe-and-respond surface (`subscribeServices`, `subscribeStates`, `sendState`,
@@ -79,7 +79,7 @@ export async function connectThenConstructExample(
   // restart the wait on the `entities` event or accept the snapshot at gate-resolution time as "constructed".
   const expected = new Set<EntityId>(client.entitiesByDevice(0).filter(predicate).map((entity) => entityId(entity.type, entity.objectId)));
 
-  // Compose caller signal over the internal timeout - mirrors the convention used by camera, serial-proxy, voice-assistant, and the run-phase handshake.
+  // Compose the caller's signal over the internal timeout, so whichever fires first ends the wait with its own reason. The composite lives only as long as this wait.
   const composedSignal = signal ? AbortSignal.any([ signal, AbortSignal.timeout(timeoutMs) ]) : AbortSignal.timeout(timeoutMs);
 
   const matchesExpected = (snapshot: ReadonlyMap<EntityId, TelemetryEvent>): boolean => expected.values().every((id) => snapshot.has(id));
@@ -111,8 +111,8 @@ export async function connectThenConstructExample(
 
  - [openEspHomeClient](../functions/openEspHomeClient.md)
  - [entityId](../functions/entityId.md)
- - [VoiceAssistantApi](VoiceAssistantApi.md)
- - [CameraApi](CameraApi.md)
+ - [VoiceAssistantApi](../interfaces/VoiceAssistantApi.md)
+ - [CameraApi](../interfaces/CameraApi.md)
  - [ConnectionHealth](../type-aliases/ConnectionHealth.md)
  - [LifecycleEvent](../type-aliases/LifecycleEvent.md)
 
@@ -147,8 +147,8 @@ the handshake are not missed.
 #### Remarks
 
 Every option is optional except `host`. When `psk` is supplied, as a key or as a [PskResolver](../type-aliases/PskResolver.md), the client attempts the Noise NNpsk0 handshake first
-and falls back to plaintext ONLY when the device demonstrably does not speak encryption - it responded in plaintext or closed the socket during the noise exchange.
-The key is checked where the handshake uses it, not at construction: a bad encryption key (a key that does not decode to 32 bytes, a rejected PSK, or a
+and falls back to plaintext ONLY when the device demonstrably does not speak encryption - it responded in plaintext or ended the connection during the noise
+exchange. The key is checked where the handshake uses it, not at construction: a bad encryption key (a key that does not decode to 32 bytes, a rejected PSK, or a
 malformed/low-order peer key) fails closed with a permanent [EncryptionKeyInvalidError](EncryptionKeyInvalidError.md), and a resolver that returns no key fails closed with a permanent
 [EncryptionKeyMissingError](EncryptionKeyMissingError.md), rather than silently downgrading to plaintext. The full options surface (transport injection, metrics sink, keep-alive,
 reconnect, frame/buffer/field caps, handshake and connect timeouts) is documented on [EspHomeClientOptions](../interfaces/EspHomeClientOptions.md); consult that type rather than this docstring for
@@ -215,7 +215,7 @@ export function bluetoothAvailabilityExample(client: EspHomeClient): void {
 
 ##### Returns
 
-[`BluetoothProxyApi`](BluetoothProxyApi.md)
+[`BluetoothProxyApi`](../interfaces/BluetoothProxyApi.md)
 
 The Bluetooth-proxy sub-API instance.
 
@@ -243,11 +243,11 @@ the consumer's intent stands, so a consumer subscribes once rather than after ev
 Usage:
 
 ```ts
-export function homeAssistantServicesExample(client: EspHomeClient): void {
+export function homeAssistantServicesExample(client: EspHomeClient): Disposable {
 
   client.homeAssistant.subscribeServices();
 
-  using sub = client.on("homeassistantService", (event) => {
+  return client.on("homeassistantService", (event) => {
 
     log.info("The device called a Home Assistant action.", event.service, event.data, event.dataTemplate, event.variables, event.isEvent);
   });
@@ -256,9 +256,9 @@ export function homeAssistantServicesExample(client: EspHomeClient): void {
 
 ##### Returns
 
-[`HomeAssistantApi`](HomeAssistantApi.md)
+[`HomeAssistantApi`](../interfaces/HomeAssistantApi.md)
 
-The [HomeAssistantApi](HomeAssistantApi.md) instance bound to this client.
+The [HomeAssistantApi](../interfaces/HomeAssistantApi.md) instance bound to this client.
 
 ***
 
@@ -331,7 +331,7 @@ export function serialListExample(client: EspHomeClient): void {
 
 ##### Returns
 
-[`SerialProxyApi`](SerialProxyApi.md)
+[`SerialProxyApi`](../interfaces/SerialProxyApi.md)
 
 The serial-proxy sub-API instance.
 
@@ -381,9 +381,9 @@ export function serviceExecutionExample(client: EspHomeClient): void {
 
 ##### Returns
 
-[`UserServicesApi`](UserServicesApi.md)
+[`UserServicesApi`](../interfaces/UserServicesApi.md)
 
-The [UserServicesApi](UserServicesApi.md) instance bound to this client. The instance is lazy-built on first access and cached for the client's lifetime.
+The [UserServicesApi](../interfaces/UserServicesApi.md) instance bound to this client. The instance is lazy-built on first access and cached for the client's lifetime.
 
 ***
 
@@ -417,7 +417,7 @@ export async function voiceAssistantExample(client: EspHomeClient): Promise<void
 
 ##### Returns
 
-[`VoiceAssistantApi`](VoiceAssistantApi.md)
+[`VoiceAssistantApi`](../interfaces/VoiceAssistantApi.md)
 
 The voice-assistant sub-API instance.
 
@@ -436,7 +436,7 @@ Z-Wave-proxy sub-API. Lazy-instantiated on first access. Single instance per cli
 ##### Remarks
 
 This sub-API is a transparent byte pipe to the device's Z-Wave radio Serial API. It does NOT parse Z-Wave Serial API frames, command classes, or security
-envelopes. Consumers route the inbound frame stream into a Z-Wave-aware library (e.g., `zwave-js`) and write back via [ZWaveProxyApi.send](ZWaveProxyApi.md#send). The
+envelopes. Consumers route the inbound frame stream into a Z-Wave-aware library (e.g., `zwave-js`) and write back via [ZWaveProxyApi.send](../interfaces/ZWaveProxyApi.md#send). The
 module shape mirrors [bluetooth](#bluetooth) simplified for the single-subscription case: a single-integer refcount, a cached home id, and no `Correlator` instances
 (there is no request/response correlation in this subsystem - frames flow asynchronously in both directions and home-id changes are unsolicited pushes).
 
@@ -503,7 +503,7 @@ export async function zwaveBytePipeExample(client: EspHomeClient): Promise<void>
 
 ##### Returns
 
-[`ZWaveProxyApi`](ZWaveProxyApi.md)
+[`ZWaveProxyApi`](../interfaces/ZWaveProxyApi.md)
 
 The Z-Wave-proxy sub-API instance.
 
@@ -596,17 +596,23 @@ export async function cameraSnapshotExample(client: EspHomeClient): Promise<Null
 
   } catch(error) {
 
-    if(error instanceof CameraStreamClosedError) {
+    if(error instanceof ConnectionLostError) {
 
-      // Transport disconnected mid-snapshot. The `code` tag is `STREAM_CLOSED`; `cameraId` names the failing camera for log correlation.
-      log.error("The transport disconnected before the snapshot arrived.", error.code, error.cameraId);
+      // The connection dropped mid-snapshot. Every request it carried rejects with the same error, whose `cause` says what ended the connection when known.
+      log.error("The connection ended before the snapshot arrived.", camId);
 
       return null;
     }
 
-    if((error instanceof DOMException) && ((error.name === "AbortError") || (error.name === "TimeoutError"))) {
+    if((error instanceof DOMException) && (error.name === "TimeoutError")) {
 
-      // Timeout elapsed or the caller aborted.
+      // The snapshot's 5000ms timeout or our own 8000ms deadline elapsed. Each rejects with a TimeoutError, and this example handles them alike.
+      return null;
+    }
+
+    if(error instanceof NotConnectedError) {
+
+      // No connection could carry the request, so nothing was sent.
       return null;
     }
 
@@ -623,7 +629,7 @@ export async function cameraSnapshotExample(client: EspHomeClient): Promise<Null
 
 #### Returns
 
-[`CameraApi`](CameraApi.md)
+[`CameraApi`](../interfaces/CameraApi.md)
 
 The camera sub-API instance.
 
@@ -760,12 +766,13 @@ The first state event for the entity that matches the predicate.
 #### Remarks
 
 Type-level constraint excludes entity types with no state response - `button` (stateless), `sensor`, `binary_sensor`, and `text_sensor` (read-only),
-`camera` (multi-packet image events lack the numeric key the predicate-match loop compares against), and `infrared` / `radio_frequency` (transmit is
+`camera` (its schema declares no command, so there is nothing to send and await), and `infrared` / `radio_frequency` (transmit is
 fire-and-forget; the receive event is an unsolicited inbound signal, not a command acknowledgement). Calling `commandAndAwait` against any of those is a compile
 error, not a runtime hang.
 
-The stream subscription opens *before* the command is sent, so the device cannot win the race by responding before we listen. The default 2000ms timeout and the
-caller's optional signal are composed via `AbortSignal.any`; either trigger rejects the await and tears down the subscription.
+The stream subscription opens *before* the command is sent, so the device cannot win the race by responding before we listen. The await follows the caller's
+optional signal, the default timeout [CommandAndAwaitOptions.timeoutMs](../interfaces/CommandAndAwaitOptions.md#timeoutms) states, and the connection the command was issued on; whichever ends it first rejects
+the await with its own reason and tears down the subscription.
 
 Usage:
 
@@ -779,6 +786,11 @@ export async function commandAndAwaitExample(client: EspHomeClient): Promise<voi
   log.info("The light confirmed the command.", result.brightness);
 }
 ```
+
+#### Throws
+
+(`CONNECT_IN_PROGRESS`) when the call is issued while a manual connect has not yet settled or the automatic reconnect is active, and
+(`NOT_CONNECTED`) when it is issued with no connection otherwise. Nothing is sent or counted, and this check runs before every check below.
 
 #### Throws
 
@@ -799,13 +811,12 @@ its wire type carries. Nothing is sent.
 
 #### Throws
 
-(`AWAIT_STREAM_CLOSED`) when the underlying telemetry stream ends before a matching state event arrives - typically because the
-connection dropped while the await was pending.
+when the connection the command was issued on is torn down before a matching state event arrives.
 
 #### Throws
 
-(`TimeoutError`) when the deadline elapses (2000ms unless `awaitOptions.timeoutMs` overrides it), or (`AbortError`) when the caller's signal
-aborts; a signal aborted with an `Error` reason rejects with that reason instead.
+The signal's reason, as it is, when `awaitOptions.signal` aborts, including when it was already aborted at call time, and nothing is sent then; and the
+timeout's `TimeoutError` when the deadline elapses (the default [CommandAndAwaitOptions.timeoutMs](../interfaces/CommandAndAwaitOptions.md#timeoutms) states, unless `awaitOptions.timeoutMs` overrides it).
 
 ***
 
@@ -847,13 +858,18 @@ export async function manualConstructionExample(): Promise<EspHomeClient> {
 | Parameter | Type | Description |
 | ------ | ------ | ------ |
 | `options?` | \{ `signal?`: [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal); \} | Optional configuration. |
-| `options.signal?` | [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal) | Optional AbortSignal to cancel the connect attempt. Aborting tears down any in-progress handshake and rejects the returned promise. |
+| `options.signal?` | [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal) | Optional AbortSignal to cancel the connect attempt. Aborting tears down any in-progress handshake and rejects the returned promise with the signal's reason, as it is, including when the signal was already aborted at call time. |
 
 #### Returns
 
 `Promise`\<`void`\>
 
-A promise that resolves when the connection is established and ready, or rejects with a typed [EspHomeError](EspHomeError.md) subclass.
+A promise that resolves when the connection is established and ready. It rejects with the platform `TimeoutError` when the connect or handshake
+  timeout elapses, with the signal's reason when `options.signal` aborts, with the [ConnectionLostError](ConnectionLostError.md) of a [EspHomeClient.disconnect](#disconnect) or
+  [EspHomeClient.disconnectAsync](#disconnectasync) that cuts it short or of a teardown during the hand-off to the run phase, and with a typed [EspHomeError](EspHomeError.md) subclass
+  for every other failure. A timeout or a cancellation names no step. Any other failure outside the typed hierarchy rejects with the `CONNECT_FAILED` wrap,
+  whose message names the step the connect failed in; the debug line and the legacy `disconnect` event carry that wrap for every failure outside the hierarchy,
+  a timeout or a cancellation among them. A typed failure passes through as it is, and no surface names its step.
 
 ***
 
@@ -863,7 +879,8 @@ A promise that resolves when the connection is established and ready, or rejects
 deviceInfo(): Nullable<DeviceInfo>;
 ```
 
-Return the device information of the connected ESPHome device if available. Returns a shallow copy so external code cannot mutate the cached record.
+Return the device information of the connected ESPHome device if available. The record is frozen and is the same object the most recent `deviceInfo` event carried;
+a later `DeviceInfoResponse` replaces it whole.
 
 Usage:
 
@@ -1242,7 +1259,9 @@ export function entityIdNarrowingExample(client: EspHomeClient, untrusted: strin
 health(): ConnectionHealth;
 ```
 
-Synchronous read of the live [ConnectionHealth](../type-aliases/ConnectionHealth.md) record. Uptime is not stored on the record; derive it from the returned snapshot via [connectionUptimeMs](../functions/connectionUptimeMs.md), which reads `connectedAtMs` while the socket is up and `0` while it is down.
+Synchronous read of the live [ConnectionHealth](../type-aliases/ConnectionHealth.md) record. The record is frozen and is the same object the most recent `healthChange` event carried; each
+transition replaces it whole. Uptime is not stored on the record; derive it from the returned snapshot via [connectionUptimeMs](../functions/connectionUptimeMs.md), which reads `connectedAtMs`
+while the socket is up and `0` while it is down.
 
 Usage:
 
@@ -1776,22 +1795,40 @@ export async function connectionWithNoiseExample(): Promise<void> {
 
 | Parameter | Type | Description |
 | ------ | ------ | ------ |
-| `key` | `string` | The new encryption key (base64 encoded, must decode to exactly 32 bytes). |
+| `key` | `string` | The new encryption key, base64 encoded. It must decode to exactly 32 bytes, or the call rejects without sending anything. |
 | `options?` | \{ `signal?`: [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal); `timeoutMs?`: `number`; \} | Optional configuration. |
-| `options.signal?` | [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal) | Optional AbortSignal to cancel the request. Aborting settles the returned promise to `false` immediately rather than waiting for the timeout. |
-| `options.timeoutMs?` | `number` | Optional bound on the request/response round-trip; defaults to 5000 ms. On elapse the promise settles to `false`. |
+| `options.signal?` | [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal) | Optional AbortSignal to cancel the request. Aborting rejects the returned promise with the signal's reason at once rather than waiting for the timeout. |
+| `options.timeoutMs?` | `number` | Optional bound on the request/response round-trip; defaults to 5000 ms. On elapse the promise rejects with the timeout's `TimeoutError`. |
 
 #### Returns
 
 `Promise`\<`boolean`\>
 
-A promise that resolves to true if the key was successfully set, false otherwise (timeout, abort, or device-reported failure). The returned promise rejects
-when another invocation is already pending - see the `@throws` clause below for details.
+A promise that resolves to `true` when the device reports the key set and `false` when the device reports a failure. Every other ending rejects - see the
+`@throws` clauses below.
+
+#### Throws
+
+(`CONNECT_IN_PROGRESS`) when the call is issued while a manual connect has not yet settled or the automatic reconnect is active, and
+(`NOT_CONNECTED`) when it is issued with no connection otherwise. Nothing is sent, and this check runs before the in-flight and key-length checks.
 
 #### Throws
 
 (`KEY_SET_IN_FLIGHT`) when another `setNoiseEncryptionKey` call is already pending - the protocol carries no correlation id and cannot
 multiplex concurrent requests.
+
+#### Throws
+
+(`INVALID_PSK_LENGTH`) when the key does not decode to exactly 32 bytes. Nothing is sent.
+
+#### Throws
+
+when the connection the request was issued on is torn down before the device replies.
+
+#### Throws
+
+The signal's reason, as it is, when `options.signal` aborts, including when it was already aborted at call time, and the timeout's `TimeoutError` when
+the round-trip outlasts `options.timeoutMs`.
 
 ***
 
