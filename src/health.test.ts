@@ -76,14 +76,14 @@ describe("disconnectedHealth", () => {
     assert.equal(("lastPingRttMs" in health), false, "lastPingRttMs is omitted, not set to undefined - matches the optional-field convention");
   });
 
-  test("returns a fresh object on each call - mutating the result does not affect future calls", () => {
+  test("returns a fresh object on each call", () => {
 
     const a = disconnectedHealth();
     const b = disconnectedHealth();
 
-    a.consecutiveStalls = 99;
-
-    assert.equal(b.consecutiveStalls, 0, "each call must produce a fresh object so mutation does not leak");
+    // The records are readonly, so freshness is shown by identity rather than by mutating one record.
+    assert.notStrictEqual(a, b, "each call returns a fresh object");
+    assert.deepEqual(a, b);
   });
 });
 

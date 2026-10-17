@@ -17,16 +17,16 @@
 import { CliError, isUserFacingError } from "./cli-error.ts";
 import type { ClientEventsMap, DeviceInfo, EspHomeClientOptions } from "../esphome-client.ts";
 import type { CommandFor, Entity, EntityType, TelemetryEvent } from "../schemas/index.ts";
-import { EspHomeClient, LogLevel } from "../esphome-client.ts";
 import type { EspHomeLogging, Nullable } from "../types.ts";
 import { INT32_MAX, INT32_MIN, UINT32_MAX } from "../command-pipeline.ts";
+import { LogLevel, MediaPlayerCommand } from "../api-constants.ts";
 import { parseArgs, styleText } from "node:util";
 import { recordCapture, replayCapture } from "./capture.ts";
 import type { CaptureMetadata } from "./capture.ts";
 import type { ClientCapabilities } from "../capabilities.ts";
 import { ENTITY_SCHEMAS } from "../schemas/index.ts";
 import type { EntityId } from "../entity-id.ts";
-import { MediaPlayerCommand } from "../api-constants.ts";
+import { EspHomeClient } from "../esphome-client.ts";
 import { NOISE_PSK_LEN } from "../crypto-noise.ts";
 import type { ParseArgsConfig } from "node:util";
 import type { Interface as ReadlineInterface } from "node:readline/promises";
@@ -372,7 +372,7 @@ export interface PrinterWritable {
 export type ColorName = "gray" | "green" | "red" | "yellow";
 
 /**
- * The semantic CLI output levels the {@link Printer} emits. Distinct from the protocol-level {@link import("../esphome-client.ts").LogLevel} enum (which describes
+ * The semantic CLI output levels the {@link Printer} emits. Distinct from the protocol-level {@link import("../api-constants.ts").LogLevel} enum (which describes
  * device log severity on the wire); these are the Printer's own user-facing categories. Adding a level is a single new entry in {@link LEVEL_THEME} plus a one-line
  * public method on {@link Printer}; the writer pipeline is parameterized over the level and picks up the change automatically.
  *
@@ -1454,6 +1454,19 @@ async function handleList(invocation: CommandInvocation, printer: Printer): Prom
   runList(client, printer, commandOptions.type ?? null);
 }
 
+/**
+ * Render one telemetry event as the line the CLI's `monitor` command prints: the time it arrived, the entity, its type and key, then the event as JSON. Pure: every
+ * output byte is a function of the inputs. Buffer values such as a camera image are encoded as `{ __buffer: "<base64>" }` through {@link bufferAwareJsonReplacer}
+ * rather than as an array of byte values.
+ *
+ * @internal
+ */
+export function formatMonitorTelemetry(data: TelemetryEvent, receivedAt: Date): string {
+
+  return "[" + receivedAt.toISOString() + "] " + (data.entity || "Unknown") + " (" + data.type + ", key: " + data.key.toString() + ") -> " +
+    JSON.stringify(data, bufferAwareJsonReplacer);
+}
+
 // Command handler for 'monitor'. Streams entity state changes until either the duration elapses or the user presses Ctrl+C. DisposableStack coordinates teardown of the
 // client and the SIGINT handler in LIFO order on scope exit.
 async function handleMonitor(invocation: CommandInvocation, printer: Printer): Promise<void> {
@@ -1486,8 +1499,7 @@ async function handleMonitor(invocation: CommandInvocation, printer: Printer): P
       }
     }
 
-    printer.data("[" + new Date().toISOString() + "] " + (data.entity || "Unknown") + " (" + data.type + ", key: " + data.key.toString() + ") -> " +
-      JSON.stringify(data));
+    printer.data(formatMonitorTelemetry(data, new Date()));
   });
 
   // SIGINT triggers an AbortController that the duration timer (or the no-duration await) is racing against. We register the listener with `process.once` and also defer
@@ -2421,6 +2433,17 @@ export function runInteractiveControl(parts: string[], client: ControlClient, pr
   }
 }
 
+/**
+ * Render one telemetry event as the line interactive mode prints: the entity and its type, then the event as JSON. Pure: every output byte is a function of the input.
+ * Buffer values such as a camera image are encoded as `{ __buffer: "<base64>" }` through {@link bufferAwareJsonReplacer} rather than as an array of byte values.
+ *
+ * @internal
+ */
+export function formatInteractiveTelemetry(data: TelemetryEvent): string {
+
+  return "[TELEMETRY] " + (data.entity || "Unknown") + " (" + data.type + ") -> " + JSON.stringify(data, bufferAwareJsonReplacer);
+}
+
 // Command handler for 'interactive'. Hosts an async input loop driven by readline/promises; telemetry interleaves cleanly through the Printer's coordination logic.
 // DisposableStack coordinates teardown of the following resources in LIFO order on scope exit: SIGINT listener removal, printer detach, readline close, client
 // disconnect.
@@ -2444,7 +2467,7 @@ async function handleInteractive(invocation: CommandInvocation, printer: Printer
 
   client.on("telemetry", (data) => {
 
-    printer.data("[TELEMETRY] " + (data.entity || "Unknown") + " (" + data.type + ") -> " + JSON.stringify(data));
+    printer.data(formatInteractiveTelemetry(data));
   });
 
   // Ctrl+C and Ctrl+D both terminate the REPL gracefully. SIGINT closes the readline; the for-await loop then completes naturally and the stack tears everything down.

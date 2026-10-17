@@ -838,7 +838,8 @@ export const ENTITY_SCHEMAS = {
     state: {
 
       // Shared receive event (id 137 InfraredRFReceiveEvent) - same wire shape for infrared and radio_frequency. handleTelemetry disambiguates the consumer-facing event
-      // by consulting the registered entity's type rather than the wire message-type alone.
+      // by consulting the registered entity's type rather than the wire message-type alone. When no registered entity claims the key, the message type is the only
+      // signal and the later schema in table order declaring it wins, so an unclaimed receive event decodes as radio_frequency.
       deviceIdFieldNumber: 1,
       fields: {
 

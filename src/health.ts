@@ -36,22 +36,22 @@ interface ConnectionHealthBase {
   /**
    * Number of consecutive ping stalls. Resets to 0 on successful inbound activity.
    */
-  consecutiveStalls: number;
+  readonly consecutiveStalls: number;
 
   /**
    * Whether the current session's transport is encrypted. False during reconnecting and disconnected states.
    */
-  encrypted: boolean;
+  readonly encrypted: boolean;
 
   /**
    * Timestamp of the most recent inbound message in epoch milliseconds. `0` before the first inbound message.
    */
-  lastInboundActivityAt: number;
+  readonly lastInboundActivityAt: number;
 
   /**
    * Round-trip time of the most recent successful ping in milliseconds. Undefined until the first ping completes.
    */
-  lastPingRttMs?: number;
+  readonly lastPingRttMs?: number;
 }
 
 /**
@@ -63,12 +63,12 @@ export interface LiveConnectionHealth extends ConnectionHealthBase {
   /**
    * Timestamp of the most recent successful connect in epoch milliseconds. The single source of truth for connection uptime; derive it via {@link connectionUptimeMs}.
    */
-  connectedAtMs: number;
+  readonly connectedAtMs: number;
 
   /**
    * Current health state - the "socket up" subset of {@link HealthState}.
    */
-  state: typeof HealthState.CONNECTED | typeof HealthState.STALLED;
+  readonly state: typeof HealthState.CONNECTED | typeof HealthState.STALLED;
 }
 
 /**
@@ -82,17 +82,17 @@ export interface DownConnectionHealth extends ConnectionHealthBase {
    * Forbidden on a down record. The connect epoch is a property of the live state only; `?: never` makes spreading a live record's epoch onto a down variant a compile
    * error.
    */
-  connectedAtMs?: never;
+  readonly connectedAtMs?: never;
 
   /**
    * Always `false` on a down record - a disconnected or reconnecting record is never on an encrypted wire.
    */
-  encrypted: false;
+  readonly encrypted: false;
 
   /**
    * Current health state - the "socket down" subset of {@link HealthState}.
    */
-  state: typeof HealthState.DISCONNECTED | typeof HealthState.RECONNECTING;
+  readonly state: typeof HealthState.DISCONNECTED | typeof HealthState.RECONNECTING;
 }
 
 /**

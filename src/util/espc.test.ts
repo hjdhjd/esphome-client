@@ -12,14 +12,14 @@
  */
 import {
   CLILogger, CLIMATE_MODE_NAMES, CLI_COMMANDS, CLI_OPTIONS, CONTROL_BUILDERS, LEVEL_THEME, Printer, awaitQuietPeriod, buildControlCommand, dispatch,
-  executeControl, findEntity, formatCapabilities, formatDeviceInfo, formatEntityList, formatReplayMetadata, formatSnapshotJson, formatSubDeviceList,
-  handleInteractiveCommand, isClimateMode, isCommandName, isControllableType, joinParts, parseFloatOption, parseIntOption, parseInvocation,
-  parseJsonOption, parsePercent, parseRgb, printInteractiveHelp, runCapabilities, runDevices, runInfo, runInteractiveControl, runList, runSnapshot, showUsage,
-  tryParseIntStrict
+  executeControl, findEntity, formatCapabilities, formatDeviceInfo, formatEntityList, formatInteractiveTelemetry, formatMonitorTelemetry, formatReplayMetadata,
+  formatSnapshotJson, formatSubDeviceList, handleInteractiveCommand, isClimateMode, isCommandName, isControllableType, joinParts, parseFloatOption, parseIntOption,
+  parseInvocation, parseJsonOption, parsePercent, parseRgb, printInteractiveHelp, runCapabilities, runDevices, runInfo, runInteractiveControl, runList, runSnapshot,
+  showUsage, tryParseIntStrict
 } from "./espc.ts";
 import { CliError, isUserFacingError } from "./cli-error.ts";
 import type { CommandOptions, ControlClient, EntityWithId, Invocation, PrinterLevel } from "./espc.ts";
-import type { Entity, EntityType } from "../schemas/index.ts";
+import type { Entity, EntityType, TelemetryEvent } from "../schemas/index.ts";
 import { describe, test } from "node:test";
 import { mockDeviceInfo, mockEntity, mockStateMessage } from "../testing/factories.ts";
 import type { AddressInfo } from "node:net";
@@ -3393,6 +3393,31 @@ describe("formatSnapshotJson - latest-state cache as JSON", () => {
     const json = JSON.parse(formatSnapshotJson(cache, "SWITCH")) as { entity: string }[];
 
     assert.equal(json.length, 1);
+  });
+});
+
+// 10 + 11. formatMonitorTelemetry / formatInteractiveTelemetry - the telemetry lines monitor and interactive mode print, hand-verified in full.
+describe("formatMonitorTelemetry / formatInteractiveTelemetry - telemetry line rendering", () => {
+
+  // A finished camera image as it reaches the telemetry channel. Its bytes must print in the replacer's base64 form, never as a JSON array of byte values.
+  const image = Buffer.from([ 0xff, 0xd8, 0xff ]);
+  const camera: TelemetryEvent = { entity: entityId("camera", "front"), image, key: 7, name: "Front", type: "camera" };
+  const encoded = "{\"entity\":\"camera-front\",\"image\":{\"__buffer\":\"/9j/\"},\"key\":7,\"name\":\"Front\",\"type\":\"camera\"}";
+
+  test("monitor prints a camera image as base64 rather than an array of byte values", () => {
+
+    const line = formatMonitorTelemetry(camera, new Date(Date.UTC(2026, 0, 2, 3, 4, 5)));
+
+    assert.doesNotMatch(line, /"type":"Buffer"/, "the image bytes must not print as a serialized Buffer");
+    assert.equal(line, "[2026-01-02T03:04:05.000Z] camera-front (camera, key: 7) -> " + encoded);
+  });
+
+  test("interactive mode prints a camera image as base64 rather than an array of byte values", () => {
+
+    const line = formatInteractiveTelemetry(camera);
+
+    assert.doesNotMatch(line, /"type":"Buffer"/, "the image bytes must not print as a serialized Buffer");
+    assert.equal(line, "[TELEMETRY] camera-front (camera) -> " + encoded);
   });
 });
 

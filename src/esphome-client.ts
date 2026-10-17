@@ -113,25 +113,6 @@ const SUPPORTED_API_MAJORS = { max: 1, min: 1 } as const;
 // discovery decoder handles both shapes via wire-first-with-fallback so this constant only needs to advance when a NEW capability requires implementation work.
 const CLIENT_API_VERSION = { major: 1, minor: 14 } as const;
 
-// Protocol enumerations live in `./api-constants.ts`. Re-exported below to preserve the public-API surface.
-export {
-  AlarmControlPanelCommand, AlarmControlPanelState, ClimateAction, ClimateFanMode, ClimateMode, ClimatePreset, ClimateSwingMode,
-  ColorMode, CoverOperation, EntityCategory, FanDirection, InfraredCapabilityFlags, LockCommand, LockState, LogLevel, MediaPlayerCommand, MediaPlayerState,
-  NumberMode, RadioFrequencyCapabilityFlags, RadioFrequencyModulation, SensorStateClass, SerialProxyLineStateFlags, SerialProxyParity, SerialProxyPortType,
-  SerialProxyRequestType, SerialProxyStatus, TemperatureUnit, TextMode, UpdateCommand, ValveOperation, VoiceAssistantEvent, VoiceAssistantRequestFlag,
-  VoiceAssistantSubscribeFlag, VoiceAssistantTimerEvent, WaterHeaterMode, logLevelName
-} from "./api-constants.ts";
-
-// Service argument types and the matching ServiceArgument/ServiceEntity interfaces live in `./types.ts` so that pure decoders can use them without pulling the host
-// class into their dependency graph. Re-exported below to preserve the public-API surface.
-export type { ServiceArgument, ServiceEntity } from "./types.ts";
-export { ServiceArgType } from "./types.ts";
-
-// Re-export entity types from the schemas module for public API access.
-export type { AlarmControlPanelEntity, BaseEntity, BinarySensorEntity, ButtonEntity, CameraEntity, ClimateEntity, CoverEntity, DateEntity, DateTimeEntity, Entity,
-  EntityType, EventEntity, FanEntity, InfraredEntity, LightEntity, LockEntity, MediaPlayerEntity, NumberEntity, RadioFrequencyEntity, SelectEntity, SensorEntity,
-  SirenEntity, SwitchEntity, TextEntity, TextSensorEntity, TimeEntity, UpdateEntity, ValveEntity, WaterHeaterEntity } from "./schemas/index.ts";
-
 /**
  * Represents an argument value when executing a service.
  */
@@ -283,31 +264,34 @@ export interface VoiceAssistantRequest {
  * {@link ZWaveProxyApi.homeId}.
  * @property serialProxies - Per-instance metadata for every serial-proxy port advertised by the device (field 25). Empty (or absent) when the device firmware was not
  * compiled with `USE_SERIAL_PROXY`; otherwise the array index is the `instance` number used in every subsequent serial-proxy wire message.
+ *
+ * @remarks The client hands out one frozen record per `DeviceInfoResponse`: {@link EspHomeClient.deviceInfo} and the `deviceInfo` event carry the same object, and a
+ * later response replaces it whole rather than mutating it.
  */
 export interface DeviceInfo {
 
-  usesPassword?: boolean;
-  name?: string;
-  macAddress?: string;
-  esphomeVersion?: string;
-  compilationTime?: string;
-  model?: string;
-  hasDeepSleep?: boolean;
-  projectName?: string;
-  projectVersion?: string;
-  webserverPort?: number;
-  legacyBluetoothProxyVersion?: number;
-  manufacturer?: string;
-  friendlyName?: string;
-  legacyVoiceAssistantVersion?: number;
-  bluetoothProxyFeatureFlags?: number;
-  suggestedArea?: string;
-  voiceAssistantFeatureFlags?: number;
-  bluetoothMacAddress?: string;
-  apiEncryptionSupported?: boolean;
-  zwaveProxyFeatureFlags?: number;
-  zwaveHomeId?: number;
-  serialProxies?: readonly SerialProxyInfo[];
+  readonly usesPassword?: boolean;
+  readonly name?: string;
+  readonly macAddress?: string;
+  readonly esphomeVersion?: string;
+  readonly compilationTime?: string;
+  readonly model?: string;
+  readonly hasDeepSleep?: boolean;
+  readonly projectName?: string;
+  readonly projectVersion?: string;
+  readonly webserverPort?: number;
+  readonly legacyBluetoothProxyVersion?: number;
+  readonly manufacturer?: string;
+  readonly friendlyName?: string;
+  readonly legacyVoiceAssistantVersion?: number;
+  readonly bluetoothProxyFeatureFlags?: number;
+  readonly suggestedArea?: string;
+  readonly voiceAssistantFeatureFlags?: number;
+  readonly bluetoothMacAddress?: string;
+  readonly apiEncryptionSupported?: boolean;
+  readonly zwaveProxyFeatureFlags?: number;
+  readonly zwaveHomeId?: number;
+  readonly serialProxies?: readonly SerialProxyInfo[];
 }
 
 /**
@@ -321,42 +305,6 @@ export interface MessageEventData {
 
 // Per-entity event shapes (LightEvent, ClimateEvent, etc.) and the TelemetryEvent union are derived from ENTITY_SCHEMAS via the schema-driven mapped types in
 // src/schemas/derived.ts. The decoder produces those shapes directly; the type system traces every per-message payload back to the single schema source of truth.
-//
-// The TelemetryEventType tag is identical to EntityType at the type level; consumers should reference EntityType from schemas directly.
-
-// Per-event interfaces are exposed via src/schemas/entity-types.ts as derived StateEventFor<...> aliases. The re-export below preserves the import surface so
-// consumer code that wrote `import { LightEvent } from "esphome-client"` continues to resolve.
-export type {
-
-  AlarmControlPanelEvent,
-  BinarySensorEvent,
-  ButtonEvent,
-  CameraEvent,
-  ClimateEvent,
-  CoverEvent,
-  DateEvent,
-  DateTimeEvent,
-  EventEntityEvent,
-  FanEvent,
-  LightEvent,
-  LockEvent,
-  MediaPlayerEvent,
-  NumberEvent,
-  SelectEvent,
-  SensorEvent,
-  SirenEvent,
-  SwitchEvent,
-  TelemetryEventType,
-  TextEvent,
-  TextSensorEvent,
-  TimeEvent,
-  UpdateEvent,
-  ValveEvent,
-  WaterHeaterEvent
-} from "./schemas/entity-types.ts";
-
-// TelemetryEvent is the schema-derived discriminated union of every state-event variant. Re-exported here so the public import surface stays at the package root.
-export type { TelemetryEvent } from "./schemas/derived.ts";
 
 /**
  * Schema-derived map of every entity-keyed event. One entry per key in {@link ENTITY_SCHEMAS}; the value is the consumer-facing
@@ -752,7 +700,8 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
   // Run-phase message receiver. Created per connect(); owns the dispatch pump that routes inbound messages to the run-phase handlers via startDrain.
   private runReceiver: Nullable<MessageReceiver> = null;
 
-  // Device information received from the ESPHome device.
+  // Device information received from the ESPHome device. A frozen record installed only through {@link setDeviceInfo}, so the getter and the `deviceInfo` event can hand
+  // it out as-is.
   private remoteDeviceInfo: Nullable<DeviceInfo>;
 
   // Single source of truth for entity identity. Holds the branded-id <-> protocol-key bijection, the per-key entity record, the device-id overlay
@@ -769,7 +718,7 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
 
   // Per-image reassembly state for multi-packet camera images lives inside each {@link CameraApi} instance, keyed by branded camera id. The host's run-phase dispatcher
   // resolves the inbound entity-key to a `CameraApi` (constructing one lazily on first chunk so consumers that only subscribe to the bus event - never calling
-  // `client.camera(id)` - still observe assembled images) and delegates the chunk.
+  // `client.camera(id)` - still observe assembled images) and delegates the chunk; the instance publishes each assembled image back through {@link publishTelemetry}.
 
   // Latest-state cache. One {@link TelemetryEvent} per branded entity id, updated synchronously inside the run-phase state-message handler. Cleared on
   // every connect() so a fresh session starts with no inherited state. Read via the public `latest`, `snapshot`, and `snapshotFor` surfaces.
@@ -808,9 +757,9 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
   // connection-scoped state (the global frame-subscription refcount, the cached home id); reset on every connect.
   private zwaveProxyApi: Nullable<ZWaveProxyApi> = null;
 
-  // Camera sub-API instances, keyed by branded camera id. Per-id cache so repeated `client.camera(id)` calls return the same object; instances survive reconnects, and
-  // the host resets each instance's reassembly buffer at both session boundaries. The Map itself is never cleared: a camera id maps to one stable instance for the
-  // lifetime of the client.
+  // Camera sub-API instances, keyed by branded camera id. Per-id cache so repeated `client.camera(id)` calls return the same object; instances survive reconnects and
+  // take part in the subscription lifecycle, which resets each instance's connection-scoped state at both session boundaries and resends an open stream's request on
+  // reconnect. The Map itself is never cleared: a camera id maps to one stable instance for the lifetime of the client.
   private readonly cameraInstances = new Map<EntityId<"camera">, CameraApi>();
 
   // Cached decode-and-emit context for the voice-assistant inbound dispatchers. Built once in the constructor so the per-message dispatch in the run-phase dispatch
@@ -842,8 +791,9 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
   // is disabled (`keepAlive: false`); otherwise it ticks the configured interval and surfaces stalls through the `HeartbeatHost` interface.
   private readonly heartbeat: HeartbeatScheduler;
 
-  // Live connection-health record. Updated synchronously on every transition; emitted via the `healthChange` event for streaming consumers.
-  private healthRecord: ConnectionHealth = disconnectedHealth();
+  // Live connection-health record. A frozen value replaced whole on every transition through {@link setHealthRecord}, and emitted via the `healthChange` event for
+  // streaming consumers, so the getter and every listener share one object that no reader can mutate.
+  private healthRecord: ConnectionHealth = Object.freeze(disconnectedHealth());
 
   // Resolved auto-reconnect config. `null` when reconnect is disabled (`reconnect: false`).
   private readonly reconnectConfig: Nullable<ResolvedReconnectConfig>;
@@ -1063,8 +1013,7 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
 
           const stalls = this.healthRecord.consecutiveStalls + 1;
 
-          this.healthRecord = { ...this.healthRecord, consecutiveStalls: stalls, state: HealthState.STALLED };
-          this.emit("healthChange", this.healthRecord);
+          this.publishHealthRecord({ ...this.healthRecord, consecutiveStalls: stalls, state: HealthState.STALLED });
         }
 
         this.metrics?.increment("heartbeat.stalled");
@@ -1182,18 +1131,19 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
   /**
    * Single source of truth for which managers participate in the `SubscriptionLifecycle` reset/reissue cycle. The eagerly-constructed log manager and
    * Home-Assistant bridge are always present; the lazily-instantiated sub-APIs (voice-assistant, serial, Bluetooth, Z-Wave, and any future addition) are included only
-   * once a consumer has accessed them, so the `null` entries are filtered out. The connection teardown ({@link tearDownConnection}) calls
-   * `SubscriptionLifecycle.clearConnectionState` on each, and connect-bottom calls `SubscriptionLifecycle.reissueOnReconnect` on each, so adding a future streaming
-   * sub-API to the lifecycle is a one-line edit here rather than scattered per-manager call sites.
+   * once a consumer has accessed them, so the `null` entries are filtered out, and every camera instance the client has created takes part. The connection teardown
+   * ({@link tearDownConnection}) calls `SubscriptionLifecycle.clearConnectionState` on each, and connect-bottom calls `SubscriptionLifecycle.reissueOnReconnect` on
+   * each, so adding a future streaming sub-API to the lifecycle is a one-line edit here rather than scattered per-manager call sites.
    *
    * @returns The live subscription-lifecycle participants, with un-instantiated lazy sub-APIs omitted.
    */
   private subscriptionLifecycles(): SubscriptionLifecycle[] {
 
-    // The eager log manager and Home-Assistant bridge plus each lazily-instantiated streaming sub-API. We narrow out the `null` entries with a type predicate over the
-    // non-null member union (rather than the bare `SubscriptionLifecycle` interface) so the predicate's narrowed type stays assignable to the array's element type; each
-    // concrete class implements `SubscriptionLifecycle`, so the filtered result satisfies the declared return type.
-    const participants = [ this.logManager, this.homeAssistantApi, this.voiceAssistantApi, this.serialProxyApi, this.bluetoothProxyApi, this.zwaveProxyApi ];
+    // The eager log manager and Home-Assistant bridge plus each lazily-instantiated streaming sub-API and every camera instance. We narrow out the `null` entries with a
+    // type predicate over the non-null member union (rather than the bare `SubscriptionLifecycle` interface) so the predicate's narrowed type stays assignable to the
+    // array's element type; each concrete class implements `SubscriptionLifecycle`, so the filtered result satisfies the declared return type.
+    const participants = [ this.logManager, this.homeAssistantApi, this.voiceAssistantApi, this.serialProxyApi, this.bluetoothProxyApi, this.zwaveProxyApi,
+      ...this.cameraInstances.values() ];
 
     return participants.filter((manager): manager is NonNullable<(typeof participants)[number]> => manager !== null);
   }
@@ -1427,14 +1377,14 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
       const connectedAtMs = this.clock();
 
       this.heartbeat.start(connectedAtMs);
-      this.healthRecord = {
+      this.setHealthRecord({
 
         connectedAtMs,
         consecutiveStalls: this.healthRecord.consecutiveStalls,
         encrypted: context.transport.isEncrypted,
         lastInboundActivityAt: this.heartbeat.lastActivityAt,
         state: HealthState.CONNECTED
-      };
+      });
       this.reconnectAttempts = 0;
       this.explicitlyClosed = false;
 
@@ -1447,8 +1397,10 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
         lifecycle.reissueOnReconnect();
       }
 
+      // The connected record went in above, before the reissue and the connect event, so their listeners already read it; the announcement follows the connect event and
+      // carries the current record.
       this.emit("connect", context.transport.isEncrypted);
-      this.emit("healthChange", this.healthRecord);
+      this.publishHealthRecord(this.healthRecord);
       this.emit("lifecycle", { encrypted: context.transport.isEncrypted, kind: "connect" });
 
     } catch(err) {
@@ -1593,8 +1545,7 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
 
     if(rttMs !== undefined) {
 
-      this.healthRecord = { ...this.healthRecord, lastPingRttMs: rttMs };
-      this.emit("healthChange", this.healthRecord);
+      this.publishHealthRecord({ ...this.healthRecord, lastPingRttMs: rttMs });
       this.metrics?.timing("heartbeat.rtt_ms", rttMs);
     }
   }
@@ -1679,13 +1630,36 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
     // reconnected session and returns to 0 on that session's first inbound message...the recovery signal, so it is broadcast.
     if(this.healthRecord.consecutiveStalls !== 0) {
 
-      this.healthRecord = { ...this.healthRecord, consecutiveStalls: 0, lastInboundActivityAt: lastActivityAt };
-      this.emit("healthChange", this.healthRecord);
+      this.publishHealthRecord({ ...this.healthRecord, consecutiveStalls: 0, lastInboundActivityAt: lastActivityAt });
     } else if(this.healthRecord.lastInboundActivityAt !== lastActivityAt) {
 
       // Cheap snapshot update without re-emitting healthChange (consumers don't need a tick on every inbound message; transitions are the meaningful signal).
-      this.healthRecord = { ...this.healthRecord, lastInboundActivityAt: lastActivityAt };
+      this.setHealthRecord({ ...this.healthRecord, lastInboundActivityAt: lastActivityAt });
     }
+  }
+
+  /**
+   * Install the next health record. The record is frozen here, the only place the field is written after construction, so the object {@link health} returns and every
+   * `healthChange` payload carries is one no reader can mutate. The silent per-frame inbound-activity stamp calls this directly; every announced transition goes through
+   * {@link publishHealthRecord}.
+   *
+   * @param next - The record that replaces the current one.
+   */
+  private setHealthRecord(next: ConnectionHealth): void {
+
+    this.healthRecord = Object.freeze(next);
+  }
+
+  /**
+   * Install the next health record and announce it on `healthChange`. Every health transition consumers observe goes through here, so each one installs a frozen record
+   * and emits exactly that record.
+   *
+   * @param next - The record that replaces the current one.
+   */
+  private publishHealthRecord(next: ConnectionHealth): void {
+
+    this.setHealthRecord(next);
+    this.emit("healthChange", this.healthRecord);
   }
 
   /**
@@ -1739,12 +1713,6 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
     // it for this session - the factory contract requires a fresh transport per call. Dispose unconditionally.
     transport?.[Symbol.dispose]();
 
-    // Drop any in-flight multi-packet camera reassembly so a partial image from this session never bleeds into the next one.
-    for(const cameraApi of this.cameraInstances.values()) {
-
-      cameraApi.resetReassembly();
-    }
-
     this.heartbeat.stop();
 
     // Reject any in-flight correlators so awaiting consumers see a typed `AbortError` immediately rather than waiting for their per-await timeout to fire...a
@@ -1756,11 +1724,12 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
     this.disconnectCorrelator.rejectAll(teardownReason);
     this.noiseKeyCorrelator.rejectAll(teardownReason);
 
-    // Every streaming sub-API implements the uniform `SubscriptionLifecycle` contract. Each participant's `clearConnectionState` rejects its in-flight per-key
-    // Correlators (BLE GATT, serial) with an `AbortError` and clears its connection-scoped wire/cache state - a fresh ESPHome connection starts with no subscription -
-    // while preserving the consumer subscriber ledgers and desired intent so the next `reissueOnReconnect` can replay them. Running it at teardown means a parked
-    // GATT/serial await fails fast on disconnect instead of lingering to its per-await timeout, and connection-scoped reads (e.g. Bluetooth `isConnected`) report the
-    // disconnected truth at once. Per-manager specifics live in each manager's own `clearConnectionState` documentation.
+    // Every streaming sub-API implements the uniform `SubscriptionLifecycle` contract. Each participant's `clearConnectionState` rejects any in-flight correlated
+    // request it holds with an `AbortError` and clears its connection-scoped wire/cache state - a fresh ESPHome connection starts with no subscription - while
+    // preserving the consumer subscriber ledgers and desired intent so the next `reissueOnReconnect` can replay them. Running it at teardown means a parked await (a
+    // Bluetooth GATT read, say) fails fast on disconnect instead of lingering to its per-await timeout, connection-scoped reads (e.g. Bluetooth `isConnected`) report
+    // the disconnected truth at once, and a partial camera image from this session never bleeds into the next one. Per-manager specifics live in each manager's own
+    // `clearConnectionState` documentation.
     for(const lifecycle of this.subscriptionLifecycles()) {
 
       lifecycle.clearConnectionState();
@@ -1791,13 +1760,12 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
     // broadcast via healthChange.
     const previousRtt = this.healthRecord.lastPingRttMs;
 
-    this.healthRecord = {
+    this.publishHealthRecord({
 
       ...disconnectedHealth(),
       consecutiveStalls: this.healthRecord.consecutiveStalls,
       ...((previousRtt !== undefined) && { lastPingRttMs: previousRtt })
-    };
-    this.emit("healthChange", this.healthRecord);
+    });
     this.emit("lifecycle", cause ? { cause, kind: "disconnect" } : { kind: "disconnect" });
     this.emit("disconnect", reason);
   }
@@ -2003,15 +1971,14 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
       // Construct the down "reconnecting" record explicitly, carrying only the base diagnostics forward. A down record drops the connect epoch by construction: spreading
       // a live record's `connectedAtMs` onto a variant whose `connectedAtMs?: never` would not compile, which is the union's enforcement working. The explicit build also
       // stays correct if the state machine later sets RECONNECTING from a live record.
-      this.healthRecord = {
+      this.publishHealthRecord({
 
         consecutiveStalls: this.healthRecord.consecutiveStalls,
         encrypted: false,
         lastInboundActivityAt: this.healthRecord.lastInboundActivityAt,
         ...((this.healthRecord.lastPingRttMs !== undefined) && { lastPingRttMs: this.healthRecord.lastPingRttMs }),
         state: HealthState.RECONNECTING
-      };
-      this.emit("healthChange", this.healthRecord);
+      });
 
       try {
 
@@ -2150,9 +2117,10 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
   }
 
   /**
-   * Handle one inbound `CameraImageResponse` chunk. The host's job is now narrow: decode the entity-key, image bytes, and `done` flag, resolve the entity-key to the
-   * cached {@link CameraApi} instance (constructing one lazily if no consumer has called {@link camera} yet so backwards-compat bus subscribers still observe assembled
-   * images), then delegate to {@link CameraApi.acceptChunk}. The sub-API owns reassembly and emits the assembled `camera` event.
+   * Handle one inbound `CameraImageResponse` chunk. The host decodes the entity key, the image bytes, and the `done` flag, resolves the key to its cached
+   * {@link CameraApi} instance, and delegates the chunk to {@link CameraApi.acceptChunk}, which owns reassembly and publishes each assembled image through
+   * {@link publishTelemetry}. The instance is constructed lazily on the first chunk when no consumer has called {@link camera} yet, because a consumer that only
+   * subscribes to the `camera` or `telemetry` channel must still observe assembled images.
    *
    * @param payload - The camera image response payload.
    */
@@ -2395,6 +2363,10 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
     const zwaveProxyFeatureFlags = extractNumberField(fields, 23);
     const zwaveHomeId = extractNumberField(fields, 24);
 
+    // Decode the repeated serial-proxy advertisements at field 25. Each entry is a nested message with `name` (1) and `port_type` (2); the array index becomes the
+    // `instance` number used in every subsequent serial-proxy wire message. Empty (or absent) when the device firmware was not compiled with `USE_SERIAL_PROXY`.
+    const serialProxies = extractSerialProxies(fields, 25, (buffer) => this.decodeProtobuf(buffer));
+
     // Build the device info from a single object literal. Each conditional spread either contributes a property or contributes nothing - so absence is preserved.
     const info: DeviceInfo = {
 
@@ -2413,6 +2385,7 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
       ...((name !== undefined) && { name }),
       ...((projectName !== undefined) && { projectName }),
       ...((projectVersion !== undefined) && { projectVersion }),
+      ...((serialProxies.length > 0) && { serialProxies }),
       ...((suggestedArea !== undefined) && { suggestedArea }),
       ...((usesPasswordValue !== undefined) && { usesPassword: usesPasswordValue === 1 }),
       ...((voiceAssistantFeatureFlags !== undefined) && { voiceAssistantFeatureFlags }),
@@ -2425,23 +2398,35 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
     // configurations leave this empty; multi-device parents enumerate every sub-device addressable via the protocol's `device_id` field.
     this.subDeviceList = extractSubDevices(fields, 20, (buffer) => this.decodeProtobuf(buffer));
 
-    // Decode the repeated serial-proxy advertisements at field 25. Each entry is a nested message with `name` (1) and `port_type` (2); the array index becomes the
-    // `instance` number used in every subsequent serial-proxy wire message. Empty (or absent) when the device firmware was not compiled with `USE_SERIAL_PROXY`.
-    const serialProxies = extractSerialProxies(fields, 25, (buffer) => this.decodeProtobuf(buffer));
-
-    if(serialProxies.length > 0) {
-
-      info.serialProxies = serialProxies;
-    }
-
-    // Store the remote device info.
-    this.remoteDeviceInfo = info;
+    this.setDeviceInfo(info);
 
     this.log.debug("Device info extracted: " + JSON.stringify(info));
   }
 
   /**
-   * Return the device information of the connected ESPHome device if available. Returns a shallow copy so external code cannot mutate the cached record.
+   * Install a decoded device-information record, frozen along with its nested serial-proxy entries, so {@link deviceInfo} and the `deviceInfo` event can hand out the
+   * record itself. The discovery decoder is the only caller; teardown clears the field to `null` directly.
+   *
+   * @param info - The freshly decoded record. It becomes read-only in place.
+   */
+  private setDeviceInfo(info: DeviceInfo): void {
+
+    if(info.serialProxies) {
+
+      for(const proxy of info.serialProxies) {
+
+        Object.freeze(proxy);
+      }
+
+      Object.freeze(info.serialProxies);
+    }
+
+    this.remoteDeviceInfo = Object.freeze(info);
+  }
+
+  /**
+   * Return the device information of the connected ESPHome device if available. The record is frozen and is the same object the most recent `deviceInfo` event carried;
+   * a later `DeviceInfoResponse` replaces it whole.
    *
    * Usage:
    *
@@ -2452,9 +2437,7 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
    */
   public deviceInfo(): Nullable<DeviceInfo> {
 
-    // Return a shallow copy so callers cannot mutate our internal state. Spread is the right tool because DeviceInfo is a flat object of primitives - new fields added to
-    // the interface flow through automatically without touching this method.
-    return this.remoteDeviceInfo ? { ...this.remoteDeviceInfo } : null;
+    return this.remoteDeviceInfo;
   }
 
   /**
@@ -2597,8 +2580,8 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
 
       // Try schema-driven decoding for standard state responses. Prefer the entity's declared type when the entity is known: this disambiguates wire messages that are
       // shared across entity types (the canonical case is `InfraredRFReceiveEvent` at id 137, which both `infrared` and `radio_frequency` schemas claim as their state
-      // message). Falling back to message-type lookup is correct when the entity is unknown - the wire message itself is the only signal we have, and the resulting
-      // event surfaces under the message-type-derived label rather than committing to an arbitrary "winner" of the shared message-type.
+      // message). When no registered entity claims the key, the wire message type is the only signal we have, so we decode with the last schema in table order that
+      // declares it...extras follow the built-ins, so an extras alias wins its shared type, and an unclaimed receive event on id 137 decodes as `radio_frequency`.
       const schema = knownEntity ? getSchemaIn(this.schemasTable, knownEntity.type) : findSchemaByStateMessageTypeIn(this.schemasTable, type);
 
       if(schema) {
@@ -2621,14 +2604,31 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
       }
     }
 
-    // Mutate-then-notify: a listener reading `client.latest(id)` or iterating `client.snapshot()` from inside `on("telemetry")` or the per-type channel must see the
-    // just-emitted event. Asserted by the "cache contract:" test in esphome-client.test.ts. When the entity is unknown (no successful discovery), skip the write rather
-    // than fabricate an id.
-    if(knownEntity) {
+    // When the entity is unknown (no successful discovery), there is no id to cache the event under, so we publish without a cache write rather than fabricate an id.
+    // For a known entity we reuse the id the registry already minted at register time rather than building the string again on every state event. The registry is the
+    // single mint site; the `??` fallback re-mints only in the unreachable case where a key resolved by `byKey` is somehow absent from the id index.
+    this.publishTelemetry(knownEntity ? (this.registry.idByKey(key) ?? mintEntityId(knownEntity.type, knownEntity.objectId)) : null, data);
 
-      // Reuse the id the registry already minted at register time rather than re-minting it (two `toLowerCase` + a concat) on every state event. The registry is the
-      // single mint site; the `??` fallback re-mints only in the unreachable case where a key resolved by `byKey` is somehow absent from the id index.
-      this.latestCache.set(this.registry.idByKey(key) ?? mintEntityId(knownEntity.type, knownEntity.objectId), data);
+    // We keep a concise debug record for quick tracing during development and diagnostics. The event is passed as a deferred parameter rather than pre-serialized, so the
+    // default no-op debug logger discards it without paying the per-frame JSON.stringify (a full object walk + string allocation) the warm telemetry path would otherwise
+    // incur on every state event regardless of whether debug is enabled.
+    this.log.debug("State update received.", data);
+  }
+
+  /**
+   * Publish one state event: the single path every entity's state reaches consumers through, the state-frame handler and the camera's reassembled images alike.
+   *
+   * @remarks Mutate-then-notify: the cache write comes first, so a listener reading `client.latest(id)` or iterating `client.snapshot()` from inside `on("telemetry")`
+   * or the per-type channel sees the event that fired it. Asserted by the "cache contract:" test in esphome-client.test.ts.
+   *
+   * @param id - The branded id to cache the event under, or `null` when no registered entity claims it, in which case the cache is left alone.
+   * @param data - The state event to publish.
+   */
+  private publishTelemetry(id: Nullable<EntityId>, data: TelemetryEvent): void {
+
+    if(id !== null) {
+
+      this.latestCache.set(id, data);
     }
 
     // We emit a strongly-typed union on the generic telemetry channel. This is the most flexible subscription path.
@@ -2637,11 +2637,6 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
     // We also emit on the per-type channel named by the event's tag, which enables targeted subscriptions. `data.type` is the tag of `data`'s own variant, so the
     // channel and payload match by construction; the compiler checks the call only against the union of every per-type payload, which `data` satisfies as-is.
     this.emit(data.type, data);
-
-    // We keep a concise debug record for quick tracing during development and diagnostics. The event is passed as a deferred parameter rather than pre-serialized, so the
-    // default no-op debug logger discards it without paying the per-frame JSON.stringify (a full object walk + string allocation) the warm telemetry path would otherwise
-    // incur on every state event regardless of whether debug is enabled.
-    this.log.debug("State update received.", data);
   }
 
   // Schema-driven decoders are implemented in `discovery.ts` (entity discovery + scalar/repeated field extractors) and `telemetry.ts` (state-update decoding). The
@@ -2908,7 +2903,7 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
    * wants the post-command state in one await rather than wiring up a separate subscription.
    *
    * @remarks Type-level constraint excludes entity types with no state response - `button` (stateless), `sensor`, `binary_sensor`, and `text_sensor` (read-only),
-   * `camera` (multi-packet image events lack the numeric key the predicate-match loop compares against), and `infrared` / `radio_frequency` (transmit is
+   * `camera` (its schema declares no command, so there is nothing to send and await), and `infrared` / `radio_frequency` (transmit is
    * fire-and-forget; the receive event is an unsolicited inbound signal, not a command acknowledgement). Calling `commandAndAwait` against any of those is a compile
    * error, not a runtime hang.
    *
@@ -2930,8 +2925,8 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
    * @throws {ConfigurationError} (`SCHEMA_UNKNOWN` / `COMMAND_UNSUPPORTED`) when no schema, or no command schema, is registered for the entity type. Nothing is sent.
    * @throws {ConfigurationError} (`ENUM_VALUE_UNKNOWN` / `VALUE_OUT_OF_RANGE`) when a command field receives an unknown enum alias or a value outside the integer domain
    * its wire type carries. Nothing is sent.
-   * @throws {ConfigurationError} (`AWAIT_STREAM_CLOSED`) when the underlying telemetry stream ends before a matching state event arrives - typically because the
-   * connection dropped while the await was pending.
+   * @throws {ConfigurationError} (`AWAIT_STREAM_CLOSED`) when the underlying state stream ends before a matching state event arrives. The client's own connection
+   * lifecycle never causes this: the event bus is never disposed, so a disconnect or reconnect leaves the stream open.
    * @throws {DOMException} (`TimeoutError`) when the deadline elapses (2000ms unless `awaitOptions.timeoutMs` overrides it), or (`AbortError`) when the caller's signal
    * aborts; a signal aborted with an `Error` reason rejects with that reason instead.
    *
@@ -3067,12 +3062,12 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
     const dash = id.indexOf("-");
     const entityType = ((dash > 0) ? id.slice(0, dash) : id) as T;
 
-    // The selector keeps this entity's events and skips its siblings' as they are emitted, so they never occupy the view's queue. Camera state events have a different
-    // shape (no `key`); other entity events expose `key`, so the selector reads it through a structural cast.
+    // The selector keeps this entity's events and skips its siblings' as they are emitted, so they never occupy the view's queue. Every entity event carries the
+    // numeric `key`, the camera's reassembled image included, so the selector compares it directly.
     return this.bus.stream(entityType as EntityType, {
 
       ...options,
-      select: (event: ClientEventsMap[EntityType]): typeof event | undefined => ((event as unknown as { key: number }).key === targetKey) ? event : undefined
+      select: (event: ClientEventsMap[EntityType]): typeof event | undefined => (event.key === targetKey) ? event : undefined
     }) as AsyncIterable<StateEventFor<SchemaForExtended<T, Extras>>>;
   }
 
@@ -3131,8 +3126,9 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
   }
 
   /**
-   * Synchronous read of the live {@link ConnectionHealth} record. Uptime is not stored on the record; derive it from the returned snapshot via {@link
-   * connectionUptimeMs}, which reads `connectedAtMs` while the socket is up and `0` while it is down.
+   * Synchronous read of the live {@link ConnectionHealth} record. The record is frozen and is the same object the most recent `healthChange` event carried; each
+   * transition replaces it whole. Uptime is not stored on the record; derive it from the returned snapshot via {@link connectionUptimeMs}, which reads `connectedAtMs`
+   * while the socket is up and `0` while it is down.
    *
    * Usage:
    *
@@ -3143,9 +3139,9 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
    */
   public health(): ConnectionHealth {
 
-    // Boundary copy so a consumer mutating the returned snapshot cannot corrupt the cached record. The record is the discriminated union as-is; uptime is derived by the
-    // caller via {@link connectionUptimeMs} from `connectedAtMs`, so there is nothing to compute or guard here.
-    return { ...this.healthRecord };
+    // The record is a frozen value that every transition replaces whole, so we hand out the object itself: it is the same one the latest `healthChange` carried, and no
+    // caller can mutate it. Uptime is derived by the caller via {@link connectionUptimeMs} from `connectedAtMs`, so there is nothing to compute or guard here.
+    return this.healthRecord;
   }
 
   /**
@@ -3362,6 +3358,7 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
       bus: this.bus,
       log: this.log,
       maxImageBytes: this.maxImageBytes,
+      publishTelemetry: (cameraId, event): void => { this.publishTelemetry(cameraId, event); },
       send: (type, payload): void => { this.frameAndSend(type, payload); }
     };
 

@@ -16,17 +16,17 @@
  *
  * @module examples/showcase
  */
-import { AlarmControlPanelCommand, AlarmControlPanelState, ClimateMode, CoverOperation, EspHomeClient, LockCommand, LockState, LogLevel, MediaPlayerCommand,
-  MediaPlayerState, RadioFrequencyModulation, SerialProxyLineStateFlags, SerialProxyParity, SerialProxyPortType, SerialProxyStatus,
-  openEspHomeClient } from "../esphome-client.ts";
-import type { AlarmControlPanelEvent, ClientEventsMap, ClimateEvent, CoverEvent, DeviceInfo, EspHomeClientOptions, ExecuteServiceArgumentValue,
-  FanEvent, LockEvent, MediaPlayerEvent, SirenEvent, SwitchEvent } from "../esphome-client.ts";
+import { AlarmControlPanelCommand, AlarmControlPanelState, BluetoothScannerMode, BluetoothScannerState, ClimateMode, CoverOperation, LockCommand, LockState,
+  LogLevel, MediaPlayerCommand, MediaPlayerState, RadioFrequencyModulation, SerialProxyLineStateFlags, SerialProxyParity, SerialProxyPortType, SerialProxyStatus,
+  VoiceAssistantEvent, VoiceAssistantSubscribeFlag } from "../api-constants.ts";
+import type { AlarmControlPanelEvent, ClimateEvent, CoverEvent, FanEvent, LockEvent, MediaPlayerEvent, SirenEvent, SwitchEvent } from "../schemas/entity-types.ts";
 import { BackpressureError, BufferOverflowError, CameraStreamClosedError, ConfigurationError, ConnectionClosedByPeerError, ConnectionError, ConnectionRefusedError,
   ConnectionTimeoutError, EncryptionKeyInvalidError, EncryptionKeyMissingError, EncryptionRequiredError, EspHomeError, FrameTooLargeError, HandshakeError,
   HeartbeatStalledError, NegotiationFailedError, NoiseHandshakeError, NoiseHandshakeTimeoutError, PeerClosedDuringNoiseError, PermanentError,
   PlaintextHandshakeError, ProtocolError } from "../errors.ts";
-import { BluetoothScannerMode, BluetoothScannerState, VoiceAssistantEvent, VoiceAssistantSubscribeFlag } from "../api-constants.ts";
+import type { ClientEventsMap, DeviceInfo, EspHomeClientOptions, ExecuteServiceArgumentValue } from "../esphome-client.ts";
 import type { Entity, ExtraSchemaSet, TelemetryEvent } from "../schemas/index.ts";
+import { EspHomeClient, openEspHomeClient } from "../esphome-client.ts";
 import type { EspHomeLogging, Nullable, PskResolver } from "../types.ts";
 import { aliasOf, extending } from "../schemas/index.ts";
 import { createESPHomeHandshake, createHandshake } from "../crypto-noise.ts";
@@ -440,8 +440,8 @@ export function entityKeyResolutionExample(client: EspHomeClient, lightId: Entit
 
 /**
  * Read the device's metadata via {@link EspHomeClient.deviceInfo}. The record is null until the discovery handshake completes; afterwards it stays
- * valid for the lifetime of the session and refreshes on every reconnect. The returned object is a shallow copy - mutating it does not affect the client's internal
- * state.
+ * valid for the lifetime of the session and refreshes on every reconnect. The returned record is frozen and is the same object the `deviceInfo` event carried; a later
+ * response replaces it whole rather than mutating it.
  */
 // #region device-info
 export function deviceInfoExample(client: EspHomeClient): void {

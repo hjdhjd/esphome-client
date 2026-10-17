@@ -1,22 +1,43 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
- * camera.test.ts: Unit tests for the per-id CameraApi multi-packet reassembly logic.
+ * camera.test.ts: Unit tests for the per-id CameraApi multi-packet reassembly logic, its telemetry publish, and its shared, reconnect-surviving stream.
  */
+import type { CapturedContractFrame, ContractFrameKind } from "./reissuable-subscription-contract.helpers.ts";
 import { describe, test } from "node:test";
 import { Buffer } from "node:buffer";
 import { CameraApi } from "./camera.ts";
+import type { CameraEvent } from "./schemas/index.ts";
 import type { CameraHost } from "./camera.ts";
 import { CameraStreamClosedError } from "./errors.ts";
 import type { ClientEventsMap } from "./esphome-client.ts";
+import type { EntityId } from "./entity-id.ts";
 import { EventBus } from "./event-bus.ts";
+import { MessageType } from "./protocol/message-types.ts";
 import assert from "node:assert/strict";
 import { entityId } from "./entity-id.ts";
+import { runReissuableSubscriptionContract } from "./reissuable-subscription-contract.helpers.ts";
 
-function makeHost(maxImageBytes = 8 * 1024 * 1024):
-CameraHost & { events: { event: string; payload: unknown }[]; sent: { type: number; payload: Buffer }[]; warnings: { context?: unknown; message: string }[] } {
+// The CameraImageRequest payloads a stream view sends, hand-verified against api.proto: field 1 (single) VARINT 0 -> tag 0x08 value 0x00; field 2 (stream) VARINT ->
+// tag 0x10 and the flag.
+const STREAM_START = Buffer.from([ 0x08, 0x00, 0x10, 0x01 ]);
+const STREAM_STOP = Buffer.from([ 0x08, 0x00, 0x10, 0x00 ]);
+
+// The fake host plus the recordings each test asserts against.
+interface RecordingCameraHost extends CameraHost {
+
+  events: { event: string; payload: unknown }[];
+  published: { event: CameraEvent; id: EntityId<"camera"> }[];
+  sent: { type: number; payload: Buffer }[];
+  warnings: { context?: unknown; message: string }[];
+}
+
+// The fake host publishes the way the client does: it records the call, then emits on the generic telemetry channel and on the camera channel, in that order. The
+// client's cache write, which precedes both emits, is asserted by the host tests in esphome-client.test.ts.
+function makeHost(maxImageBytes = 8 * 1024 * 1024): RecordingCameraHost {
 
   const bus = new EventBus<ClientEventsMap>();
   const events: { event: string; payload: unknown }[] = [];
+  const published: { event: CameraEvent; id: EntityId<"camera"> }[] = [];
   const sent: { type: number; payload: Buffer }[] = [];
   const warnings: { context?: unknown; message: string }[] = [];
 
@@ -34,6 +55,13 @@ CameraHost & { events: { event: string; payload: unknown }[]; sent: { type: numb
       warn: (message: string, context?: unknown): void => { warnings.push({ context, message }); }
     },
     maxImageBytes,
+    publishTelemetry: (id: EntityId<"camera">, event: CameraEvent): void => {
+
+      published.push({ event, id });
+      bus.emit("telemetry", event);
+      bus.emit("camera", event);
+    },
+    published,
     send: (type: number, payload: Buffer): void => { sent.push({ payload, type }); },
     sent,
     warnings
@@ -65,6 +93,20 @@ describe("CameraApi.acceptChunk", () => {
 
     assert.deepEqual(payload.image, Buffer.from([ 0xff, 0xd8 ]));
     assert.equal(payload.name, "FrontDoor");
+  });
+
+  test("publishes the assembled image through the host's telemetry path, keyed by the camera's own id", () => {
+
+    const host = makeHost();
+    const id = entityId("camera", "front");
+    const cam = new CameraApi(host, id);
+
+    cam.acceptChunk(Buffer.from([0x01]), false, "FrontDoor", 7);
+    cam.acceptChunk(Buffer.from([0x02]), true, "FrontDoor", 7);
+
+    assert.equal(host.published.length, 1, "one finished image must publish exactly once");
+    assert.equal(host.published[0]?.id, id, "the cache key must be the camera's own branded id");
+    assert.deepEqual(host.published[0]?.event, { entity: id, image: Buffer.from([ 0x01, 0x02 ]), key: 7, name: "FrontDoor", type: "camera" });
   });
 
   test("concatenates multiple chunks in order on done", () => {
@@ -171,30 +213,35 @@ describe("CameraApi.acceptChunk reassembly byte cap", () => {
   });
 });
 
-describe("CameraApi.resetReassembly", () => {
+describe("CameraApi.clearConnectionState", () => {
 
-  test("drops in-flight chunks so the next image starts clean", () => {
+  test("drops the in-flight chunks and their byte count so the next session's first image starts clean", () => {
 
-    const host = makeHost();
+    // The four-byte cap makes the byte count observable: the three bytes left from the previous session plus the next image's two would exceed it, so the next image
+    // assembles only when the count was cleared along with the chunks.
+    const host = makeHost(4);
     const cam = new CameraApi(host, entityId("camera", "front"));
 
-    cam.acceptChunk(Buffer.from([ 0xaa, 0xbb ]), false, "FrontDoor", 1);
-    cam.resetReassembly();
+    cam.acceptChunk(Buffer.from([ 0xaa, 0xbb, 0xcc ]), false, "FrontDoor", 1);
+    cam.clearConnectionState();
+    cam.acceptChunk(Buffer.from([ 0x98, 0x99 ]), true, "FrontDoor", 1);
 
-    // Now finalize a new image; the dropped chunks must not appear.
-    cam.acceptChunk(Buffer.from([0x99]), true, "FrontDoor", 1);
+    assert.equal(host.warnings.length, 0, "the previous session's byte count must not count against the next image");
+    assert.equal(host.events.length, 1, "the next image must assemble and emit");
 
     const payload = host.events[0]?.payload as { image: Buffer };
 
-    assert.deepEqual(payload.image, Buffer.from([0x99]));
+    assert.deepEqual(payload.image, Buffer.from([ 0x98, 0x99 ]), "the partial image from the previous session must not prefix the next image");
   });
 
-  test("is a no-op when no chunks are buffered", () => {
+  test("is a no-op when nothing is buffered and no view is open", () => {
 
     const host = makeHost();
     const cam = new CameraApi(host, entityId("camera", "front"));
 
-    assert.doesNotThrow(() => cam.resetReassembly());
+    assert.doesNotThrow(() => cam.clearConnectionState());
+    assert.equal(host.sent.length, 0, "clearing with no open view must send nothing");
+    assert.equal(host.events.length, 0, "clearing must never emit an image");
   });
 });
 
@@ -327,6 +374,105 @@ describe("CameraApi.stream", () => {
     assert.equal(host.sent.length, 2, "ending iteration must send exactly one additional (stop) request");
     assert.deepEqual(host.sent[1]?.payload, Buffer.from([ 0x08, 0x00, 0x10, 0x00 ]), "the stop request must encode single=false, stream=false (both flags clear)");
   });
+
+  test("two views share one device-side stream: closing the first sends nothing, and the second keeps yielding until it closes", async () => {
+
+    const host = makeHost();
+    const cam = new CameraApi(host, entityId("camera", "front"));
+    const first = cam.stream()[Symbol.asyncIterator]();
+    const second = cam.stream()[Symbol.asyncIterator]();
+
+    assert.deepEqual(host.sent.map((frame) => frame.payload), [STREAM_START], "only the first view must send the stream request");
+
+    await first.return?.();
+
+    assert.equal(host.sent.length, 1, "closing one of two views must not stop the stream the other still reads");
+
+    const nextFrame = second.next();
+
+    cam.acceptChunk(Buffer.from([0x42]), true, "front", 1);
+
+    assert.deepEqual((await nextFrame).value, Buffer.from([0x42]), "the remaining view must keep yielding");
+
+    await second.return?.();
+
+    assert.deepEqual(host.sent.map((frame) => frame.payload), [ STREAM_START, STREAM_STOP ], "closing the last view must send the stop");
+  });
+
+  test("an open view's stream request goes out again after clearConnectionState and reissueOnReconnect, and not at all with no view open", async () => {
+
+    const host = makeHost();
+    const cam = new CameraApi(host, entityId("camera", "front"));
+
+    // With no view open the lifecycle pair is silent.
+    cam.clearConnectionState();
+    cam.reissueOnReconnect();
+
+    assert.equal(host.sent.length, 0, "a reconnect with no open view must send nothing");
+
+    const iterator = cam.stream()[Symbol.asyncIterator]();
+
+    // The host's connect order: clear the connection-scoped state at the teardown, then reissue once the new transport is up.
+    cam.clearConnectionState();
+    cam.reissueOnReconnect();
+
+    assert.deepEqual(host.sent.map((frame) => frame.payload), [ STREAM_START, STREAM_START ], "the reconnect must request the stream again for the open view");
+
+    await iterator.return?.();
+
+    assert.deepEqual(host.sent.map((frame) => frame.payload), [ STREAM_START, STREAM_START, STREAM_STOP ], "the view's close after a reconnect must stop the stream");
+  });
+});
+
+// Drive the shared reissuable-subscription contract harness against the camera stream - the canonical symmetric shape on a single per-camera wire key, where the stream
+// request with the flag set is the SUBSCRIBE and the request with it cleared is the UNSUBSCRIBE. A single-image request is neither.
+runReissuableSubscriptionContract<CameraApi>({
+
+  classify: (frame: CapturedContractFrame): ContractFrameKind => {
+
+    if(frame.type !== MessageType.CAMERA_IMAGE_REQUEST) {
+
+      return "other";
+    }
+
+    if(frame.payload.equals(STREAM_START)) {
+
+      return "subscribe";
+    }
+
+    if(frame.payload.equals(STREAM_STOP)) {
+
+      return "unsubscribe";
+    }
+
+    return "other";
+  },
+  label: "CameraApi.stream",
+  openSubscription: (api: CameraApi) => {
+
+    // Open the iterator under an AbortController and park one next() on it - exactly modeling a consumer parked in `for await` across a reconnect. release() aborts
+    // the controller, which rejects the parked next() and runs the view's close hook (the subscription release).
+    const controller = new AbortController();
+    const iter = api.stream({ signal: controller.signal })[Symbol.asyncIterator]();
+    const parked = iter.next();
+
+    // The abort below settles this; the rejection is expected teardown, not a failure.
+    parked.catch((): void => { /* Expected teardown rejection, not a failure. */ });
+
+    return { release: async (): Promise<void> => {
+
+      controller.abort();
+
+      // Await the parked next so the abort has settled it before the harness asserts on the wire effects; the close hook itself runs synchronously inside abort().
+      await parked.catch((): void => { /* Expected abort rejection, not a failure. */ });
+    } };
+  },
+  setup: () => {
+
+    const host = makeHost();
+
+    return { api: new CameraApi(host, entityId("camera", "front")), sent: host.sent };
+  }
 });
 
 describe("CameraApi.stream: a never-iterated view stops eagerly", () => {

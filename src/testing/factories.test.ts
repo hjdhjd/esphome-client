@@ -156,9 +156,9 @@ describe("mockDeviceInfo", () => {
     const a = mockDeviceInfo();
     const b = mockDeviceInfo();
 
-    a.name = "mutated";
-
-    assert.equal(b.name, "test-device", "mutation must not leak across calls");
+    // The records are readonly, so freshness is shown by identity rather than by mutating one record.
+    assert.notStrictEqual(a, b, "each call returns a fresh object");
+    assert.deepEqual(a, b);
   });
 });
 

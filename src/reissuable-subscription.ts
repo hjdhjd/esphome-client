@@ -65,9 +65,8 @@ import type { Nullable } from "./types.ts";
 export const EMPTY: unique symbol = Symbol("reissuable-subscription-empty");
 
 /**
- * The uniform reset/reissue subscription-continuity contract every streaming sub-API implements: {@link LogSubscriptionManager},
- * {@link VoiceAssistantApi}, {@link SerialProxyApi}, {@link BluetoothProxyApi}, and
- * {@link ZWaveProxyApi}.
+ * The uniform reset/reissue subscription-continuity contract every sub-API implements when it holds a device-side subscription on a consumer's behalf. The host's
+ * `subscriptionLifecycles()` list is the single source for which instances take part.
  *
  * @remarks The host drives both methods around the transport lifecycle. It calls {@link clearConnectionState} on every participant at the disconnect boundary (the
  * primary reset) and again at connect-top (a repeatable safety net for a `connect()` issued over a still-active connection) - resetting each manager's connection-scoped
@@ -75,11 +74,11 @@ export const EMPTY: unique symbol = Symbol("reissuable-subscription-empty");
  * up, it calls {@link reissueOnReconnect} on every participant - replaying the surviving subscriptions onto the new transport so parked consumer iterators keep
  * receiving without re-subscribing by hand.
  *
- * Two structurally-distinct implementations satisfy this one contract. The multiset-backed sub-APIs (Serial, Bluetooth, Z-Wave, and Log) own a
- * {@link ReissuableSubscription} - itself a participant whose `clearConnectionState` / `reissueOnReconnect` ARE this contract - and delegate to it. The voice-assistant
- * sub-API has no per-iterator multiset (its request / audio streams are decoupled bus pass-throughs), so it satisfies the contract DIRECTLY with a single preserved
- * desired-intent rather than a keyed ledger. Both shapes present the same two methods to the host, which is the entire point of naming the contract: the host loops over
- * a homogeneous list of `SubscriptionLifecycle` participants and need not know which shape each one is.
+ * Two structurally-distinct implementations satisfy this one contract. A sub-API whose consumers share a device-side subscription through a per-consumer multiset owns a
+ * {@link ReissuableSubscription} - itself a participant whose `clearConnectionState` / `reissueOnReconnect` ARE this contract - and delegates to it. A sub-API with no
+ * per-consumer multiset satisfies the contract DIRECTLY with a preserved desired intent rather than a keyed ledger. Both shapes present the same two methods to the
+ * host, which is the entire point of naming the contract: the host loops over a homogeneous list of `SubscriptionLifecycle` participants and need not know which shape
+ * each one is.
  */
 export interface SubscriptionLifecycle {
 

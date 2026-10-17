@@ -13,20 +13,21 @@ import {
   NoiseHandshakeError, PeerClosedDuringNoiseError, PermanentError
 } from "./errors.ts";
 import { ENTITY_SCHEMAS, aliasOf, extending } from "./schemas/index.ts";
-import { EspHomeClient, LockState, LogLevel, openEspHomeClient } from "./esphome-client.ts";
+import { EspHomeClient, openEspHomeClient } from "./esphome-client.ts";
+import { LockState, LogLevel, SerialProxyPortType, WaterHeaterMode } from "./api-constants.ts";
+import { MockTransport, pushInfraredRFReceiveEvent } from "./testing/mock-transport.ts";
 import type { Nullable, ServiceEntity } from "./types.ts";
 import { decodeProtobuf, encodeProtoFields, encodeVarint } from "./protocol/codec.ts";
 import { describe, mock, test } from "node:test";
 import { Buffer } from "node:buffer";
 import type { ClientCapabilities } from "./capabilities.ts";
 import type { ClockFn } from "./heartbeat.ts";
+import type { ConnectionHealth } from "./health.ts";
 import type { DeviceInfo } from "./esphome-client.ts";
 import { MessageType } from "./protocol/message-types.ts";
-import { MockTransport } from "./testing/mock-transport.ts";
 import type { NoiseCipherPair } from "./transport.ts";
 import type { ProtoField } from "./protocol/codec.ts";
 import type { TestContext } from "node:test";
-import { WaterHeaterMode } from "./api-constants.ts";
 import { WireType } from "./protocol/wire-types.ts";
 import assert from "node:assert/strict";
 import { connectionUptimeMs } from "./health.ts";
@@ -181,6 +182,16 @@ function deviceInfoResponse(overrides: Partial<DeviceInfo> & { subDevices?: { ar
 
       fields.push({ fieldNumber: 20, value: encodeProtoFields(subFields), wireType: WireType.LENGTH_DELIMITED });
     }
+  }
+
+  // Serial-proxy advertisements at field 25, each a nested message with `name` (1) and `port_type` (2). Encoded only when the test supplies them.
+  for(const proxy of overrides.serialProxies ?? []) {
+
+    fields.push({ fieldNumber: 25, value: encodeProtoFields([
+
+      { fieldNumber: 1, value: Buffer.from(proxy.name, "utf8"), wireType: WireType.LENGTH_DELIMITED },
+      { fieldNumber: 2, value: proxy.portType, wireType: WireType.VARINT }
+    ]), wireType: WireType.LENGTH_DELIMITED });
   }
 
   return encodeProtoFields(fields);
@@ -517,20 +528,22 @@ describe("EspHomeClient construction with injected MockTransport", () => {
     assert.equal(client.isEncrypted, false, "isEncrypted reads the cached record, which must be insulated from consumer mutation");
   });
 
-  test("health() returns a boundary copy in the disconnected branch so consumer mutation cannot corrupt the cached record", () => {
+  test("health() returns the frozen record itself in the disconnected branch so consumer mutation cannot corrupt the cached record", () => {
 
     const client = new EspHomeClient({ host: "test.local", logger: quietLogger(), transportFactory: (): MockTransport => new MockTransport() });
     const health = client.health();
 
     assert.equal(health.state, "disconnected");
+    assert.equal(Object.isFrozen(health), true, "the disconnected health record must be frozen");
+    assert.equal(client.health(), health, "health() must return the same record until a transition replaces it");
 
-    // Mutate two base fields of the returned snapshot. `encrypted` is the literal `false` on a down record so it cannot be flipped through the type; we mutate
-    // `lastInboundActivityAt` instead - a base `number` field present on both variants - so the boundary-copy guarantee is still exercised across two fields.
-    health.consecutiveStalls = 999;
-    health.lastInboundActivityAt = 12345;
+    // The record type is read-only, so each write goes through a writable view: the guarantee under test is that a plain JavaScript caller's write to the frozen record
+    // throws rather than corrupting it. `encrypted` is the literal `false` on a down record, so we write base `number` fields present on both variants.
+    assert.throws((): void => { (health as { consecutiveStalls: number }).consecutiveStalls = 999; }, TypeError);
+    assert.throws((): void => { (health as { lastInboundActivityAt: number }).lastInboundActivityAt = 12345; }, TypeError);
 
-    assert.equal(client.health().consecutiveStalls, 0, "mutating a returned disconnected health snapshot must not affect the cached record");
-    assert.equal(client.health().lastInboundActivityAt, 0, "the disconnected health branch must return a boundary copy, not the cached reference");
+    assert.equal(client.health().consecutiveStalls, 0, "a rejected write must leave the cached record unchanged");
+    assert.equal(client.health().lastInboundActivityAt, 0, "a rejected write must leave the cached record unchanged");
   });
 
   test("snapshot is empty before any connect", () => {
@@ -2934,6 +2947,32 @@ describe("EspHomeClient lifecycle stream + health", () => {
     await delay(2);
     assert.ok(states.includes("disconnected"));
   });
+
+  test("every healthChange payload is frozen and is the record health() returns while the listener runs", async () => {
+
+    const transport = new MockTransport();
+    const client = new EspHomeClient({ host: "test.local", logger: quietLogger(), reconnect: false, transportFactory: (): MockTransport => transport });
+    const seen: { current: ConnectionHealth; payload: ConnectionHealth }[] = [];
+
+    client.onHealthChange((payload): void => { seen.push({ current: client.health(), payload }); });
+
+    await driveConnect(transport, client, { signal: AbortSignal.timeout(2000) });
+
+    // Inbound traffic stamps the activity time on every frame without announcing it, so the connected session emits nothing until the disconnect.
+    transport.pushInbound(MessageType.PING_REQUEST, PING_REQUEST_PAYLOAD);
+    await delay(5);
+    client.disconnect();
+
+    assert.deepEqual(seen.map((entry): string => entry.payload.state), [ "connected", "disconnected" ], "each transition must emit exactly once");
+
+    for(const { current, payload } of seen) {
+
+      assert.equal(Object.isFrozen(payload), true, "each healthChange payload must be frozen");
+      assert.equal(payload, current, "each healthChange payload must be the record health() returns while the listener runs");
+    }
+
+    assert.equal(client.health(), seen.at(-1)?.payload, "health() must keep returning the last announced record");
+  });
 });
 
 // 9. Camera per-id sub-API.
@@ -2983,6 +3022,95 @@ describe("EspHomeClient.camera per-id sub-API caching", () => {
     assert.equal(events.length, 1);
     assert.equal(events[0]?.image.length, 4);
     assert.deepEqual(events[0]?.image, Buffer.from([ 0x01, 0x02, 0x03, 0x04 ]));
+
+    client.disconnect();
+  });
+
+  test("a finished camera image is cached as the camera's latest state before it reaches the telemetry and camera channels", async () => {
+
+    const transport = new MockTransport();
+    const client = new EspHomeClient({ host: "test.local", logger: quietLogger(), reconnect: false, transportFactory: (): MockTransport => transport });
+    const camId = entityId("camera", "front_cam");
+
+    await driveConnect(transport, client, {
+
+      entities: [{ key: 0xCA000003, name: "Front Cam", objectId: "front_cam", type: "camera" }],
+      signal: AbortSignal.timeout(2000)
+    });
+
+    const seen: { cached: unknown; channel: string; event: unknown }[] = [];
+
+    client.on("telemetry", (event): void => { seen.push({ cached: client.latest(camId), channel: "telemetry", event }); });
+    client.on("camera", (event): void => { seen.push({ cached: client.latest(camId), channel: "camera", event }); });
+
+    transport.pushInbound(MessageType.CAMERA_IMAGE_RESPONSE, cameraImageResponse(0xCA000003, Buffer.from([ 0x01, 0x02 ]), false));
+    transport.pushInbound(MessageType.CAMERA_IMAGE_RESPONSE, cameraImageResponse(0xCA000003, Buffer.from([0x03]), true));
+    await delay(10);
+
+    assert.deepEqual(seen.map((entry): string => entry.channel), [ "telemetry", "camera" ], "one finished image must reach each channel exactly once, telemetry first");
+
+    const event = seen[0]?.event;
+
+    assert.equal(seen[1]?.event, event, "both channels must carry the same event");
+    assert.deepEqual((event as { image: Buffer }).image, Buffer.from([ 0x01, 0x02, 0x03 ]));
+    assert.equal(seen[0]?.cached, event, "the cache must hold the image before the telemetry listener runs");
+    assert.equal(seen[1]?.cached, event, "the cache must hold the image before the camera listener runs");
+    assert.equal(client.latest(camId), event, "latest(cameraId) must return the finished image");
+    assert.equal(client.snapshot().get(camId), event, "the snapshot must carry the camera's entry");
+
+    client.disconnect();
+  });
+
+  test("an open camera stream survives a reconnect: the stream request goes out again on the new transport, and the last view's close stops it", async () => {
+
+    const firstTransport = new MockTransport();
+    const secondTransport = new MockTransport();
+
+    // The host constructs one transport per connect (transport is single-shot), so the factory hands out the first transport on connect #1 and the second on reconnect.
+    const transportQueue = [ firstTransport, secondTransport ];
+    const client = new EspHomeClient({
+
+      host: "test.local",
+      logger: quietLogger(),
+      reconnect: false,
+      transportFactory: (): MockTransport => transportQueue.shift() ?? new MockTransport()
+    });
+    const entities: NonNullable<HandshakeScript["entities"]> = [{ key: 0xCA000004, name: "Front Cam", objectId: "front_cam", type: "camera" }];
+
+    // Count the CameraImageRequest frames on one transport that carry single=false and the given stream flag. Bytes per api.proto's CameraImageRequest: field 1 (single)
+    // VARINT 0 -> 0x08 0x00; field 2 (stream) VARINT -> 0x10 and the flag.
+    const streamRequests = (transport: MockTransport, stream: number): number => {
+
+      const payload = Buffer.from([ 0x08, 0x00, 0x10, stream ]);
+
+      return transport.outboundFrames.filter((frame): boolean => (frame.type === MessageType.CAMERA_IMAGE_REQUEST) && frame.payload.equals(payload)).length;
+    };
+
+    await driveConnect(firstTransport, client, { entities, signal: AbortSignal.timeout(2000) });
+
+    const iterator = client.camera(entityId("camera", "front_cam")).stream()[Symbol.asyncIterator]();
+    const nextFrame = iterator.next();
+
+    assert.equal(streamRequests(firstTransport, 1), 1, "opening the view must request the stream on the first transport");
+
+    // Tear down the first connection and reconnect onto the second transport. The parked view stays open across the cycle because the bus is never disposed.
+    client.disconnect();
+    await delay(5);
+    await driveConnect(secondTransport, client, { entities, signal: AbortSignal.timeout(2000) });
+
+    assert.equal(streamRequests(firstTransport, 0), 0, "the disconnect must not send a stop for a view that is still open");
+    assert.equal(streamRequests(secondTransport, 1), 1, "the reconnect must request the stream again for the view still open");
+
+    // The view keeps yielding on the new connection.
+    secondTransport.pushInbound(MessageType.CAMERA_IMAGE_RESPONSE, cameraImageResponse(0xCA000004, Buffer.from([0x42]), true));
+
+    const frame = await nextFrame;
+
+    assert.deepEqual(frame.value, Buffer.from([0x42]), "the view must yield the image the new connection delivers");
+
+    await iterator.return?.();
+
+    assert.equal(streamRequests(secondTransport, 0), 1, "closing the last view must stop the stream on the live transport");
 
     client.disconnect();
   });
@@ -3054,18 +3182,36 @@ describe("EspHomeClient.deviceInfo", () => {
     assert.equal(client.deviceInfo(), null);
   });
 
-  test("returns a deep copy after discovery so callers cannot mutate internal state", async () => {
+  test("returns the frozen record after discovery, the same object the single deviceInfo event carried before entities", async () => {
 
     const transport = new MockTransport();
     const client = new EspHomeClient({ host: "test.local", logger: quietLogger(), reconnect: false, transportFactory: (): MockTransport => transport });
+    const emitted: DeviceInfo[] = [];
+    const order: string[] = [];
 
-    await driveConnect(transport, client, { signal: AbortSignal.timeout(2000) });
+    client.on("deviceInfo", (info): void => { emitted.push(info); order.push("deviceInfo"); });
+    client.on("entities", (): void => { order.push("entities"); });
 
-    const a = client.deviceInfo();
-    const b = client.deviceInfo();
+    await driveConnect(transport, client, {
 
-    assert.notEqual(a, b, "deviceInfo() must return a fresh object on each call");
-    assert.deepEqual(a, b);
+      deviceInfo: deviceInfoResponse({ serialProxies: [{ name: "uart_0", portType: SerialProxyPortType.TTL }] }),
+      signal: AbortSignal.timeout(2000)
+    });
+
+    const info = client.deviceInfo();
+
+    assert.deepEqual(order, [ "deviceInfo", "entities" ], "discovery must emit deviceInfo exactly once, before entities");
+    assert.equal(info, emitted[0], "deviceInfo() must return the record the event carried");
+    assert.equal(client.deviceInfo(), info, "repeated reads must return the same record");
+    assert.equal(Object.isFrozen(info), true, "the record must be frozen");
+    assert.equal(Object.isFrozen(info?.serialProxies), true, "the nested serial-proxy list must be frozen");
+    assert.equal(Object.isFrozen(info?.serialProxies?.[0]), true, "each serial-proxy entry must be frozen");
+
+    // The record type is read-only, so the write goes through a writable view: the guarantee under test is that a plain JavaScript caller's write to the frozen record
+    // throws rather than corrupting it.
+    assert.throws((): void => { (info as { name?: string }).name = "mutated"; }, TypeError);
+    assert.equal(client.deviceInfo()?.name, "test-device", "a rejected write must leave the record unchanged");
+
     client.disconnect();
   });
 
@@ -3091,6 +3237,8 @@ describe("EspHomeClient.deviceInfo", () => {
 
       const refreshedInfo = client.deviceInfo();
 
+      assert.equal(refreshedInfo, refreshes[0], "the refreshed record must be the object the event carried");
+      assert.equal(Object.isFrozen(refreshedInfo), true, "the refreshed record must be frozen");
       assert.equal(refreshedInfo?.friendlyName, "Refreshed Name");
       assert.equal(refreshedInfo?.voiceAssistantFeatureFlags, 5);
 
@@ -5490,6 +5638,25 @@ describe("EspHomeClient telemetry decode edge cases", () => {
 
     // Unknown entity -> emits with synthesized "unknown(<key>)" name, but doesn't crash.
     assert.ok(switchEvents >= 1);
+    client.disconnect();
+  });
+
+  test("an unclaimed infrared-or-radio-frequency receive event decodes as radio_frequency, the later schema in table order", async () => {
+
+    const transport = new MockTransport();
+    const client = new EspHomeClient({ host: "test.local", logger: quietLogger(), reconnect: false, transportFactory: (): MockTransport => transport });
+
+    await driveConnect(transport, client, { signal: AbortSignal.timeout(2000) });
+
+    const types: string[] = [];
+
+    client.on("telemetry", (event): void => { types.push(event.type); });
+
+    // No entity is registered under this key, so the shared wire message type is the only signal the lookup has.
+    pushInfraredRFReceiveEvent(transport, { key: 0x7777, timings: [ 100, -200 ] });
+    await delay(10);
+
+    assert.deepEqual(types, ["radio_frequency"], "an unclaimed receive event must decode under the last schema in table order that declares the message type");
     client.disconnect();
   });
 

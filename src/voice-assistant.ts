@@ -20,13 +20,14 @@
  * @module voice-assistant
  */
 import type {
-  ClientEventsMap, VoiceAssistantAudioData, VoiceAssistantAudioSettings, VoiceAssistantConfiguration, VoiceAssistantEvent, VoiceAssistantEventData,
-  VoiceAssistantRequest, VoiceAssistantSubscribeFlag, VoiceAssistantTimerEventData, VoiceAssistantWakeWord
+  ClientEventsMap, VoiceAssistantAudioData, VoiceAssistantAudioSettings, VoiceAssistantConfiguration, VoiceAssistantEventData, VoiceAssistantRequest,
+  VoiceAssistantTimerEventData, VoiceAssistantWakeWord
 } from "./esphome-client.ts";
 import type { EspHomeLogging, Nullable } from "./types.ts";
 import type { EventBus, StreamOptions } from "./event-bus.ts";
 import type { FieldValue, ProtoField } from "./protocol/index.ts";
 import { MessageType, WireType, encodeProtoFields, extractNumberField, extractStringField, extractTelemetryValue } from "./protocol/index.ts";
+import type { VoiceAssistantEvent, VoiceAssistantSubscribeFlag } from "./api-constants.ts";
 import { Buffer } from "node:buffer";
 import { ReadableStream } from "node:stream/web";
 import type { SubscriptionLifecycle } from "./reissuable-subscription.ts";

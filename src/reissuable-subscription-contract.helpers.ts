@@ -1,15 +1,13 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
- * reissuable-subscription-contract.helpers.ts: Shared contract-test harness for streaming sub-APIs migrated onto the ReissuableSubscription primitive.
+ * reissuable-subscription-contract.helpers.ts: Shared contract-test harness for streaming sub-APIs built on the ReissuableSubscription primitive.
  */
 
 /**
- * Shared, parameterized contract harness every streaming sub-API that migrates onto {@link ReissuableSubscription} drives. Each migrated
- * sub-API (Z-Wave global-presence, Serial per-instance, and Bluetooth's advertisement / connections-free / notify dimensions) exposes the same canonical
- * subscribe / reconnect / dispose contract; rather than
- * re-asserting that contract by hand in every test file, each file calls {@link runReissuableSubscriptionContract} with its own specifics (how to construct the
- * sub-API over a recording host, how to open a subscription iterator, and how to classify a captured frame as SUBSCRIBE / UNSUBSCRIBE for a given key). The harness
- * registers a `node:test` `describe` block that asserts the guarantees the primitive makes.
+ * Shared, parameterized contract harness for the subscription dimensions built on {@link ReissuableSubscription}. A sub-API's test file calls
+ * {@link runReissuableSubscriptionContract} once per dimension with that dimension's specifics (how to construct the sub-API over a recording host, how to open a
+ * subscription iterator, and how to classify a captured frame as SUBSCRIBE / UNSUBSCRIBE for a given key), rather than re-asserting the canonical subscribe / reconnect /
+ * dispose contract by hand in every test file. The harness registers a `node:test` `describe` block that asserts the guarantees the primitive makes.
  *
  * @remarks This is a non-shipping test helper. The `*.helpers.ts` suffix is excluded from `dist/` by `tsconfig.build.json`; it is typechecked by `tsconfig.json`
  * and is NOT discovered by the test runner standalone (the runner globs `*.test.ts`). It runs only when a `*.test.ts` file imports and invokes it, so the registered
@@ -20,10 +18,10 @@
  *   1. **First-subscriber SUBSCRIBE, concurrent share, last-release UNSUBSCRIBE** - the first subscriber on a key emits SUBSCRIBE; a second concurrent subscriber on the
  *      same key does not re-emit; the last release emits UNSUBSCRIBE.
  *   2. **The must-fix regression** - a subscriber that survives a `clearConnectionState()` + `reissueOnReconnect()` cycle (the host's real connect order) WITHOUT the
- *      iterator being touched gets SUBSCRIBE re-issued. This FAILS against the pre-migration hand-rolled refcount, where `reset()` zeroed the count so the reissue saw
- *      nothing to replay.
+ *      iterator being touched gets SUBSCRIBE re-issued. This FAILS against a hand-rolled refcount whose `reset()` zeroes the count, so the reissue sees nothing to
+ *      replay.
  *   3. **Dispose-after-reconnect** - after a full `clearConnectionState()` + `reissueOnReconnect()` cycle, the surviving subscriber's release still emits the final
- *      UNSUBSCRIBE. The old "count still > 0" guard swallowed this; the primitive's symbol-identity ledger gets it right.
+ *      UNSUBSCRIBE. A "count still > 0" guard would swallow this; the primitive's symbol-identity ledger gets it right.
  *   4. **clearConnectionState alone is wire-silent on dispose** - `clearConnectionState()` WITHOUT a following reissue leaves the wire cache empty, so a subsequent
  *      last-release does NOT emit a stray UNSUBSCRIBE for a connection the new transport never subscribed.
  *
@@ -73,7 +71,7 @@ export interface ContractSubscription {
 }
 
 /**
- * The per-sub-API specifics {@link runReissuableSubscriptionContract} needs to drive the canonical contract against a concrete migrated sub-API. The harness owns the
+ * The per-sub-API specifics {@link runReissuableSubscriptionContract} needs to drive the canonical contract against a concrete sub-API. The harness owns the
  * lifecycle ordering and the assertions; the consumer supplies only the wiring.
  *
  * @typeParam A - The sub-API class under test (e.g. `ZWaveProxyApi`, `SerialProxyApi`).
@@ -98,8 +96,8 @@ export interface ReissuableSubscriptionContractOptions<A> {
   emitsUnsubscribe?: boolean;
 
   /**
-   * The label that names this sub-API in the registered `describe` block (e.g. `"ZWaveProxyApi.frames"`). Keeps the harness output legible when every migrated
-   * sub-API drives it.
+   * The label that names this sub-API in the registered `describe` block (e.g. `"ZWaveProxyApi.frames"`). Keeps the harness output legible when several sub-APIs
+   * drive it.
    */
   label: string;
 
@@ -133,9 +131,9 @@ export interface ReissuableSubscriptionContractOptions<A> {
 }
 
 /**
- * Register the canonical reissuable-subscription contract as a `node:test` `describe` block for one migrated sub-API. Called from each sub-API's `*.test.ts` file with
+ * Register the canonical reissuable-subscription contract as a `node:test` `describe` block for one sub-API. Called from each sub-API's `*.test.ts` file with
  * that sub-API's specifics; the harness owns the lifecycle ordering (the host's real `clearConnectionState()` then `reissueOnReconnect()` connect order) and the
- * assertions so every migrated sub-API proves the same rules identically.
+ * assertions so every participating sub-API proves the same rules identically.
  *
  * @typeParam A - The sub-API class under test.
  * @param options - The per-sub-API wiring. See {@link ReissuableSubscriptionContractOptions}.
@@ -202,8 +200,8 @@ export function runReissuableSubscriptionContract<A>(options: ReissuableSubscrip
         "a wire-silent reissue-only ledger emits no SUBSCRIBE before the reconnect re-arm" : "the initial subscribe must emit one SUBSCRIBE");
 
       // Drive the host's real connect-top order: clear connection-scoped state, then reissue after the new transport is up. The subscriber ledger must survive so the
-      // reissue replays SUBSCRIBE for the still-live consumer. This is the must-fix regression: the pre-migration refcount was zeroed by reset(), so the reissue saw
-      // nothing to replay and the survivor went permanently deaf.
+      // reissue replays SUBSCRIBE for the still-live consumer. This is the must-fix regression: a refcount that reset() zeroes leaves the reissue nothing to replay,
+      // and the survivor goes permanently deaf.
       callClearConnectionState(api);
       callReissueOnReconnect(api);
 
@@ -223,7 +221,7 @@ export function runReissuableSubscriptionContract<A>(options: ReissuableSubscrip
 
       const unsubscribesBeforeRelease = countUnsubscribes(sent);
 
-      // The hazard the old "count still > 0" guard swallowed: after a reconnect cycle, the survivor's last-release must still emit UNSUBSCRIBE for the symmetric shape
+      // The hazard a "count still > 0" guard would swallow: after a reconnect cycle, the survivor's last-release must still emit UNSUBSCRIBE for the symmetric shape
       // because the reissue re-armed the wire cache. The symbol-identity ledger makes this correct. A SUBSCRIBE-only dimension emits no UNSUBSCRIBE here either.
       await survivor.release();
 
@@ -251,7 +249,7 @@ export function runReissuableSubscriptionContract<A>(options: ReissuableSubscrip
 }
 
 /**
- * Narrow structural shape every migrated sub-API exposes for the reconnect lifecycle. Both methods are nullary and void; the harness calls them in the host's real
+ * Narrow structural shape every participating sub-API exposes for the reconnect lifecycle. Both methods are nullary and void; the harness calls them in the host's real
  * connect order. We type the sub-API as `unknown` at the call boundary and bridge through this shape so the harness does not depend on any one sub-API's concrete class.
  */
 interface ReconnectLifecycle {
