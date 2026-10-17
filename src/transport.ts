@@ -282,9 +282,23 @@ export class Transport implements TransportLike {
   private socket: Nullable<Socket> = null;
 
   /**
-   * Accumulator for inbound bytes. Drained by {@link Transport.drainInbound} every time the socket emits data.
+   * Inbound bytes not yet parsed, held as the chunks the socket delivered, in arrival order. Together with {@link Transport.recvBytes} this is the receive accumulator,
+   * mirroring `CameraApi`'s reassembly: a chunk is appended by reference, and {@link Transport.drainInbound} concatenates the list once when a frame can be complete,
+   * so a frame split across many chunks is copied once rather than once per chunk. The list never holds an empty chunk, and a drain leaves at most the one unparsed
+   * remainder in it.
    */
-  private recvBuffer: Buffer = Buffer.alloc(0);
+  private recvChunks: Buffer[] = [];
+
+  /**
+   * Running byte total of {@link Transport.recvChunks}, maintained in lockstep so the receive-buffer bound and the frame-coverage check cost O(1) per chunk.
+   */
+  private recvBytes = 0;
+
+  /**
+   * Total wire length of the frame at the head of the accumulator once its header has been read and validated, or zero while that length is unknown. Parsing waits
+   * while the accumulator holds fewer bytes than this, because no frame can complete before then. Cleared when the frame is consumed and when the framing changes.
+   */
+  private recvFrameBytes = 0;
 
   /**
    * Current phase. Starts at `plaintext`. Transitions one-way to `noise-handshake` then `noise-data` for the lifetime of the transport.
@@ -451,6 +465,9 @@ export class Transport implements TransportLike {
     if(this.phase === Phase.PLAINTEXT) {
 
       this.phase = Phase.NOISE_HANDSHAKE;
+
+      // A frame length read under plaintext framing means nothing under noise framing, so the next chunk re-reads the head of the accumulator under the new phase.
+      this.recvFrameBytes = 0;
     }
   }
 
@@ -490,9 +507,11 @@ export class Transport implements TransportLike {
       throw this.terminationError;
     }
 
-    if(this.recvBuffer.length > 0) {
+    const head = this.recvChunks[0];
 
-      const byte = this.recvBuffer.readUInt8(0);
+    if(head !== undefined) {
+
+      const byte = head.readUInt8(0);
 
       return this.assertIndicator(byte);
     }
@@ -743,9 +762,9 @@ export class Transport implements TransportLike {
    */
   private handleData(chunk: Buffer): void {
 
-    // Bound-check the projected accumulator size before allocating, so a hostile burst is rejected without first growing recvBuffer past the limit by one chunk. The
-    // check runs against the sum of the current buffer length and the incoming chunk length, rejecting the chunk before it is ever concatenated.
-    if((this.recvBuffer.length + chunk.length) > this.options.maxRecvBufferBytes) {
+    // Bound-check the projected accumulator size before accepting the chunk, so a hostile burst is rejected without first growing the accumulator past the limit by one
+    // chunk. The check runs against the running byte count plus the incoming chunk length, rejecting the chunk before it is ever appended.
+    if((this.recvBytes + chunk.length) > this.options.maxRecvBufferBytes) {
 
       this.options.metrics?.increment("frames.dropped", 1, { reason: "buffer_overflow" });
 
@@ -755,15 +774,21 @@ export class Transport implements TransportLike {
       return;
     }
 
-    // Empty-accumulator fast path: in steady state drainInbound consumes every complete frame and leaves recvBuffer fully drained, so the common case would concatenate
-    // an empty buffer with the chunk - a full byte-copy producing a buffer identical to chunk. Adopt the chunk directly instead. Node hands a fresh Buffer per data event
-    // and recvBuffer is only ever read / subarray'd (delivered payloads are copied out via Buffer.from), so taking ownership of the chunk is safe.
-    this.recvBuffer = (this.recvBuffer.length === 0) ? chunk : Buffer.concat([ this.recvBuffer, chunk ]);
+    // The chunk joins the accumulator by reference, with no copy. Node hands a fresh Buffer per data event and the accumulator is only ever read and subarrayed
+    // (delivered payloads are copied out through Buffer.from), so holding the socket's chunk is safe. An empty chunk is never appended, which keeps the first chunk's
+    // first byte the next unparsed byte of the stream.
+    if(chunk.length > 0) {
 
-    // Settle the firstByte awaiter on the very first byte we observe; the byte stays in recvBuffer for normal parsing.
-    if(this.firstByteAwaiter && (this.recvBuffer.length > 0)) {
+      this.recvChunks.push(chunk);
+      this.recvBytes += chunk.length;
+    }
 
-      const byte = this.recvBuffer.readUInt8(0);
+    // Settle the firstByte awaiter on the very first byte we observe; the byte stays in the accumulator for normal parsing.
+    const head = this.recvChunks[0];
+
+    if(this.firstByteAwaiter && (head !== undefined)) {
+
+      const byte = head.readUInt8(0);
       const awaiter = this.firstByteAwaiter;
 
       this.firstByteAwaiter = null;
@@ -775,9 +800,25 @@ export class Transport implements TransportLike {
   }
 
   /**
-   * Parse frames from `recvBuffer` per the current phase, routing each to the matching queue or awaiter. Loops until no further progress is possible.
+   * Parse frames from the receive accumulator per the current phase, routing each to the matching queue or awaiter. Loops until no further progress is possible.
    */
   private drainInbound(): void {
+
+    // While the head frame's known length is not yet covered, the chunks wait in the list uncopied. Deferring changes no outcome: the header behind a known length has
+    // already passed every check a parse would repeat, and the framing is unchanged since it was read, so until the frame is covered a parse could only report that it
+    // needs more bytes. An unknown length is zero and never defers.
+    if(this.recvBytes < this.recvFrameBytes) {
+
+      return;
+    }
+
+    // Join the accumulator into one buffer here, once, rather than on every chunk. Past the check above, either the head frame can be complete or its length is still
+    // unknown. Apart from the reset at a framing change, an unknown length means the accumulator held at most a partial header before the latest chunk, so that join
+    // copies only those few bytes along with the chunk. The frame parsers below read the single joined chunk.
+    if(this.recvChunks.length > 1) {
+
+      this.recvChunks = [Buffer.concat(this.recvChunks, this.recvBytes)];
+    }
 
     let progressed = true;
 
@@ -808,12 +849,14 @@ export class Transport implements TransportLike {
    */
   private tryDrainPlaintextFrame(): boolean {
 
-    if(this.recvBuffer.length < 3) {
+    const buffer = this.recvChunks[0];
+
+    if((buffer === undefined) || (buffer.length < 3)) {
 
       return false;
     }
 
-    const indicator = this.recvBuffer.readUInt8(0);
+    const indicator = buffer.readUInt8(0);
 
     if(indicator === ProtocolByte.NOISE) {
 
@@ -838,8 +881,8 @@ export class Transport implements TransportLike {
 
     try {
 
-      [ length, lenBytes ] = readVarint(this.recvBuffer, 1);
-      [ type, typeBytes ] = readVarint(this.recvBuffer, 1 + lenBytes);
+      [ length, lenBytes ] = readVarint(buffer, 1);
+      [ type, typeBytes ] = readVarint(buffer, 1 + lenBytes);
 
     } catch(err) {
 
@@ -865,15 +908,18 @@ export class Transport implements TransportLike {
     }
 
     const headerSize = 1 + lenBytes + typeBytes;
+    const frameBytes = headerSize + length;
 
-    if(this.recvBuffer.length < (headerSize + length)) {
+    if(buffer.length < frameBytes) {
+
+      this.recvFrameBytes = frameBytes;
 
       return false;
     }
 
-    const payload = this.recvBuffer.subarray(headerSize, headerSize + length);
+    const payload = buffer.subarray(headerSize, frameBytes);
 
-    this.recvBuffer = this.recvBuffer.subarray(headerSize + length);
+    this.consumeFrame(buffer, frameBytes);
 
     this.options.metrics?.increment("frames.received", 1, { encrypted: "false" });
     this.deliverMessage({ payload: Buffer.from(payload), type });
@@ -886,12 +932,14 @@ export class Transport implements TransportLike {
    */
   private tryDrainNoiseFrame(): boolean {
 
-    if(this.recvBuffer.length < 3) {
+    const buffer = this.recvChunks[0];
+
+    if((buffer === undefined) || (buffer.length < 3)) {
 
       return false;
     }
 
-    const indicator = this.recvBuffer.readUInt8(0);
+    const indicator = buffer.readUInt8(0);
 
     if(indicator === ProtocolByte.PLAINTEXT) {
 
@@ -917,7 +965,7 @@ export class Transport implements TransportLike {
       return false;
     }
 
-    const frameSize = this.recvBuffer.readUInt16BE(1);
+    const frameSize = buffer.readUInt16BE(1);
 
     if(frameSize > this.options.maxFrameBytes) {
 
@@ -930,14 +978,16 @@ export class Transport implements TransportLike {
 
     const frameEnd = 3 + frameSize;
 
-    if(this.recvBuffer.length < frameEnd) {
+    if(buffer.length < frameEnd) {
+
+      this.recvFrameBytes = frameEnd;
 
       return false;
     }
 
-    const frame = Buffer.from(this.recvBuffer.subarray(3, frameEnd));
+    const frame = Buffer.from(buffer.subarray(3, frameEnd));
 
-    this.recvBuffer = this.recvBuffer.subarray(frameEnd);
+    this.consumeFrame(buffer, frameEnd);
 
     if(this.phase === Phase.NOISE_HANDSHAKE) {
 
@@ -1006,6 +1056,25 @@ export class Transport implements TransportLike {
     this.deliverMessage({ payload, type });
 
     return true;
+  }
+
+  /**
+   * Remove a parsed frame from the front of the accumulator and clear the recorded frame length. A drain has already joined the accumulator into its one chunk, so the
+   * remainder is a view into that chunk and costs no copy, and a fully parsed chunk leaves the list empty rather than holding an empty buffer.
+   */
+  private consumeFrame(buffer: Buffer, frameBytes: number): void {
+
+    this.recvBytes -= frameBytes;
+    this.recvFrameBytes = 0;
+
+    if(this.recvBytes === 0) {
+
+      this.recvChunks.length = 0;
+
+      return;
+    }
+
+    this.recvChunks[0] = buffer.subarray(frameBytes);
   }
 
   /**

@@ -1,11 +1,11 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
- * extensions.test.ts: Unit tests for the schema-extension helpers (aliasOf, extending), the per-instance schemas-table builders, and the
- * per-table lookup helpers (findSchemaByStateMessageTypeIn, findSchemaByListEntitiesMessageTypeIn, getSchemaIn).
+ * extensions.test.ts: Unit tests for the schema-extension helpers (aliasOf, extending), the per-instance schemas-table builders, the message-type schema maps
+ * (buildSchemaByStateMessageType, buildSchemaByListEntitiesMessageType), and the per-table type lookup (getSchemaIn).
  */
 import {
-  aliasOf, buildListEntitiesMessageTypes, buildSchemasTable, buildStateMessageTypes, extending, findSchemaByListEntitiesMessageTypeIn,
-  findSchemaByStateMessageTypeIn, getSchemaIn
+  aliasOf, buildListEntitiesMessageTypes, buildSchemaByListEntitiesMessageType, buildSchemaByStateMessageType, buildSchemasTable, buildStateMessageTypes, extending,
+  getSchemaIn
 } from "./extensions.ts";
 import { describe, test } from "node:test";
 import { ConfigurationError } from "../errors.ts";
@@ -228,7 +228,7 @@ describe("buildStateMessageTypes / buildListEntitiesMessageTypes", () => {
   });
 });
 
-describe("findSchemaByStateMessageTypeIn / findSchemaByListEntitiesMessageTypeIn / getSchemaIn", () => {
+describe("getSchemaIn", () => {
 
   test("getSchemaIn resolves a built-in entity type from the merged table", () => {
 
@@ -258,33 +258,60 @@ describe("findSchemaByStateMessageTypeIn / findSchemaByListEntitiesMessageTypeIn
 
     assert.equal(getSchemaIn(table, "not_an_entity_type"), undefined);
   });
+});
 
-  test("findSchemaByStateMessageTypeIn prefers extras over built-ins on wire-message-type collision", () => {
+describe("buildSchemaByStateMessageType / buildSchemaByListEntitiesMessageType", () => {
 
-    const aliased = { ...aliasOf("cover"), type: "door_cover" };
-    const extras = { "door_cover": aliased };
-    const table = buildSchemasTable(ENTITY_SCHEMAS, extras);
-
-    const resolved = findSchemaByStateMessageTypeIn(table, ENTITY_SCHEMAS.cover.state.messageType);
-
-    assert.equal(resolved?.type, "door_cover", "extras schema must shadow built-in for state-message routing");
-  });
-
-  test("findSchemaByListEntitiesMessageTypeIn prefers extras over built-ins on wire-message-type collision", () => {
+  test("buildSchemaByStateMessageType prefers extras over built-ins on wire-message-type collision", () => {
 
     const aliased = { ...aliasOf("cover"), type: "door_cover" };
     const extras = { "door_cover": aliased };
-    const table = buildSchemasTable(ENTITY_SCHEMAS, extras);
+    const map = buildSchemaByStateMessageType(buildSchemasTable(ENTITY_SCHEMAS, extras));
 
-    const resolved = findSchemaByListEntitiesMessageTypeIn(table, ENTITY_SCHEMAS.cover.listEntities.messageType);
-
-    assert.equal(resolved?.type, "door_cover", "extras schema must shadow built-in for list-entities routing");
+    assert.equal(map.get(ENTITY_SCHEMAS.cover.state.messageType)?.type, "door_cover", "extras schema must shadow built-in for state-message routing");
   });
 
-  test("findSchemaByStateMessageTypeIn returns undefined for an unknown wire-message-type", () => {
+  test("buildSchemaByListEntitiesMessageType prefers extras over built-ins on wire-message-type collision", () => {
+
+    const aliased = { ...aliasOf("cover"), type: "door_cover" };
+    const extras = { "door_cover": aliased };
+    const map = buildSchemaByListEntitiesMessageType(buildSchemasTable(ENTITY_SCHEMAS, extras));
+
+    assert.equal(map.get(ENTITY_SCHEMAS.cover.listEntities.messageType)?.type, "door_cover", "extras schema must shadow built-in for list-entities routing");
+  });
+
+  test("the shared infrared-or-radio-frequency receive event resolves to radio_frequency, the later of the two built-ins in table order", () => {
+
+    const map = buildSchemaByStateMessageType(buildSchemasTable(ENTITY_SCHEMAS, undefined));
+
+    assert.equal(map.get(MessageType.INFRARED_RF_RECEIVE_EVENT)?.type, "radio_frequency");
+  });
+
+  test("every message type resolves to the last schema in table order that declares it, with and without extras", () => {
+
+    // The oracle is the rule itself, evaluated by a scan from the end of the table: the map must agree with it on every declared state and list-entities type.
+    for(const extras of [ undefined, { "door_cover": { ...aliasOf("cover"), type: "door_cover" } } ]) {
+
+      const table = buildSchemasTable(ENTITY_SCHEMAS, extras);
+      const schemas = Object.values(table);
+      const byState = buildSchemaByStateMessageType(table);
+      const byListEntities = buildSchemaByListEntitiesMessageType(table);
+
+      for(const schema of schemas) {
+
+        assert.equal(byState.get(schema.state.messageType), schemas.findLast((candidate) => candidate.state.messageType === schema.state.messageType));
+        assert.equal(byListEntities.get(schema.listEntities.messageType),
+          schemas.findLast((candidate) => candidate.listEntities.messageType === schema.listEntities.messageType));
+      }
+    }
+  });
+
+  test("an undeclared wire-message-type resolves to nothing", () => {
 
     const table = buildSchemasTable(ENTITY_SCHEMAS, undefined);
 
-    assert.equal(findSchemaByStateMessageTypeIn(table, 999999), undefined);
+    assert.equal(buildSchemaByStateMessageType(table).get(999999), undefined);
+    assert.equal(buildSchemaByListEntitiesMessageType(table).get(999999), undefined);
+    assert.equal(buildSchemaByStateMessageType(table).get(MessageType.BUTTON_COMMAND_REQUEST), undefined, "the button echo routes by the set alone and has no schema");
   });
 });

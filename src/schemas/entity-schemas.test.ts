@@ -7,9 +7,7 @@ import {
   EntityCategory, FanDirection, LockState, MediaPlayerState, NumberMode, SensorStateClass, TemperatureUnit, TextMode, ValveOperation,
   WATER_HEATER_STATE_COMMAND_BITS, WATER_HEATER_STATE_INBOUND_BITS, WaterHeaterMode
 } from "../api-constants.ts";
-import {
-  ENTITY_SCHEMAS, findSchemaByCommandMessageType, findSchemaByListEntitiesMessageType, findSchemaByStateMessageType, getEntitySchema
-} from "./entity-schemas.ts";
+import { ENTITY_SCHEMAS, getEntitySchema } from "./entity-schemas.ts";
 import { describe, test } from "node:test";
 import type { EntitySchema } from "./entity-schemas.ts";
 import { MessageType } from "../protocol/message-types.ts";
@@ -426,88 +424,6 @@ describe("getEntitySchema", () => {
     for(const type of Object.keys(ENTITY_SCHEMAS)) {
 
       assert.notEqual(getEntitySchema(type), undefined, "must resolve " + type);
-    }
-  });
-});
-
-describe("findSchemaByStateMessageType", () => {
-
-  test("returns the matching schema for a known state message type", () => {
-
-    const expected = ENTITY_SCHEMAS.light;
-    const result = findSchemaByStateMessageType(expected.state.messageType);
-
-    assert.equal(result?.type, "light");
-  });
-
-  test("returns undefined for an unknown message type", () => {
-
-    assert.equal(findSchemaByStateMessageType(999999), undefined);
-  });
-});
-
-describe("findSchemaByListEntitiesMessageType", () => {
-
-  test("returns the matching schema for a known list-entities message type", () => {
-
-    const expected = ENTITY_SCHEMAS.switch;
-    const result = findSchemaByListEntitiesMessageType(expected.listEntities.messageType);
-
-    assert.equal(result?.type, "switch");
-  });
-
-  test("returns undefined for an unknown message type", () => {
-
-    assert.equal(findSchemaByListEntitiesMessageType(999999), undefined);
-  });
-});
-
-describe("findSchemaByCommandMessageType", () => {
-
-  test("returns the matching schema for a known command message type", () => {
-
-    const expected = ENTITY_SCHEMAS.light.command;
-
-    if(expected) {
-
-      const result = findSchemaByCommandMessageType(expected.messageType);
-
-      assert.equal(result?.type, "light");
-    }
-  });
-
-  test("returns undefined for an unknown message type", () => {
-
-    assert.equal(findSchemaByCommandMessageType(999999), undefined);
-  });
-
-  test("returns undefined when looking up a state-only entity (camera, sensor, button) by command message type", () => {
-
-    // Camera has no command; looking up its hypothetical command id should miss.
-    // We can't construct a synthetic id; instead, verify that no schema's command messageType is shared with cameras.
-    // The infrared and radio_frequency schemas legitimately share `INFRARED_RF_TRANSMIT_RAW_TIMINGS_REQUEST` (id 136) - both physical layers drive the same RPC. For
-    // shared command messageTypes the first-match-wins lookup returns whichever schema iterates first, and that match still belongs to a real command-bearing entity,
-    // which is the rule this test cares about. So we assert membership rather than exact-type-equality for the shared case.
-    const sharedCommandMessageTypes: ReadonlySet<number> = new Set<number>([MessageType.INFRARED_RF_TRANSMIT_RAW_TIMINGS_REQUEST]);
-
-    for(const schema of Object.values(ENTITY_SCHEMAS) as EntitySchema[]) {
-
-      if(schema.command) {
-
-        const found = findSchemaByCommandMessageType(schema.command.messageType);
-
-        if(sharedCommandMessageTypes.has(schema.command.messageType)) {
-
-          // Any schema declaring this messageType is an acceptable match; verify the returned schema is a real command-bearing one.
-          assert.notEqual(found, undefined, "shared command messageType should still resolve to some command-bearing schema");
-          assert.equal(found?.command !== undefined, true);
-
-          continue;
-        }
-
-        // Every command messageType is paired with a real command-bearing entity.
-        assert.equal(found?.type, schema.type);
-      }
     }
   });
 });

@@ -24,8 +24,8 @@ import type { CommandAndAwaitOptions, CommandHost, NonAwaitableEntityType, Trans
 import type { CommandFor, StateEventFor } from "./schemas/derived.ts";
 import { ConnectionClosedByPeerError, ConnectionError, EspHomeError, PeerClosedDuringNoiseError, PermanentError } from "./errors.ts";
 import {
-  ENTITY_SCHEMAS, buildListEntitiesMessageTypes, buildSchemasTable, buildStateMessageTypes, findSchemaByListEntitiesMessageTypeIn,
-  findSchemaByStateMessageTypeIn, getSchemaIn
+  ENTITY_SCHEMAS, buildListEntitiesMessageTypes, buildSchemaByListEntitiesMessageType, buildSchemaByStateMessageType, buildSchemasTable, buildStateMessageTypes,
+  getSchemaIn
 } from "./schemas/index.ts";
 import type { Entity, EntitySchema, EntityType, ExtendedEntityType, ExtraSchemaSet, SchemaForExtended, SchemasTable, TelemetryEvent } from "./schemas/index.ts";
 import { EventBus, endedAsyncIterable } from "./event-bus.ts";
@@ -867,6 +867,15 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
   // default-handler's late-discovery branch during run phase.
   private readonly listEntitiesMessageTypes: ReadonlySet<number>;
 
+  // Per-instance lookup from inbound state-message wire-message-type to the schema that decodes it. Derived once from {@link schemasTable} via
+  // {@link buildSchemaByStateMessageType}, so each state frame resolves its schema with one map read; the later schema in table order owns a shared type, which is how
+  // an extras alias shadows the built-in it aliases.
+  private readonly schemaByStateMessageType: ReadonlyMap<number, EntitySchema>;
+
+  // Per-instance lookup from inbound list-entities wire-message-type to the schema that decodes it. Derived once from {@link schemasTable} via
+  // {@link buildSchemaByListEntitiesMessageType} under the same later-schema-wins rule, so discovery resolves each entity message with one map read.
+  private readonly schemaByListEntitiesMessageType: ReadonlyMap<number, EntitySchema>;
+
   // Optional metrics sink. Undefined when the consumer hasn't supplied one; every emit site uses optional chaining (`this.metrics?.increment(...)`) so the no-metrics
   // path is a single property lookup.
   private readonly metrics: ClientMetrics | undefined;
@@ -981,11 +990,13 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
 
     // Build the per-instance schemas table once, here at the boundary. The merge step throws ConfigurationError("EXTRA_SCHEMA_OVERRIDES_BUILTIN") when an extras key
     // collides with a built-in entity-type key; surfacing it from the constructor means callers see the failure synchronously rather than at first-command. Each
-    // derived set - state-message types and list-entities message types - is computed once from the table; downstream consumers read the per-instance copies so
-    // extras-registered wire-message-types route through the same code paths as built-ins.
+    // derived lookup - the state and list-entities message-type sets and the schema maps beside them - is computed once from the table; downstream consumers read the
+    // per-instance copies so extras-registered wire-message-types route through the same code paths as built-ins.
     this.schemasTable = buildSchemasTable(ENTITY_SCHEMAS, options.extraSchemas);
     this.stateMessageTypes = buildStateMessageTypes(this.schemasTable);
     this.listEntitiesMessageTypes = buildListEntitiesMessageTypes(this.schemasTable);
+    this.schemaByStateMessageType = buildSchemaByStateMessageType(this.schemasTable);
+    this.schemaByListEntitiesMessageType = buildSchemaByListEntitiesMessageType(this.schemasTable);
 
     // Connect-flow timeouts. Both fall back to compile-time defaults when omitted; both are then composed with the user signal at connect() time via AbortSignal.any.
     this.handshakeTimeoutMs = options.handshakeTimeoutMs ?? DEFAULT_HANDSHAKE_TIMEOUT_MS;
@@ -2456,7 +2467,7 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
       return;
     }
 
-    const schema = findSchemaByListEntitiesMessageTypeIn(this.schemasTable, type);
+    const schema = this.schemaByListEntitiesMessageType.get(type);
 
     if(!schema) {
 
@@ -2530,7 +2541,7 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
     // at id 137) put it elsewhere because their proto layout reserves earlier field numbers for device_id. Consult the schema for the right slot; schemas that share a
     // state.messageType (IR + RF) must declare the same keyFieldNumber because they describe the same wire bytes. Fall back to field 1 when no schema claims this
     // messageType (the BUTTON_COMMAND_REQUEST re-emit path, where the inbound frame is the original command rather than a state response).
-    const probeSchema = findSchemaByStateMessageTypeIn(this.schemasTable, type);
+    const probeSchema = this.schemaByStateMessageType.get(type);
     const keyFieldNumber = probeSchema?.state.keyFieldNumber ?? 1;
     const key = extractEntityKey(fields, keyFieldNumber);
 
@@ -2582,7 +2593,7 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
       // shared across entity types (the canonical case is `InfraredRFReceiveEvent` at id 137, which both `infrared` and `radio_frequency` schemas claim as their state
       // message). When no registered entity claims the key, the wire message type is the only signal we have, so we decode with the last schema in table order that
       // declares it...extras follow the built-ins, so an extras alias wins its shared type, and an unclaimed receive event on id 137 decodes as `radio_frequency`.
-      const schema = knownEntity ? getSchemaIn(this.schemasTable, knownEntity.type) : findSchemaByStateMessageTypeIn(this.schemasTable, type);
+      const schema = knownEntity ? getSchemaIn(this.schemasTable, knownEntity.type) : this.schemaByStateMessageType.get(type);
 
       if(schema) {
 

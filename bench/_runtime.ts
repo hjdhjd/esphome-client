@@ -13,8 +13,9 @@
  *   3. `summarize()`: produces median / min / max / p10 / p90 / stddev from a sample list. Single-run numbers are too noisy on their own, so summarize() reports
  *      the full spread for manual, out-of-band inspection rather than reducing it to a single pass/fail threshold.
  *
- * Every benchmark in bench/ drives a fully-instantiated `EspHomeClient` end-to-end through `MockTransport`. The harness here makes that pattern reusable so each
- * bench file stays small and reads as the workload it measures rather than ceremony.
+ * The client benches drive a fully-instantiated `EspHomeClient` end-to-end through `MockTransport`, and the harness here makes that pattern reusable so each
+ * bench file stays small and reads as the workload it measures rather than ceremony. A bench of the transport's own framing drives a real `Transport` over
+ * `MockSocket` instead and takes only the GC and statistics helpers from here.
  */
 import type { EspHomeClient } from "../src/esphome-client.ts";
 import { MockTransport } from "../src/testing/mock-transport.ts";

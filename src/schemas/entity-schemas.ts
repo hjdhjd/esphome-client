@@ -1725,39 +1725,3 @@ export function getEntitySchema(type: string): EntitySchema | undefined {
 
   return (ENTITY_SCHEMAS as Record<string, EntitySchema>)[type];
 }
-
-/**
- * Look up an entity schema by its state message type ID.
- *
- * @param messageType - The message type ID to look up.
- * @returns The matching entity schema, or undefined if not found.
- * @internal
- */
-export function findSchemaByStateMessageType(messageType: number): EntitySchema | undefined {
-
-  return (Object.values(ENTITY_SCHEMAS) as EntitySchema[]).find((schema) => schema.state.messageType === messageType);
-}
-
-/**
- * Look up an entity schema by its list entities message type ID.
- *
- * @param messageType - The message type ID to look up.
- * @returns The matching entity schema, or undefined if not found.
- * @internal
- */
-export function findSchemaByListEntitiesMessageType(messageType: number): EntitySchema | undefined {
-
-  return (Object.values(ENTITY_SCHEMAS) as EntitySchema[]).find((schema) => schema.listEntities.messageType === messageType);
-}
-
-/**
- * Look up an entity schema by its command message type ID.
- *
- * @param messageType - The message type ID to look up.
- * @returns The matching entity schema, or undefined if not found.
- * @internal
- */
-export function findSchemaByCommandMessageType(messageType: number): EntitySchema | undefined {
-
-  return (Object.values(ENTITY_SCHEMAS) as EntitySchema[]).find((schema) => schema.command?.messageType === messageType);
-}

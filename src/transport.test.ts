@@ -1472,6 +1472,77 @@ describe("Transport - plaintext inbound parsing", () => {
     transport[Symbol.dispose]();
   });
 
+  test("yields identical messages for every chunking of a small frame stream, whichever byte boundaries the chunks split it at", async () => {
+
+    // The stream packs three small frames, the last with a two-byte type varint, so the splits land inside indicators, length and type varints, and payloads alike.
+    // Each chunking of the stream is one choice of which byte boundaries to split at, and every one must yield exactly the messages a single chunk does.
+    const stream = Buffer.concat([ PLAINTEXT_FRAME_PING_REQUEST_EMPTY, PLAINTEXT_FRAME_HELLO_REQUEST_AB_CD,
+      buildPlaintextFrame(MessageType.BLUETOOTH_SET_CONNECTION_PARAMS_RESPONSE, Buffer.from([0x42])) ]);
+    const expected: InboundMessage[] = [
+
+      { payload: Buffer.alloc(0), type: MessageType.PING_REQUEST },
+      { payload: Buffer.from([ 0xAB, 0xCD ]), type: MessageType.HELLO_REQUEST },
+      { payload: Buffer.from([0x42]), type: MessageType.BLUETOOTH_SET_CONNECTION_PARAMS_RESPONSE }
+    ];
+    const boundaries = stream.length - 1;
+
+    for(let splits = 0; splits < (1 << boundaries); splits++) {
+
+      const mock = new MockSocket();
+      const transport = await openTransport(mock);
+      const iter = transport[Symbol.asyncIterator]();
+      const label = "split mask " + splits.toString(2);
+      let start = 0;
+
+      // Bit b of the mask cuts the stream after byte b + 1; the final chunk always runs to the end of the stream.
+      for(let end = 1; end <= stream.length; end++) {
+
+        if((end === stream.length) || ((splits & (1 << (end - 1))) !== 0)) {
+
+          mock.pushData(stream.subarray(start, end));
+          start = end;
+        }
+      }
+
+      for(const want of expected) {
+
+        const got = await iter.next();
+
+        assert.equal(got.done, false, label);
+        assert.equal(got.value?.type, want.type, label);
+        assert.equal(got.value?.payload.compare(want.payload), 0, label);
+      }
+
+      // Dispose ends the iterator only after it drains any queued message, so a done result here proves no chunking yielded an extra frame.
+      transport[Symbol.dispose]();
+
+      const tail = await iter.next();
+
+      assert.equal(tail.done, true, label);
+    }
+  });
+
+  test("an empty chunk leaves a parked firstByte awaiter waiting for the first real byte", async () => {
+
+    const mock = new MockSocket();
+    const transport = await openTransport(mock);
+    const firstByte = transport.firstByte();
+    const iter = transport[Symbol.asyncIterator]();
+    const next = iter.next();
+
+    mock.pushData(Buffer.alloc(0));
+    mock.pushData(PLAINTEXT_FRAME_HELLO_REQUEST_AB_CD);
+
+    assert.equal(await firstByte, 0x00);
+
+    const result = await next;
+
+    assert.equal(result.value?.type, MessageType.HELLO_REQUEST);
+    assert.equal(result.value?.payload.compare(Buffer.from([ 0xAB, 0xCD ])), 0);
+
+    transport[Symbol.dispose]();
+  });
+
   test("yields multiple frames packed into a single TCP packet in the order received", async () => {
 
     const mock = new MockSocket();
@@ -1626,6 +1697,43 @@ describe("Transport - plaintext inbound parsing", () => {
     });
   });
 
+  test("fails with BufferOverflowError at the first of several chunks that carries the receive buffer past maxRecvBufferBytes, and not before", async () => {
+
+    const { calls, metrics } = buildMetrics();
+    const mock = new MockSocket();
+    const transport = await openTransport(mock, { maxRecvBufferBytes: 64, metrics });
+    const iter = transport[Symbol.asyncIterator]();
+    const next = iter.next();
+    const dropped = (): MetricCall[] => calls.filter((c) => c.name === "frames.dropped");
+
+    // The header declares a 200-byte payload, so the frame can never complete inside a 64-byte receive buffer and every chunk after it stays unparsed. The header and
+    // three 20-byte chunks bring the buffer to exactly 64 bytes, which the bound allows; the next chunk would carry it to 84.
+    mock.pushData(Buffer.from([ 0x00, 0xC8, 0x01, 0x1A ]));
+
+    for(let i = 0; i < 3; i++) {
+
+      mock.pushData(Buffer.alloc(20, 0xCC));
+      assert.equal(mock.destroyed, false, "a chunk within the bound must not end the transport");
+    }
+
+    assert.equal(dropped().length, 0);
+
+    mock.pushData(Buffer.alloc(20, 0xCC));
+
+    assert.equal(mock.destroyed, true, "the chunk that crosses the bound must end the transport");
+
+    await assert.rejects(next, (err) => {
+
+      assert.ok(err instanceof BufferOverflowError);
+      assert.equal(err.code, "RECV_BUFFER_OVERFLOW");
+      assert.equal(err.message, "Receive buffer exceeded 64 bytes; peer is sending garbage or stalled mid-frame.");
+
+      return true;
+    });
+
+    assert.deepEqual(dropped(), [{ by: 1, durationMs: undefined, kind: "increment", name: "frames.dropped", tags: { reason: "buffer_overflow" }, value: undefined }]);
+  });
+
   test("emits frames.received with encrypted=false for every parsed plaintext frame", async () => {
 
     const { calls, metrics } = buildMetrics();
@@ -1736,6 +1844,32 @@ describe("Transport - noise-handshake inbound parsing", () => {
     });
   });
 
+  test("a partial plaintext frame buffered before enterNoiseHandshake fails the noise-phase indicator check on the very next chunk", async () => {
+
+    const mock = new MockSocket();
+    const transport = await openTransport(mock);
+
+    // Under plaintext framing this header declares a 200-byte payload, so the transport holds the partial frame and waits for the rest of it.
+    mock.pushData(Buffer.concat([ Buffer.from([ 0x00, 0xC8, 0x01, 0x1A ]), Buffer.alloc(10, 0xCC) ]));
+    transport.enterNoiseHandshake();
+
+    const handshake = transport.nextNoiseHandshakeFrame();
+
+    // Under noise framing the buffered plaintext indicator means the device does not speak encryption, which the next chunk must surface at once rather than after
+    // the plaintext frame's length has arrived.
+    mock.pushData(Buffer.from([0xCC]));
+
+    assert.equal(mock.destroyed, true, "the next chunk must fail the noise-phase indicator check");
+
+    await assert.rejects(handshake, (err) => {
+
+      assert.ok(err instanceof PeerClosedDuringNoiseError);
+      assert.equal(err.code, "PEER_PLAINTEXT_DURING_NOISE");
+
+      return true;
+    });
+  });
+
   test("fails with ProtocolError BAD_NOISE_INDICATOR for an unknown indicator byte during the handshake", async () => {
 
     const mock = new MockSocket();
@@ -1788,6 +1922,49 @@ describe("Transport - noise-data inbound parsing", () => {
 
     assert.equal(result.value?.type, MessageType.LIGHT_COMMAND_REQUEST);
     assert.equal(result.value?.payload.compare(payload), 0);
+
+    transport[Symbol.dispose]();
+  });
+
+  test("reassembles noise-data frames split across several chunks, including a split inside each frame's header", async () => {
+
+    const mock = new MockSocket();
+    const transport = await openTransport(mock);
+    const cipher = buildStubCipherPair();
+
+    transport.enterNoiseHandshake();
+    transport.installCipher(cipher);
+
+    const iter = transport[Symbol.asyncIterator]();
+
+    // A patterned payload makes any misaligned or reordered byte visible, where a constant fill would hide it.
+    const first = Buffer.alloc(300);
+
+    for(let i = 0; i < first.length; i++) {
+
+      first[i] = i & 0xFF;
+    }
+
+    const second = Buffer.from([ 0xCA, 0xFE ]);
+    const frameA = buildNoiseDataFrame(MessageType.LIGHT_COMMAND_REQUEST, first, cipher);
+    const stream = Buffer.concat([ frameA, buildNoiseDataFrame(MessageType.PING_REQUEST, second, cipher) ]);
+
+    // The cuts fall inside the first frame's three-byte header, through its body, and inside the second frame's header, which arrives behind the first frame's tail.
+    let start = 0;
+
+    for(const end of [ 1, 3, 100, 250, frameA.length + 2, stream.length ]) {
+
+      mock.pushData(stream.subarray(start, end));
+      start = end;
+    }
+
+    const a = await iter.next();
+    const b = await iter.next();
+
+    assert.equal(a.value?.type, MessageType.LIGHT_COMMAND_REQUEST);
+    assert.equal(a.value?.payload.compare(first), 0);
+    assert.equal(b.value?.type, MessageType.PING_REQUEST);
+    assert.equal(b.value?.payload.compare(second), 0);
 
     transport[Symbol.dispose]();
   });
@@ -2260,6 +2437,43 @@ describe("Transport - hot path", () => {
     }
 
     assert.equal(count, N);
+
+    transport[Symbol.dispose]();
+  });
+
+  test("assembles a frame near 64 KiB split into 1400-byte chunks with less than twice its size passed to Buffer.concat", async (t) => {
+
+    const mock = new MockSocket();
+    const transport = await openTransport(mock);
+    const iter = transport[Symbol.asyncIterator]();
+    const next = iter.next();
+    const payload = Buffer.alloc((64 * 1024) - 16, 0x5A);
+    const frame = buildPlaintextFrame(MessageType.CAMERA_IMAGE_RESPONSE, payload);
+
+    // The fixture is built before Buffer.concat is wrapped, so every recorded call is the transport's own.
+    const concat = t.mock.method(Buffer, "concat");
+
+    for(let offset = 0; offset < frame.length; offset += 1400) {
+
+      mock.pushData(frame.subarray(offset, offset + 1400));
+    }
+
+    const result = await next;
+    let concatenatedBytes = 0;
+
+    for(const call of concat.mock.calls) {
+
+      for(const part of call.arguments[0]) {
+
+        concatenatedBytes += part.length;
+      }
+    }
+
+    // An accumulator that concatenates on every chunk copies its growing prefix each time, roughly the frame size times half the chunk count. Assembling the frame
+    // once stays under twice its size.
+    assert.ok(concatenatedBytes < (2 * frame.length), "Buffer.concat received " + String(concatenatedBytes) + " bytes for a " + String(frame.length) + "-byte frame.");
+    assert.equal(result.value?.type, MessageType.CAMERA_IMAGE_RESPONSE);
+    assert.equal(result.value?.payload.compare(payload), 0);
 
     transport[Symbol.dispose]();
   });

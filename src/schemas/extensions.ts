@@ -142,40 +142,49 @@ export function buildStateMessageTypes(table: SchemasTable): ReadonlySet<number>
 }
 
 /**
- * Look up an entity schema in a {@link SchemasTable} by its state-response wire-message-type. Mirrors the module-level
- * {@link findSchemaByStateMessageType} but consults the per-instance table so extras-registered entity types resolve correctly.
+ * Derive the lookup from state-response wire-message-type to the schema that decodes it, from a {@link SchemasTable}. The host builds it once at construction, so each
+ * inbound state frame resolves its schema with one map read rather than a scan of the table.
  *
  * @remarks Extras-wins-on-collision: when an extras schema aliases a built-in wire-message-type (the {@link aliasOf} case - the consumer wants every `cover`-wire
- * frame to surface as `door_cover` on this client instance), the iteration prefers the last matching schema in the table. Built-ins iterate first because
- * {@link buildSchemasTable} composes as `{ ...base, ...extras }`, so the last-match preference makes extras shadow the built-in for routing decisions while leaving
- * the {@link ENTITY_SCHEMAS} constant untouched.
+ * frame to surface as `door_cover` on this client instance), the later schema in table order overwrites the earlier entry. Built-ins iterate first because
+ * {@link buildSchemasTable} composes as `{ ...base, ...extras }`, so extras shadow the built-in for routing decisions while leaving the {@link ENTITY_SCHEMAS} constant
+ * untouched. The same rule settles built-ins that share a state message-type: the later one in table order owns it.
  *
  * @param table - The per-instance schemas table.
- * @param messageType - The state-response wire-message-type to look up.
- * @returns The matching {@link EntitySchema}, or `undefined` when no schema in the table declares that state message-type.
+ * @returns A read-only (by type) map from state-response message-type identifier to the schema that resolves it.
  * @internal
  */
-export function findSchemaByStateMessageTypeIn(table: SchemasTable, messageType: number): EntitySchema | undefined {
+export function buildSchemaByStateMessageType(table: SchemasTable): ReadonlyMap<number, EntitySchema> {
 
-  // findLast expresses the extras-wins-on-collision rule structurally - Object.values preserves insertion order with extras last - and short-circuits from the end rather
-  // than scanning the whole table to keep the last match.
-  return Object.values(table).findLast((schema) => schema.state.messageType === messageType);
+  const map = new Map<number, EntitySchema>();
+
+  for(const schema of Object.values(table)) {
+
+    map.set(schema.state.messageType, schema);
+  }
+
+  return map;
 }
 
 /**
- * Look up an entity schema in a {@link SchemasTable} by its list-entities wire-message-type. Mirrors the module-level
- * {@link findSchemaByListEntitiesMessageType} but consults the per-instance table. Same extras-wins-on-collision rule as
- * {@link findSchemaByStateMessageTypeIn}.
+ * Derive the lookup from list-entities wire-message-type to the schema that decodes it, from a {@link SchemasTable}. The host builds it once at construction, so each
+ * discovery message resolves its schema with one map read. Same extras-wins-on-collision rule as {@link buildSchemaByStateMessageType}: the later schema in table order
+ * overwrites the earlier entry.
  *
  * @param table - The per-instance schemas table.
- * @param messageType - The list-entities wire-message-type to look up.
- * @returns The matching {@link EntitySchema}, or `undefined` when no schema in the table declares that list-entities message-type.
+ * @returns A read-only (by type) map from `LIST_ENTITIES_*_RESPONSE` message-type identifier to the schema that resolves it.
  * @internal
  */
-export function findSchemaByListEntitiesMessageTypeIn(table: SchemasTable, messageType: number): EntitySchema | undefined {
+export function buildSchemaByListEntitiesMessageType(table: SchemasTable): ReadonlyMap<number, EntitySchema> {
 
-  // findLast: same extras-wins-on-collision, short-circuit-from-the-end rationale as findSchemaByStateMessageTypeIn.
-  return Object.values(table).findLast((schema) => schema.listEntities.messageType === messageType);
+  const map = new Map<number, EntitySchema>();
+
+  for(const schema of Object.values(table)) {
+
+    map.set(schema.listEntities.messageType, schema);
+  }
+
+  return map;
 }
 
 /**
