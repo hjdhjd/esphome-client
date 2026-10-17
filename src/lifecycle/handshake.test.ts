@@ -6,7 +6,7 @@ import type { ApiMajorRange, ClientApiVersion } from "./handshake.ts";
 import type { ClientMetrics, EspHomeLogging, NoiseServerHello, PskResolver } from "../types.ts";
 import {
   ConnectionClosedByPeerError, EncryptionKeyInvalidError, EncryptionKeyMissingError, EncryptionRequiredError, NegotiationFailedError, NoiseHandshakeError,
-  PermanentError, PlaintextHandshakeError, ProtocolError
+  PermanentError, ProtocolError
 } from "../errors.ts";
 import { MessageType, WireType } from "../protocol/index.ts";
 import { applyHelloResponse, authenticateIfNeeded, parseServerHello, performDiscovery, performNoiseHandshake, performPlaintextHandshake } from "./handshake.ts";
@@ -177,7 +177,7 @@ describe("performNoiseHandshake - server-hello validation", () => {
 
     transport.pushNoiseHandshakeFrame(helloFrame);
 
-    await assert.rejects(promise, { code: "SERVER_NAME_MISMATCH", constructor: PlaintextHandshakeError });
+    await assert.rejects(promise, { code: "SERVER_NAME_MISMATCH", constructor: NoiseHandshakeError });
   });
 });
 
@@ -334,8 +334,34 @@ describe("performNoiseHandshake - key resolution", () => {
 
     transport.pushNoiseHandshakeFrame(POOLHOUSE_HELLO.frame);
 
-    await assert.rejects(promise, { code: "SERVER_NAME_MISMATCH", constructor: PlaintextHandshakeError });
+    await assert.rejects(promise, { code: "SERVER_NAME_MISMATCH", constructor: NoiseHandshakeError });
     assert.equal(resolverCalls, 0, "the resolver must not see a hello from a device that failed the name check");
+  });
+
+  test("an expected server name does not reject a hello that announces no name", async () => {
+
+    const transport = new MockTransport();
+    const hellos: NoiseServerHello[] = [];
+
+    const promise = startNoise({
+
+      expectedServerName: "expected-name",
+      resolvePsk: (hello): string => {
+
+        hellos.push(hello);
+
+        return VALID_PSK;
+      },
+      transport
+    });
+
+    // Queue a hello carrying only the chosen-proto byte, which announces no name, and then an empty reply. An absent name gives the check nothing to compare, so the
+    // resolver sees the empty hello and the attempt ends on the empty reply rather than on a name mismatch.
+    transport.pushNoiseHandshakeFrame(Buffer.from([1]));
+    transport.pushNoiseHandshakeFrame(Buffer.alloc(0));
+
+    await assert.rejects(promise, { code: "TRUNCATED_E", constructor: NoiseHandshakeError });
+    assert.deepEqual(hellos, [{}], "a hello that announces no name must pass the name check and reach the resolver exactly once");
   });
 });
 

@@ -22,7 +22,7 @@ import { AlarmControlPanelCommand, AlarmControlPanelState, BluetoothScannerMode,
 import type { AlarmControlPanelEvent, ClimateEvent, CoverEvent, FanEvent, LockEvent, MediaPlayerEvent, SirenEvent, SwitchEvent } from "../schemas/entity-types.ts";
 import { BackpressureError, BufferOverflowError, ConfigurationError, ConnectionClosedByPeerError, ConnectionError, ConnectionLostError, ConnectionRefusedError,
   ConnectionTimeoutError, EncryptionKeyInvalidError, EncryptionKeyMissingError, EncryptionRequiredError, EspHomeError, FrameTooLargeError, HandshakeError,
-  HeartbeatStalledError, NegotiationFailedError, NoiseHandshakeError, NotConnectedError, PeerClosedDuringNoiseError, PermanentError, PlaintextHandshakeError,
+  HeartbeatStalledError, NegotiationFailedError, NoiseHandshakeError, NotConnectedError, PeerClosedDuringNoiseError, PermanentError,
   ProtocolError } from "../errors.ts";
 import type { ClientEventsMap, DeviceInfo, EspHomeClientOptions, ExecuteServiceArgumentValue } from "../esphome-client.ts";
 import type { Entity, ExtraSchemaSet, TelemetryEvent } from "../schemas/index.ts";
@@ -58,7 +58,7 @@ const log: EspHomeLogging = {
 
 /**
  * Construct a client via the async factory and bind it to an `await using` scope so the transport tears down automatically on scope exit. The factory applies
- * bounded retry on transient errors; permanent errors (encryption, auth, version mismatch) reject immediately.
+ * bounded retry on transient errors; permanent errors (encryption misconfigurations and version-negotiation failures) reject immediately.
  */
 // #region open-and-dispose
 export async function openAndDisposeExample(): Promise<void> {
@@ -196,8 +196,8 @@ export async function withReconnectExample(client: EspHomeClient): Promise<void>
 // #endregion with-reconnect
 
 /**
- * The auto-reconnect supervisor's `shouldRetry` predicate filters out {@link PermanentError} subclasses by default - encryption misconfigurations, authentication
- * failures, and version mismatches stop the loop instead of consuming the retry budget. Override the predicate for additional bespoke filtering.
+ * The auto-reconnect supervisor's `shouldRetry` predicate filters out {@link PermanentError} subclasses by default - encryption misconfigurations and
+ * version-negotiation failures stop the loop instead of consuming the retry budget. Override the predicate for additional bespoke filtering.
  */
 // #region reconnect-with-permanent-error
 export async function reconnectWithPermanentErrorExample(): Promise<void> {
@@ -1148,15 +1148,10 @@ export async function errorClassEnumerationExample(): Promise<void> {
 
     if(error instanceof NoiseHandshakeError) {
 
-      // Generic noise-protocol failure; inspect `code` for the specific cause.
+      // Generic noise-protocol failure; inspect `code` for the specific cause, such as SERVER_NAME_MISMATCH when the device announced a server name other than the
+      // configured `serverName`.
       log.error("The noise handshake failed.", error.code);
 
-      return;
-    }
-
-    if(error instanceof PlaintextHandshakeError) {
-
-      // Plaintext handshake (server-name mismatch, unexpected response).
       return;
     }
 
@@ -1326,12 +1321,9 @@ export async function commandErrorHandlingExample(client: EspHomeClient, lightId
 
 /**
  * The {@link PermanentError} marker classifies errors that auto-reconnect should not retry. The library throws these PermanentError subclasses:
- * {@link EncryptionKeyMissingError}, {@link EncryptionKeyInvalidError}, {@link EncryptionRequiredError}, and {@link NegotiationFailedError}. The public hierarchy
- * also includes subclasses the library itself never throws: {@link AuthenticationError} is available to consumer-supplied wrappers that authenticate
- * against a custom transport, and {@link IncompatibleApiVersionError} is retained for backward compatibility with consumers that narrowed on it before
- * {@link NegotiationFailedError} existed. Consumer-supplied retry logic should mirror the same split: stop on permanent, back off on transient. When its attempts
- * run out, the example rejects with the last transient error, so the caller sees the cause of the final failure. On success it returns the connected client,
- * which the caller then owns and closes when it is done.
+ * {@link EncryptionKeyMissingError}, {@link EncryptionKeyInvalidError}, {@link EncryptionRequiredError}, and {@link NegotiationFailedError}. Consumer-supplied
+ * retry logic should mirror the same split: stop on permanent, back off on transient. When its attempts run out, the example rejects with the last transient
+ * error, so the caller sees the cause of the final failure. On success it returns the connected client, which the caller then owns and closes when it is done.
  */
 // #region permanent-vs-transient
 export async function permanentVsTransientExample(): Promise<EspHomeClient> {

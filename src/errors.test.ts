@@ -3,10 +3,10 @@
  * errors.test.ts: Unit tests for the typed error hierarchy.
  */
 import {
-  AuthenticationError, BackpressureError, BufferOverflowError, ConfigurationError, ConnectionClosedByPeerError, ConnectionError, ConnectionLostError,
+  BackpressureError, BufferOverflowError, ConfigurationError, ConnectionClosedByPeerError, ConnectionError, ConnectionLostError,
   ConnectionRefusedError, ConnectionTimeoutError, DecodingError, DecryptionFailedError, EncodingError, EncryptionKeyInvalidError, EncryptionKeyMissingError,
-  EncryptionRequiredError, EspHomeError, FrameTooLargeError, HandshakeError, HeartbeatStalledError, IncompatibleApiVersionError, MalformedVarintError,
-  MessageTooManyFieldsError, NegotiationFailedError, NoiseHandshakeError, NotConnectedError, PeerClosedDuringNoiseError, PermanentError, PlaintextHandshakeError,
+  EncryptionRequiredError, EspHomeError, FrameTooLargeError, HandshakeError, HeartbeatStalledError, MalformedVarintError,
+  MessageTooManyFieldsError, NegotiationFailedError, NoiseHandshakeError, NotConnectedError, PeerClosedDuringNoiseError, PermanentError,
   ProtocolError, UnknownEntityTypeError, UnknownMessageTypeError, UnsupportedCapabilityError
 } from "./errors.ts";
 import type { ConfigurationErrorCode, NoiseHandshakeErrorCode } from "./errors.ts";
@@ -51,13 +51,13 @@ describe("EspHomeError", () => {
 
 describe("PermanentError marker", () => {
 
-  test("is abstract - subclasses are concrete (e.g. AuthenticationError)", () => {
+  test("is abstract - subclasses are concrete (e.g. EncryptionKeyMissingError)", () => {
 
     // The marker class is abstract and cannot be constructed directly. Instead, validate by exercising one of its concrete subclasses.
-    const auth = new AuthenticationError("auth failed");
+    const missingKey = new EncryptionKeyMissingError("Missing encryption key.");
 
-    assert.equal(auth instanceof PermanentError, true, "AuthenticationError must inherit from PermanentError");
-    assert.equal(auth instanceof EspHomeError, true, "AuthenticationError must also be an EspHomeError");
+    assert.equal(missingKey instanceof PermanentError, true, "EncryptionKeyMissingError must inherit from PermanentError");
+    assert.equal(missingKey instanceof EspHomeError, true, "EncryptionKeyMissingError must also be an EspHomeError");
   });
 });
 
@@ -96,10 +96,8 @@ describe("Error hierarchy - instanceof checks", () => {
     assert.equal(new EncryptionRequiredError("x") instanceof PermanentError, true);
   });
 
-  test("AuthenticationError, IncompatibleApiVersionError, NegotiationFailedError inherit from PermanentError", () => {
+  test("NegotiationFailedError inherits from PermanentError", () => {
 
-    assert.equal(new AuthenticationError("x") instanceof PermanentError, true);
-    assert.equal(new IncompatibleApiVersionError("x") instanceof PermanentError, true);
     assert.equal(new NegotiationFailedError("x") instanceof PermanentError, true);
   });
 
@@ -124,11 +122,6 @@ describe("Error hierarchy - instanceof checks", () => {
     assert.equal(err instanceof PermanentError, false, "a lost connection is not a permanent failure");
     assert.equal(err.code, "CONNECTION_LOST");
     assert.equal(err.cause, fault, "the cause carries what ended the connection");
-  });
-
-  test("PlaintextHandshakeError extends HandshakeError", () => {
-
-    assert.equal(new PlaintextHandshakeError("x") instanceof HandshakeError, true);
   });
 
   test("ProtocolError subclasses (DecodingError, EncodingError, UnknownEntityTypeError, etc) extend ProtocolError", () => {
@@ -194,7 +187,7 @@ describe("Class-name preservation", () => {
       [ new EspHomeError("x"), "EspHomeError" ],
       [ new ConnectionError("x"), "ConnectionError" ],
       [ new HandshakeError("x"), "HandshakeError" ],
-      [ new AuthenticationError("x"), "AuthenticationError" ],
+      [ new EncryptionKeyMissingError("x"), "EncryptionKeyMissingError" ],
       [ new ConnectionTimeoutError("x"), "ConnectionTimeoutError" ],
       [ new HeartbeatStalledError("x"), "HeartbeatStalledError" ],
       [ new ConnectionLostError("x"), "ConnectionLostError" ],
@@ -224,14 +217,11 @@ describe("Per-class edge enumeration", () => {
     [ "EspHomeError", EspHomeError, { permanent: false } ],
     [ "ConnectionError", ConnectionError, { permanent: false } ],
     [ "HandshakeError", HandshakeError, { permanent: false } ],
-    [ "PlaintextHandshakeError", PlaintextHandshakeError, { permanent: false } ],
-    [ "AuthenticationError", AuthenticationError, { permanent: true } ],
     [ "ConnectionTimeoutError", ConnectionTimeoutError, { permanent: false } ],
     [ "ConnectionRefusedError", ConnectionRefusedError, { permanent: false } ],
     [ "ConnectionClosedByPeerError", ConnectionClosedByPeerError, { permanent: false } ],
     [ "HeartbeatStalledError", HeartbeatStalledError, { permanent: false } ],
     [ "ConnectionLostError", ConnectionLostError, { permanent: false } ],
-    [ "IncompatibleApiVersionError", IncompatibleApiVersionError, { permanent: true } ],
     [ "NotConnectedError", NotConnectedError, { permanent: false } ],
     [ "EncryptionKeyMissingError", EncryptionKeyMissingError, { permanent: true } ],
     [ "EncryptionKeyInvalidError", EncryptionKeyInvalidError, { permanent: true } ],
@@ -288,8 +278,8 @@ describe("Per-class edge enumeration", () => {
   test("NoiseHandshakeError carries a tagged NoiseHandshakeErrorCode", () => {
 
     const codes: readonly NoiseHandshakeErrorCode[] = [
-      "AUTH_FAILED", "CT_TOO_SHORT", "HANDSHAKE_COMPLETE", "INVALID_PSK_LENGTH", "MISSING_KEYS", "MSG_TOO_LONG",
-      "NOT_INITIALIZED", "PEER_CLOSED_NOISE", "PEER_PLAINTEXT_DURING_NOISE", "TRUNCATED_E", "UNSUPPORTED_TOKEN"
+      "AUTH_FAILED", "CT_TOO_SHORT", "HANDSHAKE_COMPLETE", "HANDSHAKE_REJECTED", "INVALID_PSK_LENGTH", "INVALID_REMOTE_KEY", "MISSING_KEYS", "MSG_TOO_LONG",
+      "NONCE_EXHAUSTED", "NOT_INITIALIZED", "PEER_CLOSED_NOISE", "PEER_PLAINTEXT_DURING_NOISE", "SERVER_NAME_MISMATCH", "TRUNCATED_E", "UNSUPPORTED_TOKEN"
     ];
 
     for(const code of codes) {
@@ -387,8 +377,6 @@ describe("Per-class edge enumeration", () => {
     // PermanentError cannot be constructed directly - its subclasses surface the marker.
     const permanents: readonly EspHomeError[] = [
 
-      new AuthenticationError("x"),
-      new IncompatibleApiVersionError("x"),
       new EncryptionKeyMissingError("x"),
       new EncryptionKeyInvalidError("x"),
       new EncryptionRequiredError("x"),
@@ -412,7 +400,6 @@ describe("Per-class edge enumeration", () => {
       new ConnectionClosedByPeerError("x"),
       new HeartbeatStalledError("x"),
       new HandshakeError("x"),
-      new PlaintextHandshakeError("x"),
       new NoiseHandshakeError("x", "AUTH_FAILED"),
       new PeerClosedDuringNoiseError("x", "PEER_CLOSED_NOISE")
     ];

@@ -60,7 +60,8 @@ export interface ReconnectConfig {
   onAttempt?: (attempt: number, delayMs: number) => void;
 
   /**
-   * Predicate determining whether to retry. Default: `!(error instanceof PermanentError)` - skip permanent errors (encryption, auth, version mismatch).
+   * Predicate determining whether to retry. Default: `!(error instanceof PermanentError)` - skip permanent errors (encryption misconfigurations and version-negotiation
+   * failures).
    *
    * @param error - The error from the most recent failed attempt.
    * @param attempts - Number of attempts so far.

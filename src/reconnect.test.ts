@@ -2,7 +2,7 @@
  *
  * reconnect.test.ts: Unit tests for the reconnect supervisor primitives and the withReconnect helper.
  */
-import { AuthenticationError, ConnectionError } from "./errors.ts";
+import { ConnectionError, EncryptionKeyMissingError } from "./errors.ts";
 import { HealthState, disconnectedHealth } from "./health.ts";
 import { backoffDelay, defaultShouldRetry, nextBackoffDelay, resolveReconnectConfig, withReconnect } from "./reconnect.ts";
 import { describe, test } from "node:test";
@@ -66,7 +66,7 @@ describe("defaultShouldRetry", () => {
 
   test("returns false for a PermanentError subclass", () => {
 
-    assert.equal(defaultShouldRetry(new AuthenticationError("auth failed")), false);
+    assert.equal(defaultShouldRetry(new EncryptionKeyMissingError("Missing encryption key.")), false);
   });
 });
 

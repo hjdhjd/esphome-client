@@ -6,7 +6,7 @@
 import { API_FEATURE_VERSIONS, deviceSupports } from "../api-feature-versions.ts";
 import type { ClientMetrics, EspHomeLogging, NoiseServerHello, Nullable, PskResolver } from "../types.ts";
 import {
-  EncryptionKeyInvalidError, EncryptionKeyMissingError, EncryptionRequiredError, NegotiationFailedError, NoiseHandshakeError, PlaintextHandshakeError, ProtocolError
+  EncryptionKeyInvalidError, EncryptionKeyMissingError, EncryptionRequiredError, NegotiationFailedError, NoiseHandshakeError, ProtocolError
 } from "../errors.ts";
 import { MessageType, WireType } from "../protocol/index.ts";
 import { decodeProtobuf, encodeProtoFields } from "../protocol/codec.ts";
@@ -131,14 +131,14 @@ const KEY_REJECTED_REASON = "Handshake MAC failure";
  *
  * @param input - Handshake inputs.
  * @throws {EncryptionKeyMissingError} when invoked without a key resolver, or when the resolver returns no key for the announced server hello.
- * @throws {NoiseHandshakeError} for framing-level handshake failures (truncated/short/missing-key) that are not key problems, and for an in-band rejection whose
- * reason is anything other than a wrong key (`HANDSHAKE_REJECTED`, carrying the device's reason text).
+ * @throws {NoiseHandshakeError} for framing-level handshake failures (truncated/short/missing-key) that are not key problems, for an in-band rejection whose
+ * reason is anything other than a wrong key (`HANDSHAKE_REJECTED`, carrying the device's reason text), and when the announced server name does not match the
+ * expected name (`SERVER_NAME_MISMATCH`).
  * @throws {EncryptionKeyInvalidError} when the resolved key does not decode to 32 bytes (`INVALID_PSK_LENGTH`), or when the encrypted handshake reply cannot be
  * authenticated: the device's in-band rejection of the key (header != 0 with ESPHome's wrong-key reason), OR a local AEAD failure decrypting the reply
  * (`AUTH_FAILED`), OR a malformed / low-order peer ephemeral that fails X25519 key agreement (`INVALID_REMOTE_KEY`). Every enumerated failure above is a permanent
  * bad-key failure; the granular cause code is preserved on the error's `cause` chain.
  * @throws The abort signal's own reason when the signal fires: the platform `TimeoutError` of a timeout, or a caller's reason, unchanged.
- * @throws {PlaintextHandshakeError} when the announced server name does not match the expected name.
  */
 export async function performNoiseHandshake(input: NoiseHandshakeInput): Promise<void> {
 
@@ -175,7 +175,7 @@ export async function performNoiseHandshake(input: NoiseHandshakeInput): Promise
 
     if(expectedServerName && (hello.name !== undefined) && (expectedServerName !== hello.name)) {
 
-      throw new PlaintextHandshakeError("Server name mismatch, expected " + expectedServerName + ", got " + hello.name + ".", "SERVER_NAME_MISMATCH");
+      throw new NoiseHandshakeError("Server name mismatch, expected " + expectedServerName + ", got " + hello.name + ".", "SERVER_NAME_MISMATCH");
     }
 
     const psk = resolvePsk(hello);

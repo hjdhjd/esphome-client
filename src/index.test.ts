@@ -17,16 +17,16 @@ describe("Public entry-point re-exports", () => {
 
     assert.deepEqual(Object.keys(publicApi).sort(), [
 
-      "AlarmControlPanelCommand", "AlarmControlPanelState", "AuthenticationError", "BackpressureError", "BluetoothScannerMode", "BluetoothScannerState",
+      "AlarmControlPanelCommand", "AlarmControlPanelState", "BackpressureError", "BluetoothScannerMode", "BluetoothScannerState",
       "BufferOverflowError", "CipherState", "ClimateAction", "ClimateFanMode", "ClimateFeature", "ClimateMode", "ClimatePreset",
       "ClimateSwingMode", "ColorMode", "ConfigurationError", "ConnectionClosedByPeerError", "ConnectionError", "ConnectionLostError", "ConnectionRefusedError",
       "ConnectionTimeoutError",
       "CoverOperation", "DecodingError", "DecryptionFailedError", "ENTITY_SCHEMAS", "ESPHOME_NOISE_PROLOGUE", "EncodingError", "EncryptionKeyInvalidError",
       "EncryptionKeyMissingError", "EncryptionRequiredError", "EntityCategory", "EspHomeClient", "EspHomeError", "FanDirection", "FrameTooLargeError", "HandshakeError",
-      "HandshakeState", "HealthState", "HeartbeatStalledError", "IncompatibleApiVersionError", "InfraredCapabilityFlags", "LockCommand", "LockState", "LogLevel",
+      "HandshakeState", "HealthState", "HeartbeatStalledError", "InfraredCapabilityFlags", "LockCommand", "LockState", "LogLevel",
       "MalformedVarintError", "MediaPlayerCommand", "MediaPlayerFormatPurpose", "MediaPlayerState", "MessageTooManyFieldsError", "NOISE_DH_LEN", "NOISE_MAX_MESSAGE_LEN",
       "NOISE_PSK_LEN", "NegotiationFailedError", "NoiseHandshakeError", "NotConnectedError", "NumberMode", "PeerClosedDuringNoiseError",
-      "PermanentError", "PlaintextHandshakeError", "ProtocolError", "RadioFrequencyCapabilityFlags", "RadioFrequencyModulation", "SensorStateClass",
+      "PermanentError", "ProtocolError", "RadioFrequencyCapabilityFlags", "RadioFrequencyModulation", "SensorStateClass",
       "SerialProxyLineStateFlags", "SerialProxyParity", "SerialProxyPortType", "SerialProxyRequestType", "SerialProxyStatus", "ServiceArgType", "TemperatureUnit",
       "TextMode", "TruncatedMessageError", "UnknownEntityTypeError", "UnknownMessageTypeError", "UnsupportedCapabilityError", "UpdateCommand", "ValveOperation",
       "VoiceAssistantEvent", "VoiceAssistantRequestFlag", "VoiceAssistantSubscribeFlag", "VoiceAssistantTimerEvent", "WaterHeaterMode", "WireType", "aliasOf",
@@ -59,8 +59,6 @@ describe("Public entry-point re-exports", () => {
     assert.equal(typeof publicApi.ConnectionError, "function");
     assert.equal(typeof publicApi.HandshakeError, "function");
     assert.equal(typeof publicApi.NoiseHandshakeError, "function");
-    assert.equal(typeof publicApi.AuthenticationError, "function");
-    assert.equal(typeof publicApi.IncompatibleApiVersionError, "function");
     assert.equal(typeof publicApi.NegotiationFailedError, "function");
     assert.equal(typeof publicApi.MalformedVarintError, "function");
     assert.equal(typeof publicApi.MessageTooManyFieldsError, "function");

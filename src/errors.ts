@@ -7,8 +7,8 @@
  * Typed error hierarchy used across the ESPHome client.
  *
  * @remarks Every distinct failure mode has its own class. Consumers can `instanceof`-check and pattern-match without parsing log strings. The {@link PermanentError}
- * marker classifies errors that the auto-reconnect supervisor should not retry; subclasses extending it (encryption errors, authentication failures, version
- * mismatches) are filtered out of the default retry path.
+ * marker classifies errors that the auto-reconnect supervisor should not retry; subclasses extending it (encryption misconfigurations and version-negotiation
+ * failures) are filtered out of the default retry path.
  *
  * Every catch-and-rethrow site preserves the underlying cause via the standard `Error.cause` chain, so consumers can drill down without losing context.
  *
@@ -53,15 +53,14 @@ export class EspHomeError extends Error {
 /**
  * Marker class for errors that auto-reconnect should not retry.
  *
- * @remarks The default reconnect supervisor filters with `!(error instanceof PermanentError)`. Subclasses include encryption misconfigurations, authentication
- * failures, and major-version mismatches. Adding a new permanent failure mode is one new subclass and the filter picks it up automatically.
+ * @remarks The default reconnect supervisor filters with `!(error instanceof PermanentError)`. The subclasses the library throws cover encryption misconfigurations
+ * and version-negotiation failures. Adding a new permanent failure mode is one new subclass and the filter picks it up automatically.
  *
  * Abstract on purpose: the marker is meaningful only when applied to a concrete subclass.
  *
  * Usage:
  *
  * {@includeCode ./examples/showcase.ts#permanent-vs-transient}
- *
  */
 export abstract class PermanentError extends EspHomeError {}
 
@@ -73,11 +72,14 @@ export abstract class PermanentError extends EspHomeError {}
 export class ConnectionError extends EspHomeError {}
 
 /**
- * Failure during the protocol handshake (plaintext or noise).
+ * Failure of the Noise handshake, or of the cipher state it establishes.
  *
- * @remarks Narrowing parent. The library does not throw this class directly - every handshake failure surfaces a more specific subclass
- * ({@link NoiseHandshakeError}, {@link PeerClosedDuringNoiseError}, {@link PlaintextHandshakeError}). Consumers can `instanceof HandshakeError` to catch the whole
- * family.
+ * @remarks Narrowing parent. The library does not throw this class directly - these failures surface as its more specific subclasses ({@link NoiseHandshakeError}
+ * and {@link PeerClosedDuringNoiseError}). Consumers can `instanceof HandshakeError` to catch the whole family. On the client's own connection, an inbound frame that
+ * fails to decrypt once the handshake has completed surfaces as {@link DecryptionFailedError}, a {@link ProtocolError} outside the family; the exported `CipherState`
+ * primitive, driven directly, raises {@link NoiseHandshakeError} for its own inbound failures. The HELLO exchange's refusals, {@link EncryptionRequiredError} when the
+ * device requires encryption and {@link NegotiationFailedError} when version negotiation fails, are {@link PermanentError} subclasses outside the family, as are the key
+ * errors the Noise handshake raises ({@link EncryptionKeyMissingError} and {@link EncryptionKeyInvalidError}).
  */
 export class HandshakeError extends ConnectionError {}
 
@@ -107,18 +109,22 @@ export class HandshakeError extends ConnectionError {}
  * - `NONCE_EXHAUSTED` - The ChaCha20-Poly1305 nonce reached the reserved maximum 2^64 - 1 (`crypto-noise.ts`). Per Noise §5.1 that nonce is reserved for rekey and must
  *   never encrypt or decrypt a transport message; physically unreachable in practice (it would require 2^64 messages on one connection).
  * - `NOT_INITIALIZED` - Reserved for future use; no current throw site constructs this code. Kept in the union for forward compatibility.
- * - `PEER_CLOSED_NOISE` - The peer closed the TCP socket while a noise handshake was in flight (`transport.ts`). Carried by {@link PeerClosedDuringNoiseError}.
+ * - `PEER_CLOSED_NOISE` - The peer closed the TCP socket during the noise handshake before it had sent any Noise frame (`transport.ts`); a close after the device has
+ *   spoken Noise is an ordinary {@link ConnectionClosedByPeerError}. Carried by {@link PeerClosedDuringNoiseError}.
  * - `PEER_PLAINTEXT_DURING_NOISE` - The peer responded with the plaintext indicator byte (0x00) during the noise handshake (`transport.ts`). Triggers fallback to
  *   plaintext when the consumer has not insisted on encryption. Carried by {@link PeerClosedDuringNoiseError}.
+ * - `SERVER_NAME_MISMATCH` - The device's noise-handshake server hello announced a server name other than the one the client's `serverName` option expects
+ *   (`lifecycle/handshake.ts`). The check runs before any key is in use.
  * - `TRUNCATED_E` - The ephemeral public key segment in an inbound handshake message was shorter than 32 bytes (`crypto-noise.ts`, `lifecycle/handshake.ts`).
  * - `UNSUPPORTED_TOKEN` - The device's noise-handshake server-hello frame selected a protocol byte other than 1 (`lifecycle/handshake.ts`). Indicates the peer
  *   negotiated a noise protocol variant this client does not support.
  */
 export type NoiseHandshakeErrorCode = "AUTH_FAILED" | "CT_TOO_SHORT" | "HANDSHAKE_COMPLETE" | "HANDSHAKE_REJECTED" | "INVALID_PSK_LENGTH" | "INVALID_REMOTE_KEY" |
-  "MISSING_KEYS" | "MSG_TOO_LONG" | "NONCE_EXHAUSTED" | "NOT_INITIALIZED" | "PEER_CLOSED_NOISE" | "PEER_PLAINTEXT_DURING_NOISE" | "TRUNCATED_E" | "UNSUPPORTED_TOKEN";
+  "MISSING_KEYS" | "MSG_TOO_LONG" | "NONCE_EXHAUSTED" | "NOT_INITIALIZED" | "PEER_CLOSED_NOISE" | "PEER_PLAINTEXT_DURING_NOISE" | "SERVER_NAME_MISMATCH" | "TRUNCATED_E" |
+  "UNSUPPORTED_TOKEN";
 
 /**
- * Failure during the Noise NNpsk0 handshake itself. Carries a narrowed {@link NoiseHandshakeErrorCode} for precise dispatch.
+ * Failure during the Noise NNpsk0 handshake, or in the cipher state it establishes. Carries a narrowed {@link NoiseHandshakeErrorCode} for precise dispatch.
  */
 export class NoiseHandshakeError extends HandshakeError {
 
@@ -143,23 +149,10 @@ export class NoiseHandshakeError extends HandshakeError {
 }
 
 /**
- * Peer (the device) closed the socket while the noise handshake was still in flight. Triggers fallback to plaintext when applicable.
+ * Peer (the device) closed the socket during the noise handshake before sending a Noise frame (`PEER_CLOSED_NOISE`), or answered the handshake with the plaintext
+ * indicator byte (`PEER_PLAINTEXT_DURING_NOISE`). Triggers fallback to plaintext when applicable.
  */
 export class PeerClosedDuringNoiseError extends NoiseHandshakeError {}
-
-/**
- * Failure during the plaintext handshake exchange (HelloRequest/HelloResponse, or ConnectRequest/ConnectResponse for password-authenticated devices).
- */
-export class PlaintextHandshakeError extends HandshakeError {}
-
-/**
- * Authentication failed: device rejected the supplied password. Permanent because retrying the same wrong password will not succeed.
- *
- * @remarks This class is part of the public hierarchy but no current library throw site constructs it - modern ESPHome firmware (API >= 1.11) does not require a
- * password handshake, and the legacy CONNECT_REQUEST/CONNECT_RESPONSE path in `authenticateIfNeeded` does not inspect the
- * `invalid_password` field of the response. Available to consumer-supplied wrappers that authenticate against a custom transport.
- */
-export class AuthenticationError extends PermanentError {}
 
 /**
  * Connection attempt timed out before the device responded. Transient: typically the device is rebooting or briefly unreachable.
@@ -192,15 +185,6 @@ export class HeartbeatStalledError extends ConnectionError {}
  * request still waiting on the session receives.
  */
 export class ConnectionLostError extends ConnectionError {}
-
-/**
- * Device announced an API major version outside the client's supported range. Permanent because no protocol exchange will resolve it.
- *
- * @remarks The actual major-version-out-of-range check in `applyHelloResponse` throws {@link NegotiationFailedError} with code
- * `API_MAJOR_OUT_OF_RANGE` rather than this class. Kept in the public hierarchy for backwards-compatibility with consumers that may have written
- * `instanceof IncompatibleApiVersionError` against the v1 surface; new code should narrow on `NegotiationFailedError`.
- */
-export class IncompatibleApiVersionError extends PermanentError {}
 
 /**
  * An awaiting request was issued while no connection could carry it, so nothing was sent and no wait was registered.
@@ -242,7 +226,8 @@ export class EncryptionRequiredError extends PermanentError {}
 export class ProtocolError extends EspHomeError {}
 
 /**
- * A single inbound noise frame failed the ChaCha20-Poly1305 tag check on an already-handshaked session.
+ * A single inbound noise frame failed to decrypt on an already-handshaked session: the ChaCha20-Poly1305 tag check failed, the frame was shorter than the tag, or the
+ * receive nonce was exhausted, each raised by the receive cipher and wrapped here.
  *
  * @remarks This is transient: a corrupted or glitched frame desyncs the cipher nonce, and the correct recovery is a full reconnect (a fresh handshake re-establishes
  * the cipher state). It is deliberately distinct from handshake-time {@link EncryptionKeyInvalidError}, which is a permanent key misconfiguration the consumer must

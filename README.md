@@ -141,7 +141,7 @@ Failures surface as typed subclasses of `EspHomeError`:
 
 - **Encryption** (all `PermanentError`) - `EncryptionKeyMissingError`, `EncryptionKeyInvalidError`, `EncryptionRequiredError`.
 - **Negotiation** (`PermanentError`) - `NegotiationFailedError`, raised when API-version negotiation finds no overlap.
-- **Handshake** - `NoiseHandshakeError` (with a tagged `code`), `PeerClosedDuringNoiseError`, `PlaintextHandshakeError`.
+- **Handshake** - `NoiseHandshakeError` (with a tagged `code`), `PeerClosedDuringNoiseError`.
 - **Connection** - `ConnectionRefusedError`, `ConnectionTimeoutError`, `ConnectionClosedByPeerError`, `HeartbeatStalledError`, and `ConnectionLostError`, which
   every pending request rejects with when the connection it was issued on is torn down.
 - **Protocol** - `FrameTooLargeError`, `BufferOverflowError`, `DecodingError`, `EncodingError`.

@@ -2,7 +2,7 @@
  *
  * errors.types.test.ts: Type-level tests for the typed error hierarchy's instanceof narrowing.
  */
-import { AuthenticationError, ConnectionError, EspHomeError, NoiseHandshakeError, PermanentError } from "./errors.ts";
+import { ConnectionError, EncryptionKeyMissingError, EspHomeError, NoiseHandshakeError, PermanentError } from "./errors.ts";
 import { describe, test } from "node:test";
 import type { NoiseHandshakeErrorCode } from "./errors.ts";
 import assert from "node:assert/strict";
@@ -41,7 +41,7 @@ describe("Error hierarchy type-level narrowing", () => {
 
   test("PermanentError marker is structurally an EspHomeError", () => {
 
-    const err: PermanentError = new AuthenticationError("auth failed");
+    const err: PermanentError = new EncryptionKeyMissingError("Missing encryption key.");
 
     // Both narrowings hold simultaneously: PermanentError is also EspHomeError.
     assert.equal(err instanceof EspHomeError, true);

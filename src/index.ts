@@ -42,10 +42,10 @@ export type { ESPHomeHandshakeOptions, NoiseHandshakeOptions, NoiseRole } from "
 export { entityId, isEntityId, parseEntityId } from "./entity-id.ts";
 export type { EntityId } from "./entity-id.ts";
 export {
-  AuthenticationError, BackpressureError, BufferOverflowError, ConfigurationError, ConnectionClosedByPeerError, ConnectionError, ConnectionLostError,
+  BackpressureError, BufferOverflowError, ConfigurationError, ConnectionClosedByPeerError, ConnectionError, ConnectionLostError,
   ConnectionRefusedError, ConnectionTimeoutError, DecodingError, DecryptionFailedError, EncodingError, EncryptionKeyInvalidError, EncryptionKeyMissingError,
-  EncryptionRequiredError, EspHomeError, FrameTooLargeError, HandshakeError, HeartbeatStalledError, IncompatibleApiVersionError, MalformedVarintError,
-  MessageTooManyFieldsError, NegotiationFailedError, NoiseHandshakeError, NotConnectedError, PeerClosedDuringNoiseError, PermanentError, PlaintextHandshakeError,
+  EncryptionRequiredError, EspHomeError, FrameTooLargeError, HandshakeError, HeartbeatStalledError, MalformedVarintError,
+  MessageTooManyFieldsError, NegotiationFailedError, NoiseHandshakeError, NotConnectedError, PeerClosedDuringNoiseError, PermanentError,
   ProtocolError, TruncatedMessageError, UnknownEntityTypeError, UnknownMessageTypeError, UnsupportedCapabilityError
 } from "./errors.ts";
 export type { ConfigurationErrorCode, NoiseHandshakeErrorCode } from "./errors.ts";
