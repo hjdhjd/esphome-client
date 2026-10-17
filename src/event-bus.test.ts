@@ -244,7 +244,7 @@ describe("EventBus.once", () => {
     const outcome = await Promise.race([ oncePromise.then(() => settled, () => settled), guard ]);
 
     assert.equal(outcome, settled, "dispose() must settle the pending once() promise rather than leave it hanging");
-    await assert.rejects(oncePromise, "the settled outcome must be a rejection, not a silent resolution");
+    await assert.rejects(oncePromise, { name: "AbortError" });
   });
 });
 

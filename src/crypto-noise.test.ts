@@ -226,7 +226,7 @@ describe("CipherState", () => {
     // Flip the last byte (inside the auth tag).
     ct[ct.length - 1] = (ct[ct.length - 1] ?? 0) ^ 0xff;
 
-    assert.throws(() => dec.DecryptWithAd(Buffer.alloc(0), ct), "tampered tag must fail authentication");
+    assert.throws(() => dec.DecryptWithAd(Buffer.alloc(0), ct), { code: "AUTH_FAILED", constructor: NoiseHandshakeError });
   });
 
   test("DecryptWithAd throws on tampered ciphertext", () => {
@@ -243,7 +243,7 @@ describe("CipherState", () => {
     // Flip a byte in the body (not the tag).
     ct[0] = (ct[0] ?? 0) ^ 0xff;
 
-    assert.throws(() => dec.DecryptWithAd(Buffer.alloc(0), ct), "tampered ciphertext must fail authentication");
+    assert.throws(() => dec.DecryptWithAd(Buffer.alloc(0), ct), { code: "AUTH_FAILED", constructor: NoiseHandshakeError });
   });
 
   test("Rekey replaces the active key with derived material that still round-trips", () => {
@@ -322,14 +322,14 @@ describe("CipherState", () => {
     encState.InitializeKey(Buffer.alloc(32, 0x11));
     (encState as unknown as { n: bigint }).n = maxNonce;
     assert.throws(() => encState.EncryptWithAd(Buffer.alloc(0), Buffer.from([ 1, 2, 3 ])),
-      (err: unknown): boolean => (err instanceof NoiseHandshakeError) && (err.code === "NONCE_EXHAUSTED"));
+      { code: "NONCE_EXHAUSTED", constructor: NoiseHandshakeError });
 
     const decState = new CipherState();
 
     decState.InitializeKey(Buffer.alloc(32, 0x22));
     (decState as unknown as { n: bigint }).n = maxNonce;
     assert.throws(() => decState.DecryptWithAd(Buffer.alloc(0), Buffer.alloc(20)),
-      (err: unknown): boolean => (err instanceof NoiseHandshakeError) && (err.code === "NONCE_EXHAUSTED"));
+      { code: "NONCE_EXHAUSTED", constructor: NoiseHandshakeError });
   });
 });
 
@@ -502,7 +502,7 @@ describe("HandshakeState NNpsk0 round-trip between initiator and responder", () 
 
     tampered[tampered.length - 1] = (tampered[tampered.length - 1] ?? 0) ^ 0xff;
 
-    assert.throws(() => responder.readMessage(tampered), "tampered handshake byte must fail authentication");
+    assert.throws(() => responder.readMessage(tampered), { code: "AUTH_FAILED", constructor: NoiseHandshakeError });
   });
 
   test("mismatched PSKs cause the handshake to fail authentication immediately", () => {
@@ -513,7 +513,7 @@ describe("HandshakeState NNpsk0 round-trip between initiator and responder", () 
     const msg1 = initiator.writeMessage();
 
     // Mismatched PSK is folded into the symmetric state; the responder fails to decrypt the first encrypted-and-hashed payload component immediately.
-    assert.throws(() => responder.readMessage(msg1), "mismatched PSK must fail on the first inbound message");
+    assert.throws(() => responder.readMessage(msg1), { code: "AUTH_FAILED", constructor: NoiseHandshakeError });
   });
 
   test("calling writeMessage past the pattern length throws", () => {
@@ -583,7 +583,7 @@ describe("HandshakeState NNpsk0 round-trip between initiator and responder", () 
     const responder2 = createESPHomeHandshake({ psk, role: "responder" });
     const msg1b = initiator2.writeMessage();
 
-    assert.throws(() => responder2.readMessage(msg1b), "mismatched prologue must fail authentication on the first inbound message");
+    assert.throws(() => responder2.readMessage(msg1b), { code: "AUTH_FAILED", constructor: NoiseHandshakeError });
   });
 
   test("destroyHandshakeSecrets wipes the PSK and chaining material but preserves the live ciphers", () => {
@@ -1166,6 +1166,6 @@ describe("Real-cipher edge cases", () => {
 
     Buffer.alloc(32, 0x00).copy(msg2, 0);
 
-    assert.throws(() => initiator.readMessage(msg2), (err: unknown) => (err instanceof NoiseHandshakeError) && (err.code === "INVALID_REMOTE_KEY"));
+    assert.throws(() => initiator.readMessage(msg2), { code: "INVALID_REMOTE_KEY", constructor: NoiseHandshakeError });
   });
 });

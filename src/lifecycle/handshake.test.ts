@@ -139,7 +139,7 @@ describe("performNoiseHandshake - input validation", () => {
 
         expectedServerName: null, log: silentLog(), metrics: undefined, now: Date.now, resolvePsk: null, signal: AbortSignal.timeout(50), transport
       }),
-      (err: unknown) => (err instanceof EncryptionKeyMissingError) && (err.code === "ENCRYPTION_KEY_MISSING")
+      { code: "ENCRYPTION_KEY_MISSING", constructor: EncryptionKeyMissingError }
     );
   });
 });
@@ -153,7 +153,7 @@ describe("performNoiseHandshake - server-hello validation", () => {
 
     transport.pushNoiseHandshakeFrame(Buffer.from([99]));
 
-    await assert.rejects(promise, (err: unknown) => (err instanceof NoiseHandshakeError) && (err.code === "UNSUPPORTED_TOKEN"));
+    await assert.rejects(promise, { code: "UNSUPPORTED_TOKEN", constructor: NoiseHandshakeError });
   });
 
   test("rejects empty server-hello frame", async () => {
@@ -163,7 +163,7 @@ describe("performNoiseHandshake - server-hello validation", () => {
 
     transport.pushNoiseHandshakeFrame(Buffer.alloc(0));
 
-    await assert.rejects(promise, (err: unknown) => (err instanceof NoiseHandshakeError) && (err.code === "UNSUPPORTED_TOKEN"));
+    await assert.rejects(promise, { code: "UNSUPPORTED_TOKEN", constructor: NoiseHandshakeError });
   });
 
   test("rejects when the announced server name does not match expectedServerName", async () => {
@@ -176,7 +176,7 @@ describe("performNoiseHandshake - server-hello validation", () => {
 
     transport.pushNoiseHandshakeFrame(helloFrame);
 
-    await assert.rejects(promise, (err: unknown) => (err instanceof PlaintextHandshakeError) && (err.code === "SERVER_NAME_MISMATCH"));
+    await assert.rejects(promise, { code: "SERVER_NAME_MISMATCH", constructor: PlaintextHandshakeError });
   });
 });
 
@@ -243,7 +243,7 @@ describe("performNoiseHandshake - key resolution", () => {
     transport.pushNoiseHandshakeFrame(POOLHOUSE_HELLO.frame);
     transport.pushNoiseHandshakeFrame(Buffer.alloc(0));
 
-    await assert.rejects(promise, (err: unknown) => (err instanceof NoiseHandshakeError) && (err.code === "TRUNCATED_E"));
+    await assert.rejects(promise, { code: "TRUNCATED_E", constructor: NoiseHandshakeError });
 
     assert.deepEqual(hellos, [POOLHOUSE_HELLO.expected], "the resolver must be called exactly once, with the parsed server hello");
 
@@ -266,7 +266,7 @@ describe("performNoiseHandshake - key resolution", () => {
 
       transport.pushNoiseHandshakeFrame(POOLHOUSE_HELLO.frame);
 
-      await assert.rejects(promise, (err: unknown) => (err instanceof EncryptionKeyMissingError) && (err.code === "ENCRYPTION_KEY_MISSING"));
+      await assert.rejects(promise, { code: "ENCRYPTION_KEY_MISSING", constructor: EncryptionKeyMissingError });
       assert.equal(transport.outboundHandshakeFrames.length, 1, "only the empty initial frame may be sent - never a handshake message");
     });
   }
@@ -333,7 +333,7 @@ describe("performNoiseHandshake - key resolution", () => {
 
     transport.pushNoiseHandshakeFrame(POOLHOUSE_HELLO.frame);
 
-    await assert.rejects(promise, (err: unknown) => (err instanceof PlaintextHandshakeError) && (err.code === "SERVER_NAME_MISMATCH"));
+    await assert.rejects(promise, { code: "SERVER_NAME_MISMATCH", constructor: PlaintextHandshakeError });
     assert.equal(resolverCalls, 0, "the resolver must not see a hello from a device that failed the name check");
   });
 });
@@ -352,7 +352,7 @@ describe("performNoiseHandshake - server-handshake reply validation", () => {
     await Promise.resolve();
     transport.pushNoiseHandshakeFrame(Buffer.alloc(0));
 
-    await assert.rejects(promise, (err: unknown) => (err instanceof NoiseHandshakeError) && (err.code === "TRUNCATED_E"));
+    await assert.rejects(promise, { code: "TRUNCATED_E", constructor: NoiseHandshakeError });
   });
 
   // An in-band rejection is a non-zero header followed by the device's reason text. The rows are ESPHome's wrong-key reason, the framing and protocol faults its
@@ -542,7 +542,7 @@ describe("performNoiseHandshake - abort handling", () => {
 
     setImmediate(() => ac.abort());
 
-    await assert.rejects(promise, (err: unknown) => (err instanceof NoiseHandshakeTimeoutError) && (err.code === "HANDSHAKE_TIMEOUT"));
+    await assert.rejects(promise, { code: "HANDSHAKE_TIMEOUT", constructor: NoiseHandshakeTimeoutError });
   });
 });
 
@@ -562,7 +562,7 @@ describe("applyHelloResponse - version negotiation", () => {
     assert.throws(
 
       (): void => applyHello({ payload: buildHelloPayload({ major: 2, minor: 0 }) }),
-      (err: unknown) => (err instanceof NegotiationFailedError) && (err.code === "API_MAJOR_OUT_OF_RANGE")
+      { code: "API_MAJOR_OUT_OF_RANGE", constructor: NegotiationFailedError }
     );
   });
 
@@ -592,7 +592,7 @@ describe("applyHelloResponse - version negotiation", () => {
     assert.throws(
 
       (): void => applyHello({ payload: buildHelloPayload({ major: 0, minor: 0 }) }),
-      (err: unknown) => (err instanceof NegotiationFailedError) && (err.code === "API_MAJOR_OUT_OF_RANGE")
+      { code: "API_MAJOR_OUT_OF_RANGE", constructor: NegotiationFailedError }
     );
   });
 });
@@ -651,7 +651,7 @@ describe("performPlaintextHandshake - wire I/O", () => {
 
     setImmediate(() => transport.fail(new ProtocolError("Server returned noise indicator byte.", "PROTOCOL_MISMATCH")));
 
-    await assert.rejects(promise, (err: unknown) => err instanceof EncryptionRequiredError);
+    await assert.rejects(promise, EncryptionRequiredError);
 
     receiver[Symbol.dispose]();
   });
@@ -677,7 +677,7 @@ describe("performPlaintextHandshake - wire I/O", () => {
 
     setImmediate(() => transport.fail(new Error("socket closed")));
 
-    await assert.rejects(promise, (err: unknown) => (err instanceof Error) && (err.message === "socket closed"));
+    await assert.rejects(promise, { constructor: Error, message: "socket closed" });
 
     receiver[Symbol.dispose]();
   });
@@ -975,7 +975,7 @@ describe("performDiscovery - discovery loop", () => {
     // typed timeout rather than a half-complete discovery. This is the symmetric proof that the gate waits for DONE, not just DeviceInfo.
     transport.pushInbound(MessageType.DEVICE_INFO_RESPONSE, Buffer.alloc(0));
 
-    await assert.rejects(promise, (err: unknown): boolean => (err instanceof DOMException) && (err.name === "TimeoutError"));
+    await assert.rejects(promise, { constructor: DOMException, name: "TimeoutError" });
 
     receiver[Symbol.dispose]();
   });
@@ -1006,7 +1006,7 @@ describe("performDiscovery - discovery loop", () => {
     // discovery with null device-info; the loud typed timeout is what a future regression to DONE-alone completion would fail to produce.
     transport.pushInbound(MessageType.LIST_ENTITIES_DONE_RESPONSE, Buffer.alloc(0));
 
-    await assert.rejects(promise, (err: unknown): boolean => (err instanceof DOMException) && (err.name === "TimeoutError"));
+    await assert.rejects(promise, { constructor: DOMException, name: "TimeoutError" });
 
     receiver[Symbol.dispose]();
   });

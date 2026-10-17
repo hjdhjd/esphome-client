@@ -97,7 +97,7 @@ describe("MessageReceiver.waitFor", () => {
 
     controller.abort();
 
-    await assert.rejects(promise);
+    await assert.rejects(promise, (err: unknown): boolean => err === controller.signal.reason);
   });
 
   test("rejects when the receiver is disposed before any message arrives", async () => {
@@ -108,7 +108,7 @@ describe("MessageReceiver.waitFor", () => {
 
     receiver[Symbol.dispose]();
 
-    await assert.rejects(promise);
+    await assert.rejects(promise, { code: "RECEIVER_DISPOSED", constructor: ConnectionClosedByPeerError });
   });
 
   test("buffers messages of the requested type that arrive before waitFor is called", async () => {
@@ -276,7 +276,7 @@ describe("MessageReceiver.startDrain", () => {
 
     receiver.startDrain({}, () => { /* terminal escalation is irrelevant to this waitFor-rejection test */ });
 
-    await assert.rejects(receiver.waitFor([42]));
+    await assert.rejects(receiver.waitFor([42]), { code: "RECEIVER_DRAINING", constructor: ConnectionClosedByPeerError });
   });
 
   test("interleave registrations stop firing after startDrain", async () => {
@@ -373,7 +373,7 @@ describe("MessageReceiver.dispose", () => {
 
     receiver[Symbol.dispose]();
 
-    await assert.rejects(promise);
+    await assert.rejects(promise, { code: "RECEIVER_DISPOSED", constructor: ConnectionClosedByPeerError });
   });
 
   test("Symbol.asyncDispose tears down active awaiters", async () => {
@@ -383,7 +383,7 @@ describe("MessageReceiver.dispose", () => {
     const promise = receiver.waitFor([42]);
 
     await receiver[Symbol.asyncDispose]();
-    await assert.rejects(promise);
+    await assert.rejects(promise, { code: "RECEIVER_DISPOSED", constructor: ConnectionClosedByPeerError });
   });
 
   test("dispose is safe to call more than once", () => {
@@ -407,7 +407,8 @@ describe("MessageReceiver edge cases", () => {
 
     controller.abort();
 
-    await assert.rejects(receiver.waitFor([42], { signal: controller.signal }), "pre-aborted signal must reject the awaiter");
+    await assert.rejects(receiver.waitFor([42], { signal: controller.signal }), (err: unknown): boolean => err === controller.signal.reason,
+      "pre-aborted signal must reject the awaiter");
   });
 
   test("transport iterator error propagates to pending awaiters", async () => {

@@ -64,7 +64,11 @@ describe("capture frame codec", () => {
     // A lone 0xFF byte is an incomplete varint - continuation bit set with no terminating byte. The read error is wrapped into the unified truncation error.
     assert.throws(() => decodeCaptureFrames(Buffer.from([0xFF])), (error: unknown): boolean => {
 
-      return (error instanceof Error) && error.message.includes("truncated or corrupt") && (error.cause !== undefined);
+      assert.ok(error instanceof Error, "A capture truncated mid-varint throws an Error.");
+      assert.match(error.message, /truncated or corrupt/);
+      assert.notEqual(error.cause, undefined);
+
+      return true;
     });
     assert.throws(() => decodeCaptureFrames(Buffer.from([0xFF])), CliError);
   });
@@ -75,10 +79,7 @@ describe("capture replay refusal", () => {
   test("a capture with frames but no LIST_ENTITIES_DONE_RESPONSE rejects with a CliError before any connect", async () => {
 
     // A capture that cannot drive discovery is the user's to re-record, so the refusal is the CLI's user-facing error class and names the missing frame.
-    await assert.rejects(replayCaptureFrames([{ payload: Buffer.from([1]), type: 2 }]), (error: unknown): boolean => {
-
-      return (error instanceof CliError) && error.message.includes("no LIST_ENTITIES_DONE_RESPONSE frame");
-    });
+    await assert.rejects(replayCaptureFrames([{ payload: Buffer.from([1]), type: 2 }]), { constructor: CliError, message: /no LIST_ENTITIES_DONE_RESPONSE frame/ });
   });
 });
 

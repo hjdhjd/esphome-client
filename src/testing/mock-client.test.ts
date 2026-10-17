@@ -219,8 +219,7 @@ describe("MockClient.transmitRawTimings recording", () => {
     client.populateEntities([ mockEntity("infrared", "receiver", { capabilities: InfraredCapabilityFlags.RECEIVER }),
       mockEntity("infrared", "blaster", { capabilities: InfraredCapabilityFlags.TRANSMITTER }) ]);
 
-    assert.throws(() => client.transmitRawTimings(receiver, options),
-      (err: unknown): boolean => (err instanceof ConnectionError) && (err.code === "ENTITY_NOT_TRANSMITTER"));
+    assert.throws(() => client.transmitRawTimings(receiver, options), { code: "ENTITY_NOT_TRANSMITTER", constructor: ConnectionError });
     assert.equal(client.commands.length, 0, "a refused transmit must not reach the command log");
 
     // A registered transmitter passes the same check and records, so the refusal is the capability rule and not a blanket refusal of registered entities.
@@ -235,9 +234,11 @@ describe("MockClient.transmitRawTimings recording", () => {
     const client = new MockClient();
     const options = { carrierFrequency: 38000, repeatCount: 1, timings: [ 9000, -4500 ] };
 
-    assert.throws(() => client.transmitRawTimings(entityId("infrared", "blaster"), options), (err: unknown): boolean => {
+    assert.throws(() => client.transmitRawTimings(entityId("infrared", "blaster"), options), {
 
-      return (err instanceof ConnectionError) && (err.code === "ENTITY_NOT_FOUND") && (err.message === "No entity is registered for infrared-blaster.");
+      code: "ENTITY_NOT_FOUND",
+      constructor: ConnectionError,
+      message: "No entity is registered for infrared-blaster."
     });
     assert.equal(client.commands.length, 0, "a refused transmit must not reach the command log");
   });
@@ -253,9 +254,11 @@ describe("MockClient.transmitRawTimings recording", () => {
     // The real client looks the id up before the runner reads its prefix, so a malformed id fails that lookup and throws where command() would drop it.
     for(const malformed of [ "blaster", "-blaster" ]) {
 
-      assert.throws(() => client.transmitRawTimings(malformed as unknown as typeof blaster, options), (err: unknown): boolean => {
+      assert.throws(() => client.transmitRawTimings(malformed as unknown as typeof blaster, options), {
 
-        return (err instanceof ConnectionError) && (err.code === "ENTITY_NOT_FOUND") && (err.message === "No entity is registered for " + malformed + ".");
+        code: "ENTITY_NOT_FOUND",
+        constructor: ConnectionError,
+        message: "No entity is registered for " + malformed + "."
       });
     }
 
@@ -1246,7 +1249,7 @@ describe("MockClient.commandAndAwait", () => {
 
     controller.abort();
 
-    await assert.rejects(awaited);
+    await assert.rejects(awaited, (err: unknown): boolean => err === controller.signal.reason);
   });
 
   test("rejects with a ConfigurationError for an unregistered entity id", async () => {
@@ -1271,10 +1274,11 @@ describe("MockClient.commandAndAwait", () => {
     // timeout is generous, so a refusal that fell through to the await would reject with the timeout's TimeoutError instead.
     for(const malformed of [ "thermostat", "-thermostat" ]) {
 
-      await assert.rejects(client.commandAndAwait(malformed as unknown as EntityId<"climate">, { mode: "heat" }, { timeoutMs: 5000 }), (err: unknown): boolean => {
+      await assert.rejects(client.commandAndAwait(malformed as unknown as EntityId<"climate">, { mode: "heat" }, { timeoutMs: 5000 }), {
 
-        return (err instanceof ConfigurationError) && (err.code === "MALFORMED_ENTITY_ID") &&
-          (err.message === "commandAndAwait(): malformed entity id '" + malformed + "'.");
+        code: "MALFORMED_ENTITY_ID",
+        constructor: ConfigurationError,
+        message: "commandAndAwait(): malformed entity id '" + malformed + "'."
       });
     }
 
@@ -1294,9 +1298,10 @@ describe("MockClient.commandAndAwait", () => {
 
     assert.equal(bus.listenerCount("climate"), 0, "a refused command must not open the state stream");
 
-    await assert.rejects(pending, (err: unknown): boolean => (err instanceof ConfigurationError) && (err.code === "ENUM_VALUE_UNKNOWN"));
     await assert.rejects(pending, {
 
+      code: "ENUM_VALUE_UNKNOWN",
+      constructor: ConfigurationError,
       message: "commandAndAwait(): command for climate-thermostat refused before sending (ENUM_VALUE_UNKNOWN): field 'mode' received unknown enum value 'freze'."
     });
     assert.equal(client.commands.length, 0, "a refused command must not reach the command log");

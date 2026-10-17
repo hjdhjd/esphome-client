@@ -547,7 +547,7 @@ describe("runCommandAndAwait - typed error paths", () => {
 
     await assert.rejects(
       runCommandAndAwait(bundle.host, malformedId<"light">("nodash"), { state: true }),
-      (err: unknown): boolean => (err instanceof ConfigurationError) && (err.code === "MALFORMED_ENTITY_ID")
+      { code: "MALFORMED_ENTITY_ID", constructor: ConfigurationError }
     );
   });
 
@@ -557,7 +557,7 @@ describe("runCommandAndAwait - typed error paths", () => {
 
     await assert.rejects(
       runCommandAndAwait(bundle.host, entityId("switch", "missing"), { state: true }),
-      (err: unknown): boolean => (err instanceof ConfigurationError) && (err.code === "UNKNOWN_ENTITY_ID")
+      { code: "UNKNOWN_ENTITY_ID", constructor: ConfigurationError }
     );
   });
 
@@ -577,7 +577,7 @@ describe("runCommandAndAwait - typed error paths", () => {
 
     await assert.rejects(
       runCommandAndAwait(bundle.host, entityId("switch", "x"), { state: true }),
-      (err: unknown): boolean => (err instanceof ConfigurationError) && (err.code === "AWAIT_STREAM_CLOSED")
+      { code: "AWAIT_STREAM_CLOSED", constructor: ConfigurationError }
     );
   });
 });
@@ -608,7 +608,7 @@ describe("runCommandAndAwait - encode refusals reject at once with a typed code"
 
       assert.equal(bus.listenerCount(channel), 0, "a refused command must not open the state stream");
 
-      await assert.rejects(pending, (err: unknown): boolean => (err instanceof ConfigurationError) && (err.code === code));
+      await assert.rejects(pending, { code, constructor: ConfigurationError });
       assert.equal(bundle.frames.length, 0);
       assert.equal(bundle.metrics.filter((m) => m.name === "entity.commands.sent").length, 0);
     });
@@ -655,7 +655,7 @@ describe("runCommandAndAwait - abort + timeout boundaries", () => {
 
     await assert.rejects(
       runCommandAndAwait(bundle.host, entityId("switch", "x"), { state: true }, { timeoutMs: 30 }),
-      (err: unknown): boolean => (err instanceof Error) && (err.name === "TimeoutError")
+      { constructor: DOMException, name: "TimeoutError" }
     );
   });
 
@@ -669,7 +669,7 @@ describe("runCommandAndAwait - abort + timeout boundaries", () => {
 
     await assert.rejects(
       runCommandAndAwait(bundle.host, entityId("switch", "x"), { state: true }, { signal: controller.signal, timeoutMs: 5000 }),
-      (err: unknown): boolean => err instanceof Error
+      Error
     );
   });
 
@@ -683,7 +683,7 @@ describe("runCommandAndAwait - abort + timeout boundaries", () => {
 
     await assert.rejects(
       runCommandAndAwait(bundle.host, entityId("switch", "x"), { state: true }, { signal: controller.signal, timeoutMs: 5000 }),
-      (err: unknown): boolean => err instanceof Error
+      Error
     );
   });
 
@@ -695,7 +695,7 @@ describe("runCommandAndAwait - abort + timeout boundaries", () => {
 
     await assert.rejects(
       runCommandAndAwait(bundle.host, entityId("switch", "x"), { state: true }, { timeoutMs: 30 }),
-      (err: unknown): boolean => err instanceof Error
+      Error
     );
 
     const elapsed = Date.now() - start;
@@ -839,7 +839,7 @@ describe("runCommandAndAwait - predicate normalization (Promise.try shim semanti
 
         predicate: (): boolean => { throw new Error("predicate-bug"); }
       }),
-      (err: unknown): boolean => (err instanceof Error) && (err.message === "predicate-bug")
+      { constructor: Error, message: "predicate-bug" }
     );
   });
 
@@ -858,7 +858,7 @@ describe("runCommandAndAwait - predicate normalization (Promise.try shim semanti
 
         predicate: async (): Promise<boolean> => Promise.reject(new Error("async-bug"))
       }),
-      (err: unknown): boolean => (err instanceof Error) && (err.message === "async-bug")
+      { constructor: Error, message: "async-bug" }
     );
   });
 
@@ -900,7 +900,7 @@ describe("runCommandAndAwait - key-matching narrowing guards", () => {
 
     await assert.rejects(
       runCommandAndAwait(bundle.host, entityId("light", "x"), { state: true }, { timeoutMs: 30 }),
-      (err: unknown): boolean => err instanceof Error
+      Error
     );
   });
 
@@ -920,7 +920,7 @@ describe("runCommandAndAwait - key-matching narrowing guards", () => {
 
     await assert.rejects(
       runCommandAndAwait(bundle.host, entityId("switch", "x"), { state: true }, { timeoutMs: 30 }),
-      (err: unknown): boolean => err instanceof Error
+      Error
     );
   });
 });
@@ -935,7 +935,7 @@ describe("runCommandAndAwait - typed throws are never masked by the fire-and-for
 
     await assert.rejects(
       runCommandAndAwait(bundle.host, malformedId<"light">("nodash"), { state: true }),
-      (err: unknown): boolean => (err instanceof ConfigurationError) && (err.code === "MALFORMED_ENTITY_ID")
+      { code: "MALFORMED_ENTITY_ID", constructor: ConfigurationError }
     );
 
     // No frames sent and no fire-and-forget malformed-id warn: the throw at stage 1 comes before anything encodes or sends.
@@ -949,7 +949,7 @@ describe("runCommandAndAwait - typed throws are never masked by the fire-and-for
 
     await assert.rejects(
       runCommandAndAwait(bundle.host, entityId("switch", "missing"), { state: true }),
-      (err: unknown): boolean => (err instanceof ConfigurationError) && (err.code === "UNKNOWN_ENTITY_ID")
+      { code: "UNKNOWN_ENTITY_ID", constructor: ConfigurationError }
     );
 
     assert.equal(bundle.frames.length, 0);

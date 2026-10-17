@@ -163,15 +163,9 @@ describe("SerialProxyApi.configure", () => {
     const handle = makeHost();
     const api = new SerialProxyApi(handle.host);
 
-    assert.throws(() => api.configure(0, { baudrate: 115200, dataSize: 4 }), (err: unknown) => {
+    assert.throws(() => api.configure(0, { baudrate: 115200, dataSize: 4 }), { code: "INVALID_SERIAL_CONFIG", constructor: ConnectionError });
 
-      return (err instanceof ConnectionError) && (err.code === "INVALID_SERIAL_CONFIG");
-    });
-
-    assert.throws(() => api.configure(0, { baudrate: 115200, dataSize: 9 }), (err: unknown) => {
-
-      return (err instanceof ConnectionError) && (err.code === "INVALID_SERIAL_CONFIG");
-    });
+    assert.throws(() => api.configure(0, { baudrate: 115200, dataSize: 9 }), { code: "INVALID_SERIAL_CONFIG", constructor: ConnectionError });
 
     assert.equal(handle.sent.length, 0, "no wire send when validation fails");
   });
@@ -181,15 +175,9 @@ describe("SerialProxyApi.configure", () => {
     const handle = makeHost();
     const api = new SerialProxyApi(handle.host);
 
-    assert.throws(() => api.configure(0, { baudrate: 115200, dataSize: 8, stopBits: 0 }), (err: unknown) => {
+    assert.throws(() => api.configure(0, { baudrate: 115200, dataSize: 8, stopBits: 0 }), { code: "INVALID_SERIAL_CONFIG", constructor: ConnectionError });
 
-      return (err instanceof ConnectionError) && (err.code === "INVALID_SERIAL_CONFIG");
-    });
-
-    assert.throws(() => api.configure(0, { baudrate: 115200, dataSize: 8, stopBits: 3 }), (err: unknown) => {
-
-      return (err instanceof ConnectionError) && (err.code === "INVALID_SERIAL_CONFIG");
-    });
+    assert.throws(() => api.configure(0, { baudrate: 115200, dataSize: 8, stopBits: 3 }), { code: "INVALID_SERIAL_CONFIG", constructor: ConnectionError });
   });
 });
 
@@ -273,10 +261,7 @@ describe("SerialProxyApi.getModemPins", () => {
     const handle = makeHost();
     const api = new SerialProxyApi(handle.host);
 
-    await assert.rejects(api.getModemPins(0, { timeoutMs: 10 }), (err: unknown) => {
-
-      return (err instanceof DOMException) && ((err.name === "AbortError") || (err.name === "TimeoutError"));
-    });
+    await assert.rejects(api.getModemPins(0, { timeoutMs: 10 }), { constructor: DOMException, name: /^(?:AbortError|TimeoutError)$/ });
   });
 
   test("rejects with the user signal's reason on caller abort", async () => {
@@ -289,7 +274,7 @@ describe("SerialProxyApi.getModemPins", () => {
 
     controller.abort(reason);
 
-    await assert.rejects(pending, reason);
+    await assert.rejects(pending, (err: unknown): boolean => err === reason);
   });
 
   test("rejects with ConnectionError(MODEM_PINS_IN_FLIGHT) on concurrent call for the same instance", async () => {
@@ -299,10 +284,7 @@ describe("SerialProxyApi.getModemPins", () => {
 
     const first = api.getModemPins(0, { timeoutMs: 1000 });
 
-    await assert.rejects(api.getModemPins(0, { timeoutMs: 1000 }), (err: unknown) => {
-
-      return (err instanceof ConnectionError) && (err.code === "MODEM_PINS_IN_FLIGHT");
-    });
+    await assert.rejects(api.getModemPins(0, { timeoutMs: 1000 }), { code: "MODEM_PINS_IN_FLIGHT", constructor: ConnectionError });
 
     api.acceptModemPinsResponse(encodeProtoFields([
 
@@ -437,10 +419,7 @@ describe("SerialProxyApi.flush", () => {
     const handle = makeHost();
     const api = new SerialProxyApi(handle.host);
 
-    await assert.rejects(api.flush(0, { timeoutMs: 10 }), (err: unknown) => {
-
-      return (err instanceof DOMException) && ((err.name === "AbortError") || (err.name === "TimeoutError"));
-    });
+    await assert.rejects(api.flush(0, { timeoutMs: 10 }), { constructor: DOMException, name: /^(?:AbortError|TimeoutError)$/ });
   });
 
   test("rejects with ConnectionError(FLUSH_IN_FLIGHT) on concurrent call for the same instance", async () => {
@@ -449,10 +428,7 @@ describe("SerialProxyApi.flush", () => {
     const api = new SerialProxyApi(handle.host);
     const first = api.flush(0, { timeoutMs: 1000 });
 
-    await assert.rejects(api.flush(0, { timeoutMs: 1000 }), (err: unknown) => {
-
-      return (err instanceof ConnectionError) && (err.code === "FLUSH_IN_FLIGHT");
-    });
+    await assert.rejects(api.flush(0, { timeoutMs: 1000 }), { code: "FLUSH_IN_FLIGHT", constructor: ConnectionError });
 
     api.acceptRequestResponse(flushResponsePayload(0, SerialProxyStatus.OK));
     await first;
@@ -581,7 +557,7 @@ describe("SerialProxyApi.data refcounted subscription", () => {
 
     controller.abort();
 
-    await assert.rejects(nextPromise);
+    await assert.rejects(nextPromise, (err: unknown): boolean => err === controller.signal.reason);
 
     assert.equal(api.subscriberCount(0), 0);
     assert.equal(handle.sent.length, 2);
@@ -703,8 +679,8 @@ describe("SerialProxyApi.clearConnectionState and reissueOnReconnect", () => {
 
     api.clearConnectionState();
 
-    await assert.rejects(f, (err: unknown) => (err instanceof DOMException) && (err.name === "AbortError"));
-    await assert.rejects(g, (err: unknown) => (err instanceof DOMException) && (err.name === "AbortError"));
+    await assert.rejects(f, { constructor: DOMException, name: "AbortError" });
+    await assert.rejects(g, { constructor: DOMException, name: "AbortError" });
   });
 
   test("clearConnectionState clears the wire cache but PRESERVES the subscriber ledger (count stays N)", () => {

@@ -300,7 +300,7 @@ describe("MockTransport abort handling", () => {
 
     controller.abort();
 
-    await assert.rejects(promise, "abort signal must reject the parked firstByte awaiter");
+    await assert.rejects(promise, (err: unknown): boolean => err === controller.signal.reason, "abort signal must reject the parked firstByte awaiter");
   });
 
   test("nextNoiseHandshakeFrame rejects when the abort signal fires", async () => {
@@ -311,7 +311,7 @@ describe("MockTransport abort handling", () => {
 
     controller.abort();
 
-    await assert.rejects(promise);
+    await assert.rejects(promise, (err: unknown): boolean => err === controller.signal.reason);
   });
 
   test("firstByte called with a pre-aborted signal rejects synchronously", async () => {

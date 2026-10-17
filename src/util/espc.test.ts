@@ -615,7 +615,11 @@ describe("parseIntOption - strict base-10 throw-on-invalid parse for CLI flags",
 
     assert.throws(() => parseIntOption("123abc", "--brightness"), (err: unknown): boolean => {
 
-      return (err instanceof CliError) && err.message.includes("--brightness") && err.message.includes("'123abc'");
+      assert.ok(err instanceof CliError, "Trailing garbage is a CliError.");
+      assert.match(err.message, /--brightness/);
+      assert.match(err.message, /'123abc'/);
+
+      return true;
     });
   });
 
@@ -644,9 +648,10 @@ describe("parseIntOption - strict base-10 throw-on-invalid parse for CLI flags",
 
     for(const value of [ "0", "13" ]) {
 
-      assert.throws(() => parseIntOption(value, "date month", { max: 12, min: 1 }), (err: unknown): boolean => {
+      assert.throws(() => parseIntOption(value, "date month", { max: 12, min: 1 }), {
 
-        return (err instanceof CliError) && (err.message === "date month must be between 1 and 12. Received: '" + value + "'.");
+        constructor: CliError,
+        message: "date month must be between 1 and 12. Received: '" + value + "'."
       });
     }
   });
@@ -667,7 +672,11 @@ describe("parseFloatOption - strict decimal throw-on-invalid parse for --duratio
     // rejects it as a usage error naming the flag. The watch, monitor, and record commands all route --duration through this strict parser.
     assert.throws(() => parseFloatOption("60s", "--duration"), (err: unknown): boolean => {
 
-      return (err instanceof CliError) && err.message.includes("--duration") && err.message.includes("'60s'");
+      assert.ok(err instanceof CliError, "A trailing unit is a CliError.");
+      assert.match(err.message, /--duration/);
+      assert.match(err.message, /'60s'/);
+
+      return true;
     });
   });
 
@@ -675,10 +684,7 @@ describe("parseFloatOption - strict decimal throw-on-invalid parse for --duratio
 
     // The bare global parseFloat yields NaN for "abc"; the strict parser throws a typed CliError instead, so the watch command surfaces the bad flag rather than
     // silently running with an ignored (NaN) duration.
-    assert.throws(() => parseFloatOption("abc", "--duration"), (err: unknown): boolean => {
-
-      return (err instanceof CliError) && err.message.includes("--duration");
-    });
+    assert.throws(() => parseFloatOption("abc", "--duration"), { constructor: CliError, message: /--duration/ });
   });
 });
 
@@ -693,10 +699,7 @@ describe("parseJsonOption - JSON.parse wrapped in CliError on SyntaxError", () =
 
   test("throws CliError naming the source on malformed input", () => {
 
-    assert.throws(() => parseJsonOption("{not json", "--reconnect"), (err: unknown): boolean => {
-
-      return (err instanceof CliError) && err.message.includes("--reconnect");
-    });
+    assert.throws(() => parseJsonOption("{not json", "--reconnect"), { constructor: CliError, message: /--reconnect/ });
   });
 
   test("the CliError replaces the raw SyntaxError so the user sees a usable hint", () => {
@@ -766,10 +769,7 @@ describe("parseInvocation - top-level command resolution branches", () => {
 
   test("unknown positional command throws CliError with the offending name", () => {
 
-    assert.throws(() => parseInvocation([ "fake-command", "--host", "h" ]), (err) => {
-
-      return (err instanceof CliError) && err.message.includes("Unknown command: fake-command");
-    });
+    assert.throws(() => parseInvocation([ "fake-command", "--host", "h" ]), { constructor: CliError, message: /Unknown command: fake-command/ });
   });
 
   test("recognizes every command listed in CLI_COMMANDS", () => {
@@ -861,10 +861,7 @@ describe("parseInvocation - global option flag matrix", () => {
 
     for(const port of [ "0", "65536" ]) {
 
-      assert.throws(() => parseInvocation([ "info", "--host", "h", "--port", port ]), (err: unknown): boolean => {
-
-        return (err instanceof CliError) && err.message.startsWith("--port must be between 1 and 65535.");
-      });
+      assert.throws(() => parseInvocation([ "info", "--host", "h", "--port", port ]), { constructor: CliError, message: /^--port must be between 1 and 65535\./ });
     }
 
     const edge = parseInvocation([ "info", "--host", "h", "--port", "65535" ]);
@@ -1000,7 +997,7 @@ describe("parseInvocation - command-scoped option flags", () => {
 
   test("strict mode rejects an unknown flag", () => {
 
-    assert.throws(() => parseInvocation([ "info", "--host", "h", "--brigthness", "1" ]));
+    assert.throws(() => parseInvocation([ "info", "--host", "h", "--brigthness", "1" ]), { code: "ERR_PARSE_ARGS_UNKNOWN_OPTION", constructor: TypeError });
   });
 });
 
@@ -1112,21 +1109,21 @@ describe("dispatch - routes Invocation kinds through the printer", () => {
     // real connect, which is why this test asserts the malformed-value path.
     const inv = parseInvocation([ "watch", "light-foo", "--host", "0.0.0.0", "--duration", "abc" ]);
 
-    await assert.rejects(dispatch(inv, makePrinter().printer), (err: unknown) => (err instanceof CliError) && err.message.includes("--duration"));
+    await assert.rejects(dispatch(inv, makePrinter().printer), { constructor: CliError, message: /--duration/ });
   });
 
   test("monitor validates --duration at the boundary and rejects before opening a connection", async () => {
 
     const inv = parseInvocation([ "monitor", "--host", "0.0.0.0", "--duration", "abc" ]);
 
-    await assert.rejects(dispatch(inv, makePrinter().printer), (err: unknown) => (err instanceof CliError) && err.message.includes("--duration"));
+    await assert.rejects(dispatch(inv, makePrinter().printer), { constructor: CliError, message: /--duration/ });
   });
 
   test("snapshot validates --wait at the boundary and rejects before opening a connection", async () => {
 
     const inv = parseInvocation([ "snapshot", "--host", "0.0.0.0", "--wait", "abc" ]);
 
-    await assert.rejects(dispatch(inv, makePrinter().printer), (err: unknown) => (err instanceof CliError) && err.message.includes("--wait"));
+    await assert.rejects(dispatch(inv, makePrinter().printer), { constructor: CliError, message: /--wait/ });
   });
 
   test("a malformed --psk rejects before createClient constructs or connects a client", async () => {
@@ -1137,7 +1134,7 @@ describe("dispatch - routes Invocation kinds through the printer", () => {
 
     const inv = parseInvocation([ "info", "--host", "127.0.0.1", "--port", String(listener.port), "--psk", SHORT_PSK ]);
 
-    await assert.rejects(dispatch(inv, makePrinter().printer), (err: unknown): boolean => (err instanceof CliError) && err.message.startsWith("--psk "));
+    await assert.rejects(dispatch(inv, makePrinter().printer), { constructor: CliError, message: /^--psk / });
     assert.equal(listener.connections(), 0, "a malformed key must fail before any connection attempt");
   });
 
@@ -1149,7 +1146,15 @@ describe("dispatch - routes Invocation kinds through the printer", () => {
 
     const inv = parseInvocation([ "info", "--host", "127.0.0.1", "--port", String(listener.port), "--psk", VALID_PSK ]);
 
-    await assert.rejects(dispatch(inv, makePrinter().printer), (err: unknown): boolean => !((err instanceof CliError) && err.message.startsWith("--psk ")));
+    await assert.rejects(dispatch(inv, makePrinter().printer), (err: unknown): boolean => {
+
+      if(err instanceof CliError) {
+
+        assert.doesNotMatch(err.message, /^--psk /);
+      }
+
+      return true;
+    });
     assert.ok(listener.connections() > 0, "a well-formed key must reach the connection attempt");
   });
 
@@ -1159,8 +1164,15 @@ describe("dispatch - routes Invocation kinds through the printer", () => {
     // connection attempt - which fails fast against the unreachable host. The rejection must therefore NOT be a --duration usage error.
     const inv = parseInvocation([ "monitor", "--host", "0.0.0.0", "--duration", "1.5" ]);
 
-    await assert.rejects(dispatch(inv, makePrinter().printer),
-      (err: unknown): boolean => !((err instanceof CliError) && err.message.includes("--duration")));
+    await assert.rejects(dispatch(inv, makePrinter().printer), (err: unknown): boolean => {
+
+      if(err instanceof CliError) {
+
+        assert.doesNotMatch(err.message, /--duration/);
+      }
+
+      return true;
+    });
   });
 
   test("control validates device-independent input for an id-form identifier before opening a connection", async () => {
@@ -1170,7 +1182,7 @@ describe("dispatch - routes Invocation kinds through the printer", () => {
     // connect+discovery round-trip.
     const inv = parseInvocation([ "control", "climate-thermostat", "badmode", "--host", "0.0.0.0" ]);
 
-    await assert.rejects(dispatch(inv, makePrinter().printer), (err: unknown): boolean => (err instanceof CliError) && err.message.includes("valid mode"));
+    await assert.rejects(dispatch(inv, makePrinter().printer), { constructor: CliError, message: /valid mode/ });
   });
 
   test("control defers validation for a numeric-key identifier - its type is unknown without the device", async () => {
@@ -1179,7 +1191,15 @@ describe("dispatch - routes Invocation kinds through the printer", () => {
     // the connection attempt, which fails fast (ECONNREFUSED) - the rejection must NOT be a boundary input error. This asserts the inherent id-form/key-form asymmetry.
     const inv = parseInvocation([ "control", "5", "badmode", "--host", "0.0.0.0" ]);
 
-    await assert.rejects(dispatch(inv, makePrinter().printer), (err: unknown): boolean => !((err instanceof CliError) && err.message.includes("valid mode")));
+    await assert.rejects(dispatch(inv, makePrinter().printer), (err: unknown): boolean => {
+
+      if(err instanceof CliError) {
+
+        assert.doesNotMatch(err.message, /valid mode/);
+      }
+
+      return true;
+    });
   });
 });
 
@@ -1902,8 +1922,14 @@ describe("executeControl - non-interactive control dispatch (every entity-type b
       commandOptions: { ...EMPTY_OPTIONS, rgb: "100,50" },
       entity: entityRecord("light", "lamp"),
       printer: rig.printer
-    }),
-    (err: unknown): boolean => (err instanceof CliError) && err.message.includes("--rgb") && err.message.includes("100,50"));
+    }), (err: unknown): boolean => {
+
+      assert.ok(err instanceof CliError, "A short --rgb value is a CliError.");
+      assert.match(err.message, /--rgb/);
+      assert.match(err.message, /100,50/);
+
+      return true;
+    });
     assert.equal(client.commands.length, 0, "no command is sent when input validation throws");
   });
 
@@ -1919,8 +1945,14 @@ describe("executeControl - non-interactive control dispatch (every entity-type b
       commandOptions: { ...EMPTY_OPTIONS, rgb: "50,abc,25" },
       entity: entityRecord("light", "lamp"),
       printer: rig.printer
-    }),
-    (err: unknown): boolean => (err instanceof CliError) && err.message.includes("--rgb") && err.message.includes("abc"));
+    }), (err: unknown): boolean => {
+
+      assert.ok(err instanceof CliError, "A non-numeric --rgb component is a CliError.");
+      assert.match(err.message, /--rgb/);
+      assert.match(err.message, /abc/);
+
+      return true;
+    });
     assert.equal(client.commands.length, 0, "no command is sent when a component fails strict-number validation");
   });
 
@@ -2204,9 +2236,17 @@ describe("executeControl - non-interactive control dispatch (every entity-type b
       commandOptions: EMPTY_OPTIONS,
       entity: entityRecord("climate", "x"),
       printer: rig.printer
-    }), (err) => {
+    }), (err): boolean => {
 
-      return (err instanceof CliError) && err.message.includes("Climate entity requires a valid mode") && [...CLIMATE_MODE_NAMES].every((m) => err.message.includes(m));
+      assert.ok(err instanceof CliError, "An unknown climate mode is a CliError.");
+      assert.match(err.message, /Climate entity requires a valid mode/);
+
+      for(const mode of CLIMATE_MODE_NAMES) {
+
+        assert.ok(err.message.includes(mode), "The message lists the mode " + mode + ".");
+      }
+
+      return true;
     });
   });
 
@@ -2273,9 +2313,13 @@ describe("executeControl - non-interactive control dispatch (every entity-type b
         commandOptions: EMPTY_OPTIONS,
         entity: entityRecord(type, "x"),
         printer: rig.printer
-      }), (err) => {
+      }), (err): boolean => {
 
-        return (err instanceof CliError) && err.message.includes(type) && err.message.includes("read-only");
+        assert.ok(err instanceof CliError, "A read-only entity type is a CliError.");
+        assert.ok(err.message.includes(type), "The message names the entity type " + type + ".");
+        assert.match(err.message, /read-only/);
+
+        return true;
       });
     }
 
@@ -2295,9 +2339,13 @@ describe("executeControl - non-interactive control dispatch (every entity-type b
       commandOptions: EMPTY_OPTIONS,
       entity: entityRecord("sensor", "x"),
       printer: rig.printer
-    }), (err) => {
+    }), (err): boolean => {
 
-      return (err instanceof CliError) && err.message.includes("sensor") && err.message.includes("read-only");
+      assert.ok(err instanceof CliError, "A read-only entity type is a CliError.");
+      assert.match(err.message, /sensor/);
+      assert.match(err.message, /read-only/);
+
+      return true;
     });
   });
 
@@ -2314,10 +2362,7 @@ describe("executeControl - non-interactive control dispatch (every entity-type b
       commandOptions: EMPTY_OPTIONS,
       entity: entityRecord("bogus_type", "x"),
       printer: rig.printer
-    }), (err) => {
-
-      return (err instanceof CliError) && err.message.includes("Unknown entity type 'bogus_type'");
-    });
+    }), { constructor: CliError, message: /Unknown entity type 'bogus_type'/ });
   });
 });
 
@@ -2806,9 +2851,10 @@ describe("buildControlCommand - schema-exhaustive control coverage", () => {
     // The integer and timestamp forms reach the range check along different paths, so each form is probed just past both ends of the domain and on both ends inside it.
     for(const token of [ "-1", "4294967296", "1969-12-31T23:59:59Z", "2106-02-07T06:28:16Z" ]) {
 
-      assert.throws(() => buildControlCommand(entityRecord("datetime", "clock"), [token], EMPTY_OPTIONS), (err: unknown): boolean => {
+      assert.throws(() => buildControlCommand(entityRecord("datetime", "clock"), [token], EMPTY_OPTIONS), {
 
-        return (err instanceof CliError) && (err.message === "datetime epoch must be between 0 and 4294967295. Received: '" + token + "'.");
+        constructor: CliError,
+        message: "datetime epoch must be between 0 and 4294967295. Received: '" + token + "'."
       }, "datetime must refuse the out-of-domain token '" + token + "' with the range message");
     }
 
@@ -2827,9 +2873,10 @@ describe("buildControlCommand - schema-exhaustive control coverage", () => {
 
   test("date and time components outside the calendar and the clock are usage errors naming the component", () => {
 
-    assert.throws(() => buildControlCommand(entityRecord("date", "alarm"), ["2026-13-01"], EMPTY_OPTIONS), (err: unknown): boolean => {
+    assert.throws(() => buildControlCommand(entityRecord("date", "alarm"), ["2026-13-01"], EMPTY_OPTIONS), {
 
-      return (err instanceof CliError) && (err.message === "date month must be between 1 and 12. Received: '13'.");
+      constructor: CliError,
+      message: "date month must be between 1 and 12. Received: '13'."
     });
     assert.throws(() => buildControlCommand(entityRecord("date", "alarm"), ["2026-05-32"], EMPTY_OPTIONS), /date day must be between 1 and 31\./);
     assert.throws(() => buildControlCommand(entityRecord("date", "alarm"), ["10000-05-23"], EMPTY_OPTIONS), /date year must be between 0 and 9999\./);
@@ -2850,10 +2897,8 @@ describe("buildControlCommand - schema-exhaustive control coverage", () => {
 
     for(const [ token, message ] of outOfMonth) {
 
-      assert.throws(() => buildControlCommand(entityRecord("date", "alarm"), [token], EMPTY_OPTIONS), (err: unknown): boolean => {
-
-        return (err instanceof CliError) && (err.message === message);
-      }, "date must refuse the out-of-month token '" + token + "' with the range message");
+      assert.throws(() => buildControlCommand(entityRecord("date", "alarm"), [token], EMPTY_OPTIONS), { constructor: CliError, message },
+        "date must refuse the out-of-month token '" + token + "' with the range message");
     }
 
     assert.deepEqual(buildControlCommand(entityRecord("date", "alarm"), ["2028-02-29"], EMPTY_OPTIONS).options, { day: 29, month: 2, year: 2028 });
@@ -2868,13 +2913,15 @@ describe("buildControlCommand - schema-exhaustive control coverage", () => {
   test("date: a token with several bad components reports the leftmost, parsing year, then month, then day", () => {
 
     // The day's bound comes from the parsed year and month, so they parse first and a bad month or year is reported ahead of a bad day.
-    assert.throws(() => buildControlCommand(entityRecord("date", "alarm"), ["2026-13-32"], EMPTY_OPTIONS), (err: unknown): boolean => {
+    assert.throws(() => buildControlCommand(entityRecord("date", "alarm"), ["2026-13-32"], EMPTY_OPTIONS), {
 
-      return (err instanceof CliError) && (err.message === "date month must be between 1 and 12. Received: '13'.");
+      constructor: CliError,
+      message: "date month must be between 1 and 12. Received: '13'."
     });
-    assert.throws(() => buildControlCommand(entityRecord("date", "alarm"), ["10000-01-32"], EMPTY_OPTIONS), (err: unknown): boolean => {
+    assert.throws(() => buildControlCommand(entityRecord("date", "alarm"), ["10000-01-32"], EMPTY_OPTIONS), {
 
-      return (err instanceof CliError) && (err.message === "date year must be between 0 and 9999. Received: '10000'.");
+      constructor: CliError,
+      message: "date year must be between 0 and 9999. Received: '10000'."
     });
   });
 
@@ -3067,7 +3114,7 @@ describe("Negative rules - structural guarantees", () => {
       commandOptions: EMPTY_OPTIONS,
       entity: entityRecord("sensor", "temp"),
       printer: rig.printer
-    }));
+    }), { constructor: CliError, message: /read-only/ });
     assert.equal(client.commands.length, 0);
   });
 
@@ -3543,10 +3590,7 @@ describe("dispatch - command-kind path (createClient-free handlers)", () => {
 
     const { printer } = makePrinter();
 
-    await assert.rejects(dispatch(emptyInvocation("record"), printer), (err) => {
-
-      return (err instanceof CliError) && err.message.includes("--host option is required");
-    });
+    await assert.rejects(dispatch(emptyInvocation("record"), printer), { constructor: CliError, message: /--host option is required/ });
   });
 
   test("record with --host but no output path rejects with the usage CliError", async () => {
@@ -3554,10 +3598,7 @@ describe("dispatch - command-kind path (createClient-free handlers)", () => {
     const { printer } = makePrinter();
 
     // Host present, no positional output path: the validation branch fires before any connection is attempted.
-    await assert.rejects(dispatch(emptyInvocation("record", [], "192.168.1.1"), printer), (err) => {
-
-      return (err instanceof CliError) && err.message.includes("record requires an output file path");
-    });
+    await assert.rejects(dispatch(emptyInvocation("record", [], "192.168.1.1"), printer), { constructor: CliError, message: /record requires an output file path/ });
   });
 
   test("record with a malformed --psk rejects before the capture recorder connects", async () => {
@@ -3572,7 +3613,7 @@ describe("dispatch - command-kind path (createClient-free handlers)", () => {
     const outputPath = join(tmpdir(), "espc-psk-boundary.bin");
     const inv = parseInvocation([ "record", outputPath, "--host", "127.0.0.1", "--port", String(listener.port), "--psk", SHORT_PSK ]);
 
-    await assert.rejects(dispatch(inv, makePrinter().printer), (err: unknown): boolean => (err instanceof CliError) && err.message.startsWith("--psk "));
+    await assert.rejects(dispatch(inv, makePrinter().printer), { constructor: CliError, message: /^--psk / });
     assert.equal(listener.connections(), 0, "a malformed key must fail before the recorder opens a connection");
   });
 
@@ -3580,20 +3621,14 @@ describe("dispatch - command-kind path (createClient-free handlers)", () => {
 
     const { printer } = makePrinter();
 
-    await assert.rejects(dispatch(emptyInvocation("replay"), printer), (err) => {
-
-      return (err instanceof CliError) && err.message.includes("replay requires a path");
-    });
+    await assert.rejects(dispatch(emptyInvocation("replay"), printer), { constructor: CliError, message: /replay requires a path/ });
   });
 
   test("replay with a non-existent path rejects with the not-found CliError", async () => {
 
     const { printer } = makePrinter();
 
-    await assert.rejects(dispatch(emptyInvocation("replay", ["/nonexistent/path.bin"]), printer), (err) => {
-
-      return (err instanceof CliError) && err.message.includes("Capture file not found");
-    });
+    await assert.rejects(dispatch(emptyInvocation("replay", ["/nonexistent/path.bin"]), printer), { constructor: CliError, message: /Capture file not found/ });
   });
 
   test("replay with the basic-discovery fixture renders the metadata block", async () => {
@@ -3639,10 +3674,7 @@ describe("dispatch - command-kind path (createClient-free handlers)", () => {
 
       const { printer } = makePrinter();
 
-      await assert.rejects(dispatch(emptyInvocation("replay", [binPath]), printer), (err) => {
-
-        return (err instanceof CliError) && err.message.includes("Capture metadata file not found");
-      });
+      await assert.rejects(dispatch(emptyInvocation("replay", [binPath]), printer), { constructor: CliError, message: /Capture metadata file not found/ });
     } finally {
 
       rmSync(dir, { force: true, recursive: true });
@@ -3677,9 +3709,6 @@ describe("Negative - isCommandName guards prototype-chain keys", () => {
   test("parseInvocation rejects __proto__ as an unknown command (no TypeError)", () => {
 
     // Object.hasOwn correctly rejects prototype-chain keys like __proto__ as unknown commands, so the dispatcher never crashes invoking .handler on a non-spec value.
-    assert.throws(() => parseInvocation([ "__proto__", "--host", "h" ]), (err) => {
-
-      return (err instanceof CliError) && err.message.includes("Unknown command: __proto__");
-    });
+    assert.throws(() => parseInvocation([ "__proto__", "--host", "h" ]), { constructor: CliError, message: /Unknown command: __proto__/ });
   });
 });

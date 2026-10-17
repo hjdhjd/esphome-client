@@ -9,8 +9,8 @@ import type {
   MediaPlayerEvent, NumberEvent, SelectEvent, SensorEvent, SirenEvent, SwitchEvent, TextEvent, TextSensorEvent, TimeEvent, UpdateEvent, ValveEvent, WaterHeaterEvent
 } from "./schemas/index.ts";
 import {
-  CameraStreamClosedError, ConnectionClosedByPeerError, ConnectionError, EncryptionKeyInvalidError, EspHomeError, HeartbeatStalledError, NegotiationFailedError,
-  NoiseHandshakeError, PeerClosedDuringNoiseError, PermanentError
+  CameraStreamClosedError, ConfigurationError, ConnectionClosedByPeerError, ConnectionError, EncryptionKeyInvalidError, EspHomeError, HeartbeatStalledError,
+  NegotiationFailedError, NoiseHandshakeError, PeerClosedDuringNoiseError, PermanentError
 } from "./errors.ts";
 import { ENTITY_SCHEMAS, aliasOf, extending } from "./schemas/index.ts";
 import { EspHomeClient, openEspHomeClient } from "./esphome-client.ts";
@@ -771,7 +771,14 @@ describe("EspHomeClient.connect - error and abort paths", () => {
 
     controller.abort();
 
-    await assert.rejects(client.connect({ signal: controller.signal }));
+    await assert.rejects(client.connect({ signal: controller.signal }), (err: unknown): boolean => {
+
+      assert.ok(err instanceof ConnectionError, "A pre-aborted connect rejects with a ConnectionError.");
+      assert.equal(err.code, "CONNECT_FAILED");
+      assert.equal(err.cause, controller.signal.reason);
+
+      return true;
+    });
   });
 
   test("connect honors a mid-flight AbortSignal", async () => {
@@ -784,7 +791,14 @@ describe("EspHomeClient.connect - error and abort paths", () => {
 
     setImmediate((): void => controller.abort());
 
-    await assert.rejects(connectPromise, "abort during connect must reject");
+    await assert.rejects(connectPromise, (err: unknown): boolean => {
+
+      assert.ok(err instanceof ConnectionError, "A mid-flight abort fails the connect with a ConnectionError.");
+      assert.equal(err.code, "CONNECT_FAILED");
+      assert.equal(err.cause, controller.signal.reason);
+
+      return true;
+    }, "abort during connect must reject");
   });
 
   test("disconnect() while the handshake is parked rejects the pending connect() with a ConnectionError and leaves no transport", async () => {
@@ -1067,7 +1081,7 @@ describe("EspHomeClient.connect - error and abort paths", () => {
     await delay(10);
     transport.pushInbound(MessageType.HELLO_RESPONSE, HELLO_RESPONSE_PROTOCOL_2_0);
 
-    await assert.rejects(connectPromise, (err: unknown) => err instanceof NegotiationFailedError);
+    await assert.rejects(connectPromise, NegotiationFailedError);
 
     // Wait well past the reconnect initialDelayMs to give a hypothetical retry plenty of time to fire. With the PermanentError filter in place, no second HELLO_REQUEST
     // is emitted and onAttempt is never called.
@@ -1125,7 +1139,7 @@ describe("EspHomeClient.connect - error and abort paths", () => {
     await delay(10);
     transport.pushInbound(MessageType.HELLO_RESPONSE, HELLO_RESPONSE_PROTOCOL_2_0);
 
-    await assert.rejects(connectPromise);
+    await assert.rejects(connectPromise, { code: "API_MAJOR_OUT_OF_RANGE", constructor: NegotiationFailedError });
 
     assert.ok(reasons.length > 0, "connect failure must emit a disconnect event with the reason");
 
@@ -1143,7 +1157,15 @@ describe("EspHomeClient.connect - error and abort paths", () => {
     // Don't push HELLO_RESPONSE; let the handshake-phase timer fire.
     const connectPromise = client.connect();
 
-    await assert.rejects(connectPromise);
+    await assert.rejects(connectPromise, (err: unknown): boolean => {
+
+      assert.ok(err instanceof ConnectionError, "A handshake timeout fails the connect with a ConnectionError.");
+      assert.equal(err.code, "CONNECT_FAILED");
+      assert.ok(err.cause instanceof DOMException, "Its cause is the handshake timeout's DOMException.");
+      assert.equal(err.cause.name, "TimeoutError");
+
+      return true;
+    });
     client.disconnect();
   });
 
@@ -2238,7 +2260,7 @@ describe("EspHomeClient.disconnect / disconnectAsync / dispose", () => {
 
     // disconnectInternal now calls each participant's clearConnectionState, which rejects the parked Correlator with a typed AbortError immediately. Without the fix the
     // await would linger to its 2000ms timeout; the elapsed-time bound below is what proves the disconnect - not the timeout - settled it.
-    await assert.rejects(pending, (err: unknown): boolean => (err instanceof DOMException) && (err.name === "AbortError"));
+    await assert.rejects(pending, { constructor: DOMException, name: "AbortError" });
 
     const elapsed = Date.now() - disconnectedAt;
 
@@ -2670,7 +2692,14 @@ describe("EspHomeClient.on / once / stream subscription rails", () => {
     const oncePromise = client.once("connect", { signal: controller.signal });
 
     setImmediate((): void => controller.abort());
-    await assert.rejects(oncePromise);
+    await assert.rejects(oncePromise, (err: unknown): boolean => {
+
+      assert.ok(err instanceof Error, "An aborted once() rejects with an Error.");
+      assert.equal(err.name, "AbortError");
+      assert.equal(err.cause, controller.signal.reason);
+
+      return true;
+    });
   });
 
   test("subscriptions registered before connect fire after connect (subscribe-before-connect contract)", async () => {
@@ -3804,7 +3833,7 @@ describe("EspHomeClient.command<T> error handling", () => {
     const awaitPromise = client.commandAndAwait(entityId("switch", "lamp"), { state: true }, { signal: controller.signal });
 
     setImmediate((): void => controller.abort());
-    await assert.rejects(awaitPromise);
+    await assert.rejects(awaitPromise, (err: unknown): boolean => err === controller.signal.reason);
 
     client.disconnect();
   });
@@ -3816,7 +3845,8 @@ describe("EspHomeClient.command<T> error handling", () => {
 
     await driveConnect(transport, client, { signal: AbortSignal.timeout(2000) });
 
-    await assert.rejects(client.commandAndAwait(entityId("switch", "missing"), { state: true }, { signal: AbortSignal.timeout(500) }));
+    await assert.rejects(client.commandAndAwait(entityId("switch", "missing"), { state: true }, { signal: AbortSignal.timeout(500) }),
+      { code: "UNKNOWN_ENTITY_ID", constructor: ConfigurationError });
     client.disconnect();
   });
 });
@@ -4367,7 +4397,7 @@ describe("EspHomeClient.setNoiseEncryptionKey", () => {
 
     const psk = Buffer.alloc(32, 0x55).toString("base64");
 
-    await assert.rejects(client.setNoiseEncryptionKey(psk, { signal: controller.signal }));
+    await assert.rejects(client.setNoiseEncryptionKey(psk, { signal: controller.signal }), (err: unknown): boolean => err === controller.signal.reason);
     client.disconnect();
   });
 
@@ -4538,7 +4568,7 @@ describe("openEspHomeClient factory", () => {
     // API major 2 -> NegotiationFailedError, which is a PermanentError.
     transport.pushInbound(MessageType.HELLO_RESPONSE, HELLO_RESPONSE_PROTOCOL_2_0);
 
-    await assert.rejects(opener, (err: unknown) => err instanceof PermanentError);
+    await assert.rejects(opener, PermanentError);
   });
 
   test("openEspHomeClient honors a pre-aborted signal", async (t) => {
@@ -4573,7 +4603,15 @@ describe("openEspHomeClient factory", () => {
     });
 
     // Don't push anything - both attempts will fail with handshake timeout. After maxConstructionRetries+1 attempts, the factory rejects.
-    await assert.rejects(opener);
+    await assert.rejects(opener, (err: unknown): boolean => {
+
+      assert.ok(err instanceof ConnectionError, "The last attempt's handshake timeout fails the open with a ConnectionError.");
+      assert.equal(err.code, "CONNECT_FAILED");
+      assert.ok(err.cause instanceof DOMException, "Its cause is the handshake timeout's DOMException.");
+      assert.equal(err.cause.name, "TimeoutError");
+
+      return true;
+    });
   });
 
   /* The latency tests below time the interval from abort to rejection with `process.hrtime.bigint()` against real timers rather than a mocked clock. The timer the
@@ -5399,8 +5437,9 @@ describe("EspHomeClient reconnect loop end-to-end", () => {
     await assert.rejects(pending, (err: unknown): boolean => {
 
       rejection = err;
+      assert.ok(err instanceof NegotiationFailedError, "The superseding connect rejects with NegotiationFailedError.");
 
-      return err instanceof NegotiationFailedError;
+      return true;
     });
 
     // The superseded loop left health reconnecting and no loop is running any more, so the failed connect releases that state with its own typed cause.

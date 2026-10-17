@@ -592,7 +592,7 @@ describe("decodeEntityFromSchema", () => {
 
     assert.throws(
       () => decodeEntityFromSchema({ entityType: "media_player", fields, log: silentLog(), schema: mediaPlayerSchema }),
-      (err: unknown) => (err instanceof ConfigurationError) && (err as Error).message.includes("declares repeatedMessageFields")
+      { constructor: ConfigurationError, message: /declares repeatedMessageFields/ }
     );
   });
 

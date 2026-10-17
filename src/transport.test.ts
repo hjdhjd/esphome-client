@@ -485,7 +485,7 @@ describe("Transport.open - typed error paths", () => {
 
     mock.simulateError(cause);
 
-    await assert.rejects(promise);
+    await assert.rejects(promise, { code: "ECONNREFUSED", constructor: ConnectionRefusedError });
     assert.equal(mock.destroyed, true);
   });
 
@@ -520,7 +520,7 @@ describe("Transport.open - abort signal paths", () => {
     const mock = new MockSocket();
     const promise = Transport.open(buildOpenOptions(mock, { signal: ac.signal }));
 
-    await assert.rejects(promise);
+    await assert.rejects(promise, (err: unknown): boolean => err === ac.signal.reason);
   });
 
   test("rejects and destroys the socket when the signal aborts after construction but before connect", async () => {
@@ -531,7 +531,7 @@ describe("Transport.open - abort signal paths", () => {
 
     ac.abort();
 
-    await assert.rejects(promise);
+    await assert.rejects(promise, (err: unknown): boolean => err === ac.signal.reason);
     assert.equal(mock.destroyed, true);
   });
 
@@ -714,11 +714,13 @@ describe("Transport.send - plaintext framing", () => {
 
     mock.failNextWrite(new Error("EIO"));
 
-    await assert.rejects(transport.send(MessageType.PING_REQUEST, Buffer.alloc(0)), (err) => {
+    await assert.rejects(transport.send(MessageType.PING_REQUEST, Buffer.alloc(0)), (err): boolean => {
 
       writeError = err;
+      assert.ok(err instanceof ConnectionError, "The failed write rejects with a ConnectionError.");
+      assert.equal(err.code, "SOCKET_WRITE_FAILED");
 
-      return (err instanceof ConnectionError) && (err.code === "SOCKET_WRITE_FAILED");
+      return true;
     });
 
     // The failed write tore the socket down and detached the transport's listeners with it, so this listener stands in to keep the late error from surfacing as an
@@ -957,7 +959,7 @@ describe("Transport - phase transitions", () => {
     assert.equal(transport.isEncrypted, false);
 
     // Indirect check: a send during noise-handshake throws BAD_TRANSPORT_PHASE.
-    await assert.rejects(transport.send(MessageType.PING_REQUEST, Buffer.alloc(0)));
+    await assert.rejects(transport.send(MessageType.PING_REQUEST, Buffer.alloc(0)), { code: "BAD_TRANSPORT_PHASE", constructor: ProtocolError });
 
     transport[Symbol.dispose]();
   });
@@ -1030,7 +1032,7 @@ describe("Transport - phase transitions", () => {
     transport.enterNoiseHandshake();
     transport.installCipher(buildStubCipherPair());
 
-    assert.throws(() => transport.installCipher(buildStubCipherPair()), (err: unknown) => err instanceof ProtocolError);
+    assert.throws(() => transport.installCipher(buildStubCipherPair()), ProtocolError);
 
     transport[Symbol.dispose]();
   });
@@ -1180,7 +1182,7 @@ describe("Transport.firstByte", () => {
     mock.pushData(Buffer.from([ 0x55, 0x55, 0x55 ]));
 
     // Subsequent firstByte sees the terminationError and rethrows.
-    await assert.rejects(transport.firstByte(), (err) => err instanceof ProtocolError);
+    await assert.rejects(transport.firstByte(), ProtocolError);
   });
 
   test("throws ConnectionClosedByPeerError TRANSPORT_CLOSED when called after dispose rather than hanging", async () => {
@@ -1222,7 +1224,7 @@ describe("Transport.firstByte", () => {
 
     ac.abort();
 
-    await assert.rejects(promise);
+    await assert.rejects(promise, (err: unknown): boolean => err === ac.signal.reason);
 
     transport[Symbol.dispose]();
   });
@@ -1333,7 +1335,7 @@ describe("Transport.nextNoiseHandshakeFrame", () => {
 
     ac.abort();
 
-    await assert.rejects(promise);
+    await assert.rejects(promise, (err: unknown): boolean => err === ac.signal.reason);
 
     transport[Symbol.dispose]();
   });
@@ -1348,7 +1350,7 @@ describe("Transport.nextNoiseHandshakeFrame", () => {
     // Push a 3-byte chunk starting with the plaintext indicator during noise-handshake to trip PeerClosedDuringNoiseError. The drain needs at least 3 bytes.
     mock.pushData(Buffer.from([ 0x00, 0x00, 0x07 ]));
 
-    await assert.rejects(transport.nextNoiseHandshakeFrame(), (err) => err instanceof PeerClosedDuringNoiseError);
+    await assert.rejects(transport.nextNoiseHandshakeFrame(), PeerClosedDuringNoiseError);
   });
 });
 
@@ -1415,7 +1417,7 @@ describe("Transport - async iteration over inbound messages", () => {
     // Force a non-graceful fail by triggering BAD_PLAINTEXT_INDICATOR.
     mock.pushData(Buffer.from([ 0x55, 0x55, 0x55 ]));
 
-    await assert.rejects(next, (err) => err instanceof ProtocolError);
+    await assert.rejects(next, ProtocolError);
   });
 
   test("rejects a fresh next() call after the transport has failed by rethrowing the stored termination error", async () => {
@@ -1713,7 +1715,7 @@ describe("Transport - plaintext inbound parsing", () => {
     malformed[0] = 0x00;
     mock.pushData(malformed);
 
-    await assert.rejects(next, (err) => err instanceof MalformedVarintError);
+    await assert.rejects(next, MalformedVarintError);
   });
 
   test("fails with BufferOverflowError when the receive buffer exceeds maxRecvBufferBytes", async () => {
@@ -1934,7 +1936,7 @@ describe("Transport - noise-handshake inbound parsing", () => {
     // size-be16 = 9000 -> exceeds the 8-byte cap.
     mock.pushData(Buffer.from([ 0x01, 0x23, 0x28 ]));
 
-    await assert.rejects(transport.nextNoiseHandshakeFrame(), (err) => err instanceof FrameTooLargeError);
+    await assert.rejects(transport.nextNoiseHandshakeFrame(), FrameTooLargeError);
   });
 });
 
@@ -2392,8 +2394,8 @@ describe("Transport - failure injection (fail path is internal but observable)",
 
     mock.pushData(Buffer.alloc(32, 0x00));
 
-    await assert.rejects(messageWaiter, (err) => err instanceof BufferOverflowError);
-    await assert.rejects(firstByteWaiter, (err) => err instanceof BufferOverflowError);
+    await assert.rejects(messageWaiter, BufferOverflowError);
+    await assert.rejects(firstByteWaiter, BufferOverflowError);
   });
 
   test("after fail(), a subsequent send rejects rather than hanging", async () => {
@@ -2403,7 +2405,7 @@ describe("Transport - failure injection (fail path is internal but observable)",
 
     mock.pushData(Buffer.from([ 0x55, 0x55, 0x55 ]));
 
-    await assert.rejects(transport.send(MessageType.PING_REQUEST, Buffer.alloc(0)), (err) => err instanceof ConnectionClosedByPeerError);
+    await assert.rejects(transport.send(MessageType.PING_REQUEST, Buffer.alloc(0)), ConnectionClosedByPeerError);
   });
 
   test("fail() is safe to call more than once - the first error is preserved when subsequent fail-trips occur", async () => {
@@ -2657,7 +2659,7 @@ describe("Transport - negative guarantees (X does NOT happen when Z)", () => {
 
     ac.abort();
 
-    await assert.rejects(promise);
+    await assert.rejects(promise, (err: unknown): boolean => err === ac.signal.reason);
     assert.equal(mock.destroyed, true);
   });
 
@@ -2668,7 +2670,7 @@ describe("Transport - negative guarantees (X does NOT happen when Z)", () => {
 
     mock.pushData(Buffer.from([ 0x55, 0x55, 0x55 ]));
 
-    await assert.rejects(transport.send(MessageType.PING_REQUEST, Buffer.alloc(0)));
+    await assert.rejects(transport.send(MessageType.PING_REQUEST, Buffer.alloc(0)), { code: "TRANSPORT_CLOSED", constructor: ConnectionClosedByPeerError });
   });
 
   test("the iterator does NOT yield more frames after dispose", async () => {
@@ -2697,7 +2699,7 @@ describe("Transport - negative guarantees (X does NOT happen when Z)", () => {
 
     mock.simulateClose();
 
-    await assert.rejects(transport.send(MessageType.PING_REQUEST, Buffer.alloc(0)));
+    await assert.rejects(transport.send(MessageType.PING_REQUEST, Buffer.alloc(0)), { code: "TRANSPORT_CLOSED", constructor: ConnectionClosedByPeerError });
   });
 
   test("a fail() trip does NOT double-reject the same parked awaiter (the first reject wins)", async () => {
@@ -2709,7 +2711,7 @@ describe("Transport - negative guarantees (X does NOT happen when Z)", () => {
 
     mock.pushData(Buffer.from([ 0x55, 0x55, 0x55 ]));
 
-    await assert.rejects(next, (err) => err instanceof ProtocolError);
+    await assert.rejects(next, ProtocolError);
 
     // A second close attempt must not surface as another rejection on `next` (already settled).
     mock.simulateClose();
@@ -2738,7 +2740,7 @@ describe("Transport - negative guarantees (X does NOT happen when Z)", () => {
     const mock = new MockSocket();
     const transport = await openTransport(mock);
 
-    assert.throws(() => transport.installCipher(buildStubCipherPair()));
+    assert.throws(() => transport.installCipher(buildStubCipherPair()), { code: "BAD_TRANSPORT_PHASE", constructor: ProtocolError });
     assert.equal(transport.isEncrypted, false);
 
     transport[Symbol.dispose]();

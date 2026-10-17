@@ -289,7 +289,7 @@ describe("BluetoothProxyApi.advertisements refcounted subscription", () => {
 
     controller.abort();
 
-    await assert.rejects(nextPromise);
+    await assert.rejects(nextPromise, (err: unknown): boolean => err === controller.signal.reason);
 
     assert.equal(api.subscriberCount(), 0);
     assert.equal(handle.sent.length, 2);
@@ -989,7 +989,7 @@ describe("BluetoothProxyApi.connect", () => {
 
     api.acceptDeviceConnectionResponse(encodeDeviceConnection(address, false, 0, 7));
 
-    await assert.rejects(connectPromise, (error: unknown): boolean => (error instanceof ConnectionError) && (error.code === "GATT_CONNECT_FAILED"));
+    await assert.rejects(connectPromise, { code: "GATT_CONNECT_FAILED", constructor: ConnectionError });
     assert.equal(api.isConnected(address), false);
   });
 
@@ -1004,7 +1004,7 @@ describe("BluetoothProxyApi.connect", () => {
     // GATT_CONNECT_FAILED error rather than leave the connect await to expire on its lifecycle timeout.
     api.acceptDeviceConnectionResponse(encodeDeviceConnection(address, false, 0, 0));
 
-    await assert.rejects(connectPromise, (error: unknown): boolean => (error instanceof ConnectionError) && (error.code === "GATT_CONNECT_FAILED"));
+    await assert.rejects(connectPromise, { code: "GATT_CONNECT_FAILED", constructor: ConnectionError });
     assert.equal(api.isConnected(address), false);
   });
 
@@ -1015,7 +1015,7 @@ describe("BluetoothProxyApi.connect", () => {
     const address = 0x33n;
     const inflight = api.connect(address);
 
-    await assert.rejects(api.connect(address), (error: unknown): boolean => (error instanceof ConnectionError) && (error.code === "GATT_CONNECT_IN_FLIGHT"));
+    await assert.rejects(api.connect(address), { code: "GATT_CONNECT_IN_FLIGHT", constructor: ConnectionError });
 
     api.acceptDeviceConnectionResponse(encodeDeviceConnection(address, true));
     await inflight;
@@ -1116,7 +1116,7 @@ describe("BluetoothProxyApi.pair / unpair / clearCache", () => {
 
     api.acceptPairingResponse(encodeAddressFlagError(address, false, 3));
 
-    await assert.rejects(pairPromise, (error: unknown): boolean => (error instanceof ConnectionError) && (error.code === "GATT_PAIR_FAILED"));
+    await assert.rejects(pairPromise, { code: "GATT_PAIR_FAILED", constructor: ConnectionError });
   });
 
   test("unpair resolves on success=true with error=0", async () => {
@@ -1190,8 +1190,7 @@ describe("BluetoothProxyApi.getServices", () => {
     const address = 0xccn;
     const first = api.getServices(address);
 
-    await assert.rejects(api.getServices(address),
-      (error: unknown): boolean => (error instanceof ConnectionError) && (error.code === "GATT_GET_SERVICES_IN_FLIGHT"));
+    await assert.rejects(api.getServices(address), { code: "GATT_GET_SERVICES_IN_FLIGHT", constructor: ConnectionError });
 
     api.acceptGetServicesDoneResponse(encodeProtoFields([{ fieldNumber: 1, value: address, wireType: WireType.VARINT }]));
     await first;
@@ -1209,7 +1208,7 @@ describe("BluetoothProxyApi.getServices", () => {
 
     controller.abort();
 
-    await assert.rejects(promise);
+    await assert.rejects(promise, (err: unknown): boolean => err === controller.signal.reason);
 
     // After abort the accumulator must be gone, so a fresh getServices call works.
     const fresh = api.getServices(address);
@@ -1365,8 +1364,7 @@ describe("BluetoothProxyApi.readCharacteristic / readDescriptor", () => {
     const api = new BluetoothProxyApi(handle.host);
     const first = api.readCharacteristic(0x102n, 0x2c);
 
-    await assert.rejects(api.readCharacteristic(0x102n, 0x2c),
-      (error: unknown): boolean => (error instanceof ConnectionError) && (error.code === "GATT_READ_IN_FLIGHT"));
+    await assert.rejects(api.readCharacteristic(0x102n, 0x2c), { code: "GATT_READ_IN_FLIGHT", constructor: ConnectionError });
 
     api.acceptGattReadResponse(encodeReadOrNotify(0x102n, 0x2c, Buffer.alloc(0)));
     await first;
@@ -1380,7 +1378,7 @@ describe("BluetoothProxyApi.readCharacteristic / readDescriptor", () => {
 
     api.acceptGattErrorResponse(encodeGattError(0x103n, 0x2d, 5));
 
-    await assert.rejects(promise, (error: unknown): boolean => (error instanceof ConnectionError) && (error.code === "GATT_ERROR"));
+    await assert.rejects(promise, { code: "GATT_ERROR", constructor: ConnectionError });
   });
 });
 
@@ -1438,7 +1436,7 @@ describe("BluetoothProxyApi.writeCharacteristic / writeDescriptor", () => {
 
     api.acceptGattErrorResponse(encodeGattError(0x113n, 0x2c, 9));
 
-    await assert.rejects(promise, (error: unknown): boolean => (error instanceof ConnectionError) && (error.code === "GATT_ERROR"));
+    await assert.rejects(promise, { code: "GATT_ERROR", constructor: ConnectionError });
   });
 });
 
@@ -1538,8 +1536,7 @@ describe("BluetoothProxyApi.setNotify and notify()", () => {
     const api = new BluetoothProxyApi(handle.host);
     const first = api.setNotify(0x133n, 0x2a, true);
 
-    await assert.rejects(api.setNotify(0x133n, 0x2a, false),
-      (error: unknown): boolean => (error instanceof ConnectionError) && (error.code === "GATT_NOTIFY_SETUP_IN_FLIGHT"));
+    await assert.rejects(api.setNotify(0x133n, 0x2a, false), { code: "GATT_NOTIFY_SETUP_IN_FLIGHT", constructor: ConnectionError });
 
     api.acceptGattNotifyResponse(encodeAddressHandle(0x133n, 0x2a));
     await first;
@@ -1553,7 +1550,7 @@ describe("BluetoothProxyApi.setNotify and notify()", () => {
 
     api.acceptGattErrorResponse(encodeGattError(0x134n, 0x2a, 11));
 
-    await assert.rejects(promise, (error: unknown): boolean => (error instanceof ConnectionError) && (error.code === "GATT_ERROR"));
+    await assert.rejects(promise, { code: "GATT_ERROR", constructor: ConnectionError });
   });
 });
 
@@ -1595,8 +1592,7 @@ describe("BluetoothProxyApi.setConnectionParams", () => {
       { fieldNumber: 2, value: 4, wireType: WireType.VARINT }
     ]));
 
-    await assert.rejects(promise,
-      (error: unknown): boolean => (error instanceof ConnectionError) && (error.code === "GATT_SET_CONNECTION_PARAMS_FAILED"));
+    await assert.rejects(promise, { code: "GATT_SET_CONNECTION_PARAMS_FAILED", constructor: ConnectionError });
   });
 });
 
@@ -1878,7 +1874,7 @@ describe("BluetoothProxyApi.acceptGattErrorResponse routing", () => {
     // GATT error matches the read's (address, handle); the write is unaffected.
     api.acceptGattErrorResponse(encodeGattError(0x151n, 0x2a, 7));
 
-    await assert.rejects(readPromise);
+    await assert.rejects(readPromise, { code: "GATT_ERROR", constructor: ConnectionError });
 
     // The write must still be in flight - settle it explicitly.
     api.acceptGattWriteResponse(encodeAddressHandle(0x151n, 0x2b));
@@ -1901,8 +1897,8 @@ describe("BluetoothProxyApi.clearConnectionState and reissueOnReconnect (GATT)",
 
     api.clearConnectionState();
 
-    await assert.rejects(readPromise, (error: unknown): boolean => (error instanceof DOMException) && (error.name === "AbortError"));
-    await assert.rejects(connectPromise, (error: unknown): boolean => (error instanceof DOMException) && (error.name === "AbortError"));
+    await assert.rejects(readPromise, { constructor: DOMException, name: "AbortError" });
+    await assert.rejects(connectPromise, { constructor: DOMException, name: "AbortError" });
     assert.equal(api.isConnected(0x162n), false);
   });
 
