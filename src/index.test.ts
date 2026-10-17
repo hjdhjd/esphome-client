@@ -124,7 +124,22 @@ describe("Public entry-point - LogLevel and protocol constants", () => {
   });
 });
 
+// The testing subpath's runtime exports are held to an exact list for the reason the root's are: a dropped export fails here, and so does an internal one that leaks.
 describe("Testing entry-point exports", () => {
+
+  test("exports exactly the testing runtime surface", () => {
+
+    assert.deepEqual(Object.keys(testingApi).sort(), [
+
+      "MOCK", "MessageType", "MockClient", "MockTransport", "MockTransportPhase", "mockDeviceInfo", "mockEntity", "mockEntityDiscovery", "mockHealth",
+      "mockNoiseHandshakeExchange", "mockStateMessage", "pushBluetoothAdvertisementsBatch", "pushBluetoothConnectionsFreeResponse",
+      "pushBluetoothDeviceClearCacheResponse", "pushBluetoothDeviceConnectionResponse", "pushBluetoothDevicePairingResponse", "pushBluetoothDeviceUnpairingResponse",
+      "pushBluetoothGattErrorResponse", "pushBluetoothGattGetServicesDoneResponse", "pushBluetoothGattGetServicesResponse", "pushBluetoothGattNotifyData",
+      "pushBluetoothGattNotifyResponse", "pushBluetoothGattReadResponse", "pushBluetoothGattWriteResponse", "pushBluetoothScannerState",
+      "pushBluetoothSetConnectionParamsResponse", "pushDeviceInfo", "pushHandshake", "pushInfraredListEntity", "pushInfraredRFReceiveEvent",
+      "pushRadioFrequencyListEntity", "pushSerialData", "pushSerialFlushResult", "pushSerialModemPinsResponse", "pushZWaveFrame", "pushZWaveHomeIdChange"
+    ]);
+  });
 
   test("exports the protocol's MessageType table", () => {
 

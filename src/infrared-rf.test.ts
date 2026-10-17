@@ -16,9 +16,9 @@
  */
 import { InfraredCapabilityFlags, RadioFrequencyCapabilityFlags, RadioFrequencyModulation } from "./api-constants.ts";
 import type { InfraredEntity, InfraredEvent, RadioFrequencyEntity, RadioFrequencyEvent } from "./schemas/index.ts";
-import { MockTransport, pushInfraredListEntity, pushInfraredRFReceiveEvent, pushRadioFrequencyListEntity } from "./testing/mock-transport.ts";
+import { MockTransport, pushHandshake, pushInfraredListEntity, pushInfraredRFReceiveEvent, pushRadioFrequencyListEntity } from "./testing/mock-transport.ts";
 import { Printer, executeControl, runInteractiveControl } from "./util/espc.ts";
-import { decodePackedSint32, decodeProtobuf, encodePackedSint32, encodeProtoFields, zigzagDecode, zigzagEncode } from "./protocol/codec.ts";
+import { decodePackedSint32, decodeProtobuf, encodePackedSint32, zigzagDecode, zigzagEncode } from "./protocol/codec.ts";
 import { describe, test } from "node:test";
 import { Buffer } from "node:buffer";
 import type { CapturedFrame } from "./testing/mock-transport.ts";
@@ -39,63 +39,13 @@ function quietLogger(): { debug: () => void; info: () => void; warn: () => void;
   return { debug: (): void => undefined, error: (): void => undefined, info: (): void => undefined, warn: (): void => undefined };
 }
 
-// Synthesized HELLO_RESPONSE for API 1.12, the canonical modern-handshake fixture version (above the minor-11 modernHandshake threshold). Wire shape per
-// api.proto §HelloResponse.
-function helloResponse(major: number, minor: number, serverInfo: string, deviceName: string): Buffer {
-
-  return encodeProtoFields([
-
-    { fieldNumber: 1, value: major, wireType: WireType.VARINT },
-    { fieldNumber: 2, value: minor, wireType: WireType.VARINT },
-    { fieldNumber: 3, value: Buffer.from(serverInfo, "utf8"), wireType: WireType.LENGTH_DELIMITED },
-    { fieldNumber: 4, value: Buffer.from(deviceName, "utf8"), wireType: WireType.LENGTH_DELIMITED }
-  ]);
-}
-
-const HELLO_RESPONSE_PROTOCOL_1_12 = helloResponse(1, 12, "test-server", "test-device");
-
-// Minimal DeviceInfoResponse - just the required base fields. The IR/RF tests do not care about device-info content; we only need a well-formed response so the host's
-// discovery phase completes.
-function deviceInfoResponse(): Buffer {
-
-  return encodeProtoFields([
-
-    { fieldNumber: 1, value: 0, wireType: WireType.VARINT },
-    { fieldNumber: 2, value: Buffer.from("test-device", "utf8"), wireType: WireType.LENGTH_DELIMITED },
-    { fieldNumber: 3, value: Buffer.from("AA:BB:CC:DD:EE:FF", "utf8"), wireType: WireType.LENGTH_DELIMITED },
-    { fieldNumber: 4, value: Buffer.from("2025.10.0", "utf8"), wireType: WireType.LENGTH_DELIMITED },
-    { fieldNumber: 5, value: Buffer.from("Jan  1 2026, 12:00:00", "utf8"), wireType: WireType.LENGTH_DELIMITED },
-    { fieldNumber: 6, value: Buffer.from("esp32dev", "utf8"), wireType: WireType.LENGTH_DELIMITED },
-    { fieldNumber: 7, value: 0, wireType: WireType.VARINT },
-    { fieldNumber: 13, value: Buffer.from("Test Device", "utf8"), wireType: WireType.LENGTH_DELIMITED },
-    { fieldNumber: 19, value: 0, wireType: WireType.VARINT }
-  ]);
-}
-
-const DEVICE_INFO_RESPONSE_DEFAULT = deviceInfoResponse();
-const LIST_ENTITIES_DONE_RESPONSE = Buffer.alloc(0);
-
-// Drive a fresh client through the canonical plaintext connect -> discover -> ready sequence with caller-supplied IR/RF list-entities pushes interleaved between the
-// device-info response and the discovery-done sentinel. Returns once the connect promise resolves.
+// Drive a fresh client through the canonical plaintext connect -> discover -> ready sequence with caller-supplied IR/RF list-entities pushes queued inside discovery,
+// between the device-info response and the discovery-done sentinel. The testing entry's handshake injector queues the whole connect before it starts, because the
+// transport holds the frames until the client reads them. Returns once the connect promise resolves.
 async function driveConnectWithEntities(transport: MockTransport, client: EspHomeClient, pushEntities: (transport: MockTransport) => void): Promise<void> {
 
-  const connectPromise = client.connect({ signal: AbortSignal.timeout(2000) });
-
-  await Promise.resolve();
-  await delay(5);
-
-  transport.pushInbound(MessageType.HELLO_RESPONSE, HELLO_RESPONSE_PROTOCOL_1_12);
-  await delay(5);
-
-  transport.pushInbound(MessageType.DEVICE_INFO_RESPONSE, DEVICE_INFO_RESPONSE_DEFAULT);
-  await delay(2);
-
-  pushEntities(transport);
-
-  await delay(2);
-  transport.pushInbound(MessageType.LIST_ENTITIES_DONE_RESPONSE, LIST_ENTITIES_DONE_RESPONSE);
-
-  await connectPromise;
+  pushHandshake(transport, { discovery: pushEntities });
+  await client.connect({ signal: AbortSignal.timeout(2000) });
 }
 
 // 1. Packed sint32 codec primitives - the wire-format addition IR/RF depends on.

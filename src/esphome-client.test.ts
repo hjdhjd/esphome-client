@@ -15,7 +15,7 @@ import {
 import { ENTITY_SCHEMAS, aliasOf, extending } from "./schemas/index.ts";
 import { EspHomeClient, openEspHomeClient } from "./esphome-client.ts";
 import { LockState, LogLevel, SerialProxyPortType, WaterHeaterMode } from "./api-constants.ts";
-import { MockTransport, pushInfraredRFReceiveEvent } from "./testing/mock-transport.ts";
+import { MockTransport, pushDeviceInfo, pushHandshake, pushInfraredRFReceiveEvent } from "./testing/mock-transport.ts";
 import type { Nullable, ServiceEntity } from "./types.ts";
 import { ProtocolByte, Transport } from "./transport.ts";
 import { decodeProtobuf, encodeProtoFields, encodeVarint } from "./protocol/codec.ts";
@@ -29,6 +29,7 @@ import { MessageType } from "./protocol/message-types.ts";
 import { MockSocket } from "./testing/mock-socket.ts";
 import type { NoiseCipherPair } from "./transport.ts";
 import type { ProtoField } from "./protocol/codec.ts";
+import type { PushHandshakeOptions } from "./testing/mock-transport.ts";
 import type { Socket } from "node:net";
 import type { TestContext } from "node:test";
 import { WireType } from "./protocol/wire-types.ts";
@@ -38,6 +39,7 @@ import { defaultShouldRetry } from "./reconnect.ts";
 import { setTimeout as delay } from "node:timers/promises";
 import { disconnectedCapabilities } from "./capabilities.ts";
 import { entityId } from "./entity-id.ts";
+import { mockDeviceInfo } from "./testing/factories.ts";
 
 // Quiet logger used by every test that constructs an EspHomeClient. Prevents the host's debug/info logging from polluting the test runner output and makes warn/error
 // outputs assertable by capturing into in-memory arrays. Each test that wants to inspect the log calls makeLogCapture() to get a fresh isolated logger.
@@ -130,77 +132,6 @@ const HELLO_RESPONSE_PROTOCOL_0_0 = helloResponse(0, 0, "test-server", "test-dev
 // ConnectResponse payload: field 1 (invalid_password, varint bool). Provenance: api.proto §ConnectResponse. ESPHome devices using API >= 1.11 do not require this
 // message in the handshake at all (modern handshake skips CONNECT_REQUEST), but for legacy 1.10 we must emit it. Derivation: encodeProtoFields with the boolean field.
 const CONNECT_RESPONSE_OK = encodeProtoFields([{ fieldNumber: 1, value: 0, wireType: WireType.VARINT }]);
-
-// DeviceInfoResponse payload. Provenance: api.proto §DeviceInfoResponse - field numbers 1-19 cover the consumer-visible fields (usesPassword, name, mac, etc.) and
-// field 20 is the repeated DeviceInfo.SubDevice nested message. Derivation: encodeProtoFields with each consumer-visible primitive field.
-function deviceInfoResponse(overrides: Partial<DeviceInfo> & { subDevices?: { area_id?: string; device_id: number; name: string }[] } = {}): Buffer {
-
-  const fields: ProtoField[] = [];
-  // Default fixture values match a typical ESPHome dev board.
-  const usesPassword = overrides.usesPassword ?? false;
-  const name = overrides.name ?? "test-device";
-  const macAddress = overrides.macAddress ?? "AA:BB:CC:DD:EE:FF";
-  const esphomeVersion = overrides.esphomeVersion ?? "2025.10.0";
-  const compilationTime = overrides.compilationTime ?? "Jan  1 2026, 12:00:00";
-  const model = overrides.model ?? "esp32dev";
-  const hasDeepSleep = overrides.hasDeepSleep ?? false;
-  const friendlyName = overrides.friendlyName ?? "Test Device";
-  const apiEncryptionSupported = overrides.apiEncryptionSupported ?? false;
-
-  fields.push({ fieldNumber: 1, value: usesPassword ? 1 : 0, wireType: WireType.VARINT });
-  fields.push({ fieldNumber: 2, value: Buffer.from(name, "utf8"), wireType: WireType.LENGTH_DELIMITED });
-  fields.push({ fieldNumber: 3, value: Buffer.from(macAddress, "utf8"), wireType: WireType.LENGTH_DELIMITED });
-  fields.push({ fieldNumber: 4, value: Buffer.from(esphomeVersion, "utf8"), wireType: WireType.LENGTH_DELIMITED });
-  fields.push({ fieldNumber: 5, value: Buffer.from(compilationTime, "utf8"), wireType: WireType.LENGTH_DELIMITED });
-  fields.push({ fieldNumber: 6, value: Buffer.from(model, "utf8"), wireType: WireType.LENGTH_DELIMITED });
-  fields.push({ fieldNumber: 7, value: hasDeepSleep ? 1 : 0, wireType: WireType.VARINT });
-  fields.push({ fieldNumber: 13, value: Buffer.from(friendlyName, "utf8"), wireType: WireType.LENGTH_DELIMITED });
-  fields.push({ fieldNumber: 19, value: apiEncryptionSupported ? 1 : 0, wireType: WireType.VARINT });
-
-  // Capability-bearing flag fields. Only encoded when the test supplies an override - omitting them mirrors how a real ESPHome device with the corresponding component
-  // disabled would send the response (the field is absent on the wire, not present-with-zero).
-  if(overrides.bluetoothProxyFeatureFlags !== undefined) {
-
-    fields.push({ fieldNumber: 15, value: overrides.bluetoothProxyFeatureFlags, wireType: WireType.VARINT });
-  }
-
-  if(overrides.voiceAssistantFeatureFlags !== undefined) {
-
-    fields.push({ fieldNumber: 17, value: overrides.voiceAssistantFeatureFlags, wireType: WireType.VARINT });
-  }
-
-  if(overrides.subDevices) {
-
-    for(const sub of overrides.subDevices) {
-
-      const subFields: ProtoField[] = [
-        { fieldNumber: 1, value: sub.device_id, wireType: WireType.VARINT },
-        { fieldNumber: 2, value: Buffer.from(sub.name, "utf8"), wireType: WireType.LENGTH_DELIMITED }
-      ];
-
-      if(sub.area_id) {
-
-        subFields.push({ fieldNumber: 3, value: Buffer.from(sub.area_id, "utf8"), wireType: WireType.LENGTH_DELIMITED });
-      }
-
-      fields.push({ fieldNumber: 20, value: encodeProtoFields(subFields), wireType: WireType.LENGTH_DELIMITED });
-    }
-  }
-
-  // Serial-proxy advertisements at field 25, each a nested message with `name` (1) and `port_type` (2). Encoded only when the test supplies them.
-  for(const proxy of overrides.serialProxies ?? []) {
-
-    fields.push({ fieldNumber: 25, value: encodeProtoFields([
-
-      { fieldNumber: 1, value: Buffer.from(proxy.name, "utf8"), wireType: WireType.LENGTH_DELIMITED },
-      { fieldNumber: 2, value: proxy.portType, wireType: WireType.VARINT }
-    ]), wireType: WireType.LENGTH_DELIMITED });
-  }
-
-  return encodeProtoFields(fields);
-}
-
-const DEVICE_INFO_RESPONSE_DEFAULT = deviceInfoResponse();
 
 // ListEntitiesDoneResponse payload is empty. Provenance: api.proto §ListEntitiesDoneResponse - the message has no fields.
 const LIST_ENTITIES_DONE_RESPONSE = Buffer.alloc(0);
@@ -360,59 +291,14 @@ function statePayloadFor(type: EntityType, key: number, extras: { fieldNumber: n
 
 // MockTransport drive helpers.
 
-// The handshake responses a test answers a connect attempt with. Omitted fields default to a protocol 1.12 hello, the default device information, and an empty
-// entity and service discovery.
-interface HandshakeScript {
+// Drive a fresh client through the canonical plaintext connect -> discover -> ready sequence using the supplied discovery. The whole connect is queued on the transport
+// through the testing entry's handshake injector before the connect starts, because the transport holds the frames until the client reads them. After this resolves,
+// the client is fully connected, all entities are registered, and the run-phase dispatcher is consuming inbound messages. Tests that don't care about the discovery
+// shape pass nothing; those that need entities present pass a list and assert against `client.getEntitiesWithIds()`.
+async function driveConnect(transport: MockTransport, client: EspHomeClient, options: PushHandshakeOptions & { signal?: AbortSignal } = {}): Promise<void> {
 
-  deviceInfo?: Buffer;
-  entities?: { type: EntityType; key: number; objectId: string; name: string }[];
-  helloResponsePayload?: Buffer;
-  services?: { name: string; key: number }[];
-}
-
-// Drive a fresh client through the canonical plaintext connect -> discover -> ready sequence using the supplied entity discovery list. After this resolves, the client
-// is fully connected, all entities are registered, and the run-phase dispatcher is consuming inbound messages. Tests that don't care about the discovery shape pass an
-// empty list; those that need entities present pass a list and assert against `client.getEntitiesWithIds()`.
-async function driveConnect(transport: MockTransport, client: EspHomeClient, options: HandshakeScript & { signal?: AbortSignal } = {}): Promise<void> {
-
-  const connectPromise = client.connect(options.signal !== undefined ? { signal: options.signal } : undefined);
-
-  await pushHandshake(transport, options);
-  await connectPromise;
-}
-
-// Answer a connect attempt already in flight with the canonical plaintext handshake responses. The attempt is either one driveConnect started or one the reconnect
-// supervisor started on its own, which a test cannot await directly.
-async function pushHandshake(transport: MockTransport, script: HandshakeScript = {}): Promise<void> {
-
-  const entities = script.entities ?? [];
-  const services = script.services ?? [];
-  const helloPayload = script.helloResponsePayload ?? HELLO_RESPONSE_PROTOCOL_1_12;
-  const deviceInfo = script.deviceInfo ?? DEVICE_INFO_RESPONSE_DEFAULT;
-
-  // Push the canonical handshake responses. We pump them one-by-one with brief waits so the host's awaiters resolve in order.
-  await Promise.resolve();
-  await delay(5);
-
-  transport.pushInbound(MessageType.HELLO_RESPONSE, helloPayload);
-  await delay(5);
-
-  // The host sent LIST_ENTITIES_REQUEST and DEVICE_INFO_REQUEST after the hello succeeded. Push the responses.
-  transport.pushInbound(MessageType.DEVICE_INFO_RESPONSE, deviceInfo);
-  await delay(2);
-
-  for(const entity of entities) {
-
-    transport.pushInbound(ENTITY_SCHEMAS[entity.type].listEntities.messageType, listEntitiesPayloadFor(entity.type, entity.key, entity.objectId, entity.name));
-  }
-
-  for(const service of services) {
-
-    transport.pushInbound(MessageType.LIST_ENTITIES_SERVICES_RESPONSE, listEntitiesServicesResponse(service.name, service.key));
-  }
-
-  await delay(2);
-  transport.pushInbound(MessageType.LIST_ENTITIES_DONE_RESPONSE, LIST_ENTITIES_DONE_RESPONSE);
+  pushHandshake(transport, options);
+  await client.connect(options.signal !== undefined ? { signal: options.signal } : undefined);
 }
 
 // Discovery-burst fixtures.
@@ -538,7 +424,7 @@ describe("EspHomeClient construction with injected MockTransport", () => {
     // connect() must not resolve on the LIST_ENTITIES DONE - discovery waits for DeviceInfo - so the promise is still pending here, capabilities not yet populated.
     assert.equal(resolved, false, "connect must not resolve until DEVICE_INFO_RESPONSE is received");
 
-    transport.pushInbound(MessageType.DEVICE_INFO_RESPONSE, DEVICE_INFO_RESPONSE_DEFAULT);
+    pushDeviceInfo(transport);
     await connectPromise;
 
     assert.equal(client.capabilities().api.major, 1, "capabilities must be populated (not the 0.0 disconnected placeholder) once connect resolves");
@@ -845,7 +731,7 @@ describe("EspHomeClient.connect - plaintext happy path", () => {
     // Legacy path: after HELLO_RESPONSE, host sends CONNECT_REQUEST and awaits CONNECT_RESPONSE.
     transport.pushInbound(MessageType.CONNECT_RESPONSE, CONNECT_RESPONSE_OK);
     await delay(10);
-    transport.pushInbound(MessageType.DEVICE_INFO_RESPONSE, DEVICE_INFO_RESPONSE_DEFAULT);
+    pushDeviceInfo(transport);
     await delay(2);
     transport.pushInbound(MessageType.LIST_ENTITIES_DONE_RESPONSE, LIST_ENTITIES_DONE_RESPONSE);
 
@@ -1469,11 +1355,7 @@ describe("EspHomeClient.connect - error and abort paths", () => {
       throw new Error("plaintext transport not constructed");
     }
 
-    plaintextTransport.pushInbound(MessageType.HELLO_RESPONSE, HELLO_RESPONSE_PROTOCOL_1_12);
-    await delay(5);
-    plaintextTransport.pushInbound(MessageType.DEVICE_INFO_RESPONSE, DEVICE_INFO_RESPONSE_DEFAULT);
-    await delay(2);
-    plaintextTransport.pushInbound(MessageType.LIST_ENTITIES_DONE_RESPONSE, LIST_ENTITIES_DONE_RESPONSE);
+    pushHandshake(plaintextTransport);
 
     await connectPromise;
 
@@ -1523,11 +1405,7 @@ describe("EspHomeClient.connect - error and abort paths", () => {
       throw new Error("plaintext transport not constructed");
     }
 
-    plaintextTransport.pushInbound(MessageType.HELLO_RESPONSE, HELLO_RESPONSE_PROTOCOL_1_12);
-    await delay(5);
-    plaintextTransport.pushInbound(MessageType.DEVICE_INFO_RESPONSE, DEVICE_INFO_RESPONSE_DEFAULT);
-    await delay(2);
-    plaintextTransport.pushInbound(MessageType.LIST_ENTITIES_DONE_RESPONSE, LIST_ENTITIES_DONE_RESPONSE);
+    pushHandshake(plaintextTransport);
 
     await connectPromise;
 
@@ -1585,11 +1463,7 @@ describe("EspHomeClient.connect - error and abort paths", () => {
       throw new Error("plaintext transport not constructed");
     }
 
-    plaintextTransport.pushInbound(MessageType.HELLO_RESPONSE, HELLO_RESPONSE_PROTOCOL_1_12);
-    await delay(5);
-    plaintextTransport.pushInbound(MessageType.DEVICE_INFO_RESPONSE, DEVICE_INFO_RESPONSE_DEFAULT);
-    await delay(2);
-    plaintextTransport.pushInbound(MessageType.LIST_ENTITIES_DONE_RESPONSE, LIST_ENTITIES_DONE_RESPONSE);
+    pushHandshake(plaintextTransport);
 
     await connectPromise;
 
@@ -1673,23 +1547,14 @@ describe("EspHomeClient discovery flow", () => {
       host: "test.local", logger: quietLogger(), maxFieldsPerMessage: 4096, reconnect: false, transportFactory: (): MockTransport => transport
     });
 
-    const connectPromise = client.connect({ signal: AbortSignal.timeout(5000) });
+    const entities: NonNullable<PushHandshakeOptions["entities"]> = Array.from({ length: 1000 },
+      (_, i) => ({ key: i + 1, name: "Sensor " + String(i), objectId: "sensor_" + String(i), type: "sensor" }));
 
-    await delay(5);
-    transport.pushInbound(MessageType.HELLO_RESPONSE, HELLO_RESPONSE_PROTOCOL_1_12);
-    await delay(5);
-    transport.pushInbound(MessageType.DEVICE_INFO_RESPONSE, DEVICE_INFO_RESPONSE_DEFAULT);
-    await delay(2);
-
-    // The whole entity stream is pushed at once, with no yield between frames, so the receiver's pump reads far ahead of the discovery loop. The host exempts its
+    // The whole entity stream is queued at once, before the connect starts, so the receiver's pump reads far ahead of the discovery loop. The host exempts its
     // list-entities types from the setup buffer's per-type cap, so every buffered entity waits for the discovery loop rather than being dropped.
-    for(let i = 0; i < 1000; i++) {
+    pushHandshake(transport, { entities });
 
-      transport.pushInbound(MessageType.LIST_ENTITIES_SENSOR_RESPONSE, listEntitiesPayloadFor("sensor", i + 1, "sensor_" + String(i), "Sensor " + String(i)));
-    }
-
-    transport.pushInbound(MessageType.LIST_ENTITIES_DONE_RESPONSE, LIST_ENTITIES_DONE_RESPONSE);
-    await connectPromise;
+    await client.connect({ signal: AbortSignal.timeout(5000) });
 
     assert.equal(client.getEntitiesWithIds().length, 1000);
     assert.equal(client.snapshotFor("sensor").size, 0, "discovery alone does not populate state cache");
@@ -1704,15 +1569,7 @@ describe("EspHomeClient discovery flow", () => {
     const client = new EspHomeClient({ host: "test.local", logger: capture.logger, reconnect: false, transportFactory: (): MockTransport => transport });
 
     // Every reply is queued before connect() starts, so the receiver's pump reads the whole burst into its setup buffer before the discovery loop takes any of it.
-    transport.pushInbound(MessageType.HELLO_RESPONSE, HELLO_RESPONSE_PROTOCOL_1_12);
-    transport.pushInbound(MessageType.DEVICE_INFO_RESPONSE, DEVICE_INFO_RESPONSE_DEFAULT);
-
-    for(const entity of DISCOVERY_BURST) {
-
-      transport.pushInbound(ENTITY_SCHEMAS[entity.type].listEntities.messageType, listEntitiesPayloadFor(entity.type, entity.key, entity.objectId, entity.name));
-    }
-
-    transport.pushInbound(MessageType.LIST_ENTITIES_DONE_RESPONSE, LIST_ENTITIES_DONE_RESPONSE);
+    pushHandshake(transport, { entities: DISCOVERY_BURST });
 
     await client.connect({ signal: AbortSignal.timeout(2000) });
 
@@ -1743,7 +1600,9 @@ describe("EspHomeClient discovery flow", () => {
     socket.pushData(Buffer.concat([
 
       plaintextFrame(MessageType.HELLO_RESPONSE, HELLO_RESPONSE_PROTOCOL_1_12),
-      plaintextFrame(MessageType.DEVICE_INFO_RESPONSE, DEVICE_INFO_RESPONSE_DEFAULT),
+
+      // The row reads nothing from the device information, so an empty payload, a valid message with every field absent, stands in for it.
+      plaintextFrame(MessageType.DEVICE_INFO_RESPONSE, Buffer.alloc(0)),
       ...DISCOVERY_BURST.map((entity) => plaintextFrame(ENTITY_SCHEMAS[entity.type].listEntities.messageType,
         listEntitiesPayloadFor(entity.type, entity.key, entity.objectId, entity.name))),
       plaintextFrame(MessageType.LIST_ENTITIES_DONE_RESPONSE, LIST_ENTITIES_DONE_RESPONSE)
@@ -1776,7 +1635,7 @@ describe("EspHomeClient discovery flow", () => {
     });
 
     transport.pushInbound(MessageType.HELLO_RESPONSE, HELLO_RESPONSE_PROTOCOL_1_12);
-    transport.pushInbound(MessageType.DEVICE_INFO_RESPONSE, DEVICE_INFO_RESPONSE_DEFAULT);
+    pushDeviceInfo(transport);
 
     for(const entity of DISCOVERY_BURST) {
 
@@ -1801,8 +1660,8 @@ describe("EspHomeClient discovery flow", () => {
 
     await driveConnect(transport, client, {
 
-      deviceInfo: deviceInfoResponse({ subDevices: [ { "device_id": 1, "name": "Bedroom Sub" }, { "area_id": "kitchen", "device_id": 2, "name": "Kitchen Sub" } ] }),
-      signal: AbortSignal.timeout(2000)
+      signal: AbortSignal.timeout(2000),
+      subDevices: [ { id: 1, name: "Bedroom Sub" }, { areaId: 3, id: 2, name: "Kitchen Sub" } ]
     });
 
     const subs = client.subDevices();
@@ -3196,7 +3055,7 @@ describe("EspHomeClient.camera per-id sub-API caching", () => {
       reconnect: false,
       transportFactory: (): MockTransport => transportQueue.shift() ?? new MockTransport()
     });
-    const entities: NonNullable<HandshakeScript["entities"]> = [{ key: 0xCA000004, name: "Front Cam", objectId: "front_cam", type: "camera" }];
+    const entities: NonNullable<PushHandshakeOptions["entities"]> = [{ key: 0xCA000004, name: "Front Cam", objectId: "front_cam", type: "camera" }];
 
     // Count the CameraImageRequest frames on one transport that carry single=false and the given stream flag. Bytes per api.proto's CameraImageRequest: field 1 (single)
     // VARINT 0 -> 0x08 0x00; field 2 (stream) VARINT -> 0x10 and the flag.
@@ -3315,7 +3174,7 @@ describe("EspHomeClient.deviceInfo", () => {
 
     await driveConnect(transport, client, {
 
-      deviceInfo: deviceInfoResponse({ serialProxies: [{ name: "uart_0", portType: SerialProxyPortType.TTL }] }),
+      deviceInfo: mockDeviceInfo({ serialProxies: [{ name: "uart_0", portType: SerialProxyPortType.TTL }] }),
       signal: AbortSignal.timeout(2000)
     });
 
@@ -3350,7 +3209,7 @@ describe("EspHomeClient.deviceInfo", () => {
       const refreshes: DeviceInfo[] = [];
       const sub = client.on("deviceInfo", (info): void => { refreshes.push(info); });
 
-      transport.pushInbound(MessageType.DEVICE_INFO_RESPONSE, deviceInfoResponse({ friendlyName: "Refreshed Name", voiceAssistantFeatureFlags: 5 }));
+      pushDeviceInfo(transport, { deviceInfo: mockDeviceInfo({ friendlyName: "Refreshed Name", voiceAssistantFeatureFlags: 5 }) });
       await delay(10);
 
       assert.equal(refreshes.length, 1);
@@ -4014,28 +3873,11 @@ describe("EspHomeClient extraSchemas integration - door_cover via aliasOf", () =
       extraSchemas: extras, host: "test.local", logger: quietLogger(), reconnect: false, transportFactory: (): MockTransport => transport
     });
 
-    const connectPromise = client.connect({ signal: AbortSignal.timeout(2000) });
-
-    await delay(5);
-    transport.pushInbound(MessageType.HELLO_RESPONSE, HELLO_RESPONSE_PROTOCOL_1_12);
-    await delay(5);
-    transport.pushInbound(MessageType.DEVICE_INFO_RESPONSE, DEVICE_INFO_RESPONSE_DEFAULT);
-    await delay(2);
-
-    // Push a LIST_ENTITIES_COVER_RESPONSE shaped exactly like a cover entity. The schema-table lookup prefers the extras schema on collision; the entity surfaces as
+    // Discover a LIST_ENTITIES_COVER_RESPONSE shaped exactly like a cover entity. The schema-table lookup prefers the extras schema on collision; the entity surfaces as
     // door_cover, not cover.
-    const coverList = encodeProtoFields([
+    pushHandshake(transport, { entities: [{ key: 0x42, name: "Garage Door", objectId: "garage_door", type: "cover" }] });
 
-      { fieldNumber: ENTITY_SCHEMAS.cover.listEntities.objectIdFieldNumber, value: Buffer.from("garage_door", "utf8"), wireType: WireType.LENGTH_DELIMITED },
-      { fieldNumber: ENTITY_SCHEMAS.cover.listEntities.keyFieldNumber, value: encodeKey(0x42), wireType: WireType.FIXED32 },
-      { fieldNumber: ENTITY_SCHEMAS.cover.listEntities.nameFieldNumber, value: Buffer.from("Garage Door", "utf8"), wireType: WireType.LENGTH_DELIMITED }
-    ]);
-
-    transport.pushInbound(MessageType.LIST_ENTITIES_COVER_RESPONSE, coverList);
-    await delay(2);
-    transport.pushInbound(MessageType.LIST_ENTITIES_DONE_RESPONSE, LIST_ENTITIES_DONE_RESPONSE);
-
-    await connectPromise;
+    await client.connect({ signal: AbortSignal.timeout(2000) });
 
     const ids = client.getAvailableEntityIds();
 
@@ -4056,26 +3898,9 @@ describe("EspHomeClient extraSchemas integration - door_cover via aliasOf", () =
       extraSchemas: extras, host: "test.local", logger: quietLogger(), reconnect: false, transportFactory: (): MockTransport => transport
     });
 
-    const connectPromise = client.connect({ signal: AbortSignal.timeout(2000) });
+    pushHandshake(transport, { entities: [{ key: 7, name: "Front Cover", objectId: "front", type: "cover" }] });
 
-    await delay(5);
-    transport.pushInbound(MessageType.HELLO_RESPONSE, HELLO_RESPONSE_PROTOCOL_1_12);
-    await delay(5);
-    transport.pushInbound(MessageType.DEVICE_INFO_RESPONSE, DEVICE_INFO_RESPONSE_DEFAULT);
-    await delay(2);
-
-    const coverList = encodeProtoFields([
-
-      { fieldNumber: ENTITY_SCHEMAS.cover.listEntities.objectIdFieldNumber, value: Buffer.from("front", "utf8"), wireType: WireType.LENGTH_DELIMITED },
-      { fieldNumber: ENTITY_SCHEMAS.cover.listEntities.keyFieldNumber, value: encodeKey(7), wireType: WireType.FIXED32 },
-      { fieldNumber: ENTITY_SCHEMAS.cover.listEntities.nameFieldNumber, value: Buffer.from("Front Cover", "utf8"), wireType: WireType.LENGTH_DELIMITED }
-    ]);
-
-    transport.pushInbound(MessageType.LIST_ENTITIES_COVER_RESPONSE, coverList);
-    await delay(2);
-    transport.pushInbound(MessageType.LIST_ENTITIES_DONE_RESPONSE, LIST_ENTITIES_DONE_RESPONSE);
-
-    await connectPromise;
+    await client.connect({ signal: AbortSignal.timeout(2000) });
 
     // Subscribe to the typed door_cover channel via the public on() facade. The bus is keyed by the schema's `type` tag, so an extras-keyed channel works
     // through the same per-type routing the built-ins use.
@@ -4113,26 +3938,9 @@ describe("EspHomeClient extraSchemas integration - door_cover via aliasOf", () =
       extraSchemas: extras, host: "test.local", logger: quietLogger(), reconnect: false, transportFactory: (): MockTransport => transport
     });
 
-    const connectPromise = client.connect({ signal: AbortSignal.timeout(2000) });
+    pushHandshake(transport, { entities: [{ key: 11, name: "Garage", objectId: "garage", type: "cover" }] });
 
-    await delay(5);
-    transport.pushInbound(MessageType.HELLO_RESPONSE, HELLO_RESPONSE_PROTOCOL_1_12);
-    await delay(5);
-    transport.pushInbound(MessageType.DEVICE_INFO_RESPONSE, DEVICE_INFO_RESPONSE_DEFAULT);
-    await delay(2);
-
-    const coverList = encodeProtoFields([
-
-      { fieldNumber: ENTITY_SCHEMAS.cover.listEntities.objectIdFieldNumber, value: Buffer.from("garage", "utf8"), wireType: WireType.LENGTH_DELIMITED },
-      { fieldNumber: ENTITY_SCHEMAS.cover.listEntities.keyFieldNumber, value: encodeKey(11), wireType: WireType.FIXED32 },
-      { fieldNumber: ENTITY_SCHEMAS.cover.listEntities.nameFieldNumber, value: Buffer.from("Garage", "utf8"), wireType: WireType.LENGTH_DELIMITED }
-    ]);
-
-    transport.pushInbound(MessageType.LIST_ENTITIES_COVER_RESPONSE, coverList);
-    await delay(2);
-    transport.pushInbound(MessageType.LIST_ENTITIES_DONE_RESPONSE, LIST_ENTITIES_DONE_RESPONSE);
-
-    await connectPromise;
+    await client.connect({ signal: AbortSignal.timeout(2000) });
 
     const outboundBefore = transport.outboundFrames.length;
 
@@ -4158,31 +3966,13 @@ describe("EspHomeClient extraSchemas integration - door_cover via aliasOf", () =
       extraSchemas: extras, host: "b.local", logger: quietLogger(), reconnect: false, transportFactory: (): MockTransport => transportB
     });
 
-    const connectA = clientPlain.connect({ signal: AbortSignal.timeout(2000) });
-    const connectB = clientWithExtras.connect({ signal: AbortSignal.timeout(2000) });
-
-    // Drive both connects in lock-step. Each client gets its own LIST_ENTITIES_COVER_RESPONSE; the routing decision is made per-client from its own schemas table.
+    // Each client gets its own LIST_ENTITIES_COVER_RESPONSE; the routing decision is made per-client from its own schemas table.
     for(const t of [ transportA, transportB ]) {
 
-      await delay(5);
-      t.pushInbound(MessageType.HELLO_RESPONSE, HELLO_RESPONSE_PROTOCOL_1_12);
-      await delay(5);
-      t.pushInbound(MessageType.DEVICE_INFO_RESPONSE, DEVICE_INFO_RESPONSE_DEFAULT);
-      await delay(2);
-
-      const coverList = encodeProtoFields([
-
-        { fieldNumber: ENTITY_SCHEMAS.cover.listEntities.objectIdFieldNumber, value: Buffer.from("x", "utf8"), wireType: WireType.LENGTH_DELIMITED },
-        { fieldNumber: ENTITY_SCHEMAS.cover.listEntities.keyFieldNumber, value: encodeKey(1), wireType: WireType.FIXED32 },
-        { fieldNumber: ENTITY_SCHEMAS.cover.listEntities.nameFieldNumber, value: Buffer.from("X", "utf8"), wireType: WireType.LENGTH_DELIMITED }
-      ]);
-
-      t.pushInbound(MessageType.LIST_ENTITIES_COVER_RESPONSE, coverList);
-      await delay(2);
-      t.pushInbound(MessageType.LIST_ENTITIES_DONE_RESPONSE, LIST_ENTITIES_DONE_RESPONSE);
+      pushHandshake(t, { entities: [{ key: 1, name: "X", objectId: "x", type: "cover" }] });
     }
 
-    await Promise.all([ connectA, connectB ]);
+    await Promise.all([ clientPlain.connect({ signal: AbortSignal.timeout(2000) }), clientWithExtras.connect({ signal: AbortSignal.timeout(2000) }) ]);
 
     // Plain client treats the wire frame as a cover; extras client treats it as a door_cover. Their availableIds buckets must be disjoint.
     const idsPlain = clientPlain.getAvailableEntityIds();
@@ -4275,7 +4065,7 @@ describe("EspHomeClient extraSchemas integration - vendor-extended switch via ex
     await delay(5);
     transport.pushInbound(MessageType.HELLO_RESPONSE, HELLO_RESPONSE_PROTOCOL_1_12);
     await delay(5);
-    transport.pushInbound(MessageType.DEVICE_INFO_RESPONSE, DEVICE_INFO_RESPONSE_DEFAULT);
+    pushDeviceInfo(transport);
     await delay(2);
 
     // Wire fixture: a LIST_ENTITIES_SWITCH_RESPONSE carrying the standard switch fields plus the vendor's hwRev string at field number 100. The schema-table lookup
@@ -4325,26 +4115,9 @@ describe("EspHomeClient extraSchemas integration - vendor-extended switch via ex
       extraSchemas: extras, host: "test.local", logger: quietLogger(), reconnect: false, transportFactory: (): MockTransport => transport
     });
 
-    const connectPromise = client.connect({ signal: AbortSignal.timeout(2000) });
+    pushHandshake(transport, { entities: [{ key: 0x9a, name: "Outlet", objectId: "outlet", type: "switch" }] });
 
-    await delay(5);
-    transport.pushInbound(MessageType.HELLO_RESPONSE, HELLO_RESPONSE_PROTOCOL_1_12);
-    await delay(5);
-    transport.pushInbound(MessageType.DEVICE_INFO_RESPONSE, DEVICE_INFO_RESPONSE_DEFAULT);
-    await delay(2);
-
-    const switchList = encodeProtoFields([
-
-      { fieldNumber: ENTITY_SCHEMAS.switch.listEntities.objectIdFieldNumber, value: Buffer.from("outlet", "utf8"), wireType: WireType.LENGTH_DELIMITED },
-      { fieldNumber: ENTITY_SCHEMAS.switch.listEntities.keyFieldNumber, value: encodeKey(0x9a), wireType: WireType.FIXED32 },
-      { fieldNumber: ENTITY_SCHEMAS.switch.listEntities.nameFieldNumber, value: Buffer.from("Outlet", "utf8"), wireType: WireType.LENGTH_DELIMITED }
-    ]);
-
-    transport.pushInbound(MessageType.LIST_ENTITIES_SWITCH_RESPONSE, switchList);
-    await delay(2);
-    transport.pushInbound(MessageType.LIST_ENTITIES_DONE_RESPONSE, LIST_ENTITIES_DONE_RESPONSE);
-
-    await connectPromise;
+    await client.connect({ signal: AbortSignal.timeout(2000) });
 
     // Subscribe to the typed vendor_switch channel via the public on() facade. The bus is keyed by the schema's `type` tag, so the extras-keyed channel
     // works through the same per-type routing the built-ins use. The cast to `keyof typeof ENTITY_SCHEMAS` mirrors the door_cover block's pattern for keying into a
@@ -4388,26 +4161,9 @@ describe("EspHomeClient extraSchemas integration - vendor-extended switch via ex
       extraSchemas: extras, host: "test.local", logger: quietLogger(), reconnect: false, transportFactory: (): MockTransport => transport
     });
 
-    const connectPromise = client.connect({ signal: AbortSignal.timeout(2000) });
+    pushHandshake(transport, { entities: [{ key: 11, name: "Relay", objectId: "relay", type: "switch" }] });
 
-    await delay(5);
-    transport.pushInbound(MessageType.HELLO_RESPONSE, HELLO_RESPONSE_PROTOCOL_1_12);
-    await delay(5);
-    transport.pushInbound(MessageType.DEVICE_INFO_RESPONSE, DEVICE_INFO_RESPONSE_DEFAULT);
-    await delay(2);
-
-    const switchList = encodeProtoFields([
-
-      { fieldNumber: ENTITY_SCHEMAS.switch.listEntities.objectIdFieldNumber, value: Buffer.from("relay", "utf8"), wireType: WireType.LENGTH_DELIMITED },
-      { fieldNumber: ENTITY_SCHEMAS.switch.listEntities.keyFieldNumber, value: encodeKey(11), wireType: WireType.FIXED32 },
-      { fieldNumber: ENTITY_SCHEMAS.switch.listEntities.nameFieldNumber, value: Buffer.from("Relay", "utf8"), wireType: WireType.LENGTH_DELIMITED }
-    ]);
-
-    transport.pushInbound(MessageType.LIST_ENTITIES_SWITCH_RESPONSE, switchList);
-    await delay(2);
-    transport.pushInbound(MessageType.LIST_ENTITIES_DONE_RESPONSE, LIST_ENTITIES_DONE_RESPONSE);
-
-    await connectPromise;
+    await client.connect({ signal: AbortSignal.timeout(2000) });
 
     const outboundBefore = transport.outboundFrames.length;
 
@@ -4445,31 +4201,13 @@ describe("EspHomeClient extraSchemas integration - vendor-extended switch via ex
       extraSchemas: extras, host: "b.local", logger: quietLogger(), reconnect: false, transportFactory: (): MockTransport => transportB
     });
 
-    const connectA = clientPlain.connect({ signal: AbortSignal.timeout(2000) });
-    const connectB = clientWithExtras.connect({ signal: AbortSignal.timeout(2000) });
-
-    // Drive both connects in lock-step. Each client gets its own LIST_ENTITIES_SWITCH_RESPONSE; the routing decision is made per-client from its own schemas table.
+    // Each client gets its own LIST_ENTITIES_SWITCH_RESPONSE; the routing decision is made per-client from its own schemas table.
     for(const t of [ transportA, transportB ]) {
 
-      await delay(5);
-      t.pushInbound(MessageType.HELLO_RESPONSE, HELLO_RESPONSE_PROTOCOL_1_12);
-      await delay(5);
-      t.pushInbound(MessageType.DEVICE_INFO_RESPONSE, DEVICE_INFO_RESPONSE_DEFAULT);
-      await delay(2);
-
-      const switchList = encodeProtoFields([
-
-        { fieldNumber: ENTITY_SCHEMAS.switch.listEntities.objectIdFieldNumber, value: Buffer.from("y", "utf8"), wireType: WireType.LENGTH_DELIMITED },
-        { fieldNumber: ENTITY_SCHEMAS.switch.listEntities.keyFieldNumber, value: encodeKey(2), wireType: WireType.FIXED32 },
-        { fieldNumber: ENTITY_SCHEMAS.switch.listEntities.nameFieldNumber, value: Buffer.from("Y", "utf8"), wireType: WireType.LENGTH_DELIMITED }
-      ]);
-
-      t.pushInbound(MessageType.LIST_ENTITIES_SWITCH_RESPONSE, switchList);
-      await delay(2);
-      t.pushInbound(MessageType.LIST_ENTITIES_DONE_RESPONSE, LIST_ENTITIES_DONE_RESPONSE);
+      pushHandshake(t, { entities: [{ key: 2, name: "Y", objectId: "y", type: "switch" }] });
     }
 
-    await Promise.all([ connectA, connectB ]);
+    await Promise.all([ clientPlain.connect({ signal: AbortSignal.timeout(2000) }), clientWithExtras.connect({ signal: AbortSignal.timeout(2000) }) ]);
 
     // Plain client treats the wire frame as a switch; extras client treats it as a vendor_switch. Their availableIds buckets must be disjoint - the per-instance
     // schemas table is the routing chokepoint, so each client's dispatch decision is made from its own table without cross-pollination.
@@ -4562,7 +4300,7 @@ describe("EspHomeClient heartbeat + ping", () => {
     // The request lands ahead of the HELLO response, so no setup-phase wait claims it: it waits in the receiver's buffer until the run-phase hand-off replays it.
     await delay(5);
     transport.pushInbound(MessageType.GET_TIME_REQUEST, Buffer.alloc(0));
-    await pushHandshake(transport);
+    pushHandshake(transport);
     await connecting;
     await delay(10);
 
@@ -4774,19 +4512,13 @@ describe("openEspHomeClient factory", () => {
     const transport = new MockTransport();
     // The success-path disposal count is the other half of the rejection-path assertions below: the caller is handed a live client, so nothing disposes it here.
     const disposals = countClientDisposals(t);
-    const opener = openEspHomeClient({
+
+    pushHandshake(transport);
+
+    const client = await openEspHomeClient({
 
       host: "test.local", logger: quietLogger(), maxConstructionRetries: 0, reconnect: false, transportFactory: (): MockTransport => transport
     });
-
-    await delay(5);
-    transport.pushInbound(MessageType.HELLO_RESPONSE, HELLO_RESPONSE_PROTOCOL_1_12);
-    await delay(5);
-    transport.pushInbound(MessageType.DEVICE_INFO_RESPONSE, DEVICE_INFO_RESPONSE_DEFAULT);
-    await delay(2);
-    transport.pushInbound(MessageType.LIST_ENTITIES_DONE_RESPONSE, LIST_ENTITIES_DONE_RESPONSE);
-
-    const client = await opener;
 
     assert.equal(client.health().state, "connected");
     assert.equal(disposals.count, 0, "the success path returns a live client without disposing it");
@@ -5810,7 +5542,7 @@ describe("EspHomeClient telemetry decode edge cases", () => {
     await delay(5);
     transport.pushInbound(MessageType.HELLO_RESPONSE, HELLO_RESPONSE_PROTOCOL_1_12);
     await delay(5);
-    transport.pushInbound(MessageType.DEVICE_INFO_RESPONSE, DEVICE_INFO_RESPONSE_DEFAULT);
+    pushDeviceInfo(transport);
     await delay(2);
     // Push a list-entities-light response with no required fields - decodeEntityFromSchema should return undefined.
     transport.pushInbound(MessageType.LIST_ENTITIES_LIGHT_RESPONSE, encodeProtoFields([{ fieldNumber: 99, value: 0, wireType: WireType.VARINT }]));
@@ -6182,7 +5914,7 @@ describe("EspHomeClient clock option - live heartbeat stall / RTT / timeout inte
       const firstReconnect = client.once("connect", { signal: AbortSignal.timeout(2000) });
 
       await delay(20);
-      await pushHandshake(secondTransport);
+      pushHandshake(secondTransport);
       await firstReconnect;
 
       assert.equal(client.health().state, "connected", "the supervisor must reconnect on the second transport");
@@ -6197,7 +5929,7 @@ describe("EspHomeClient clock option - live heartbeat stall / RTT / timeout inte
       const secondReconnect = client.once("connect", { signal: AbortSignal.timeout(2000) });
 
       await delay(20);
-      await pushHandshake(thirdTransport);
+      pushHandshake(thirdTransport);
       await secondReconnect;
 
       assert.equal(client.health().consecutiveStalls, 2, "the second reconnect must carry the count as well");

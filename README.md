@@ -301,7 +301,7 @@ import { MockClient, MockTransport, mockEntity, mockStateMessage } from "esphome
 ```
 
 - **`MockClient`** - consumer-facing test harness. Mirrors the real `EspHomeClient` surface so production code under test runs unchanged. Drive state via `populate*` / `set*` / `emit*` methods; assert on a `commands` log capturing every issued command. Every sub-API on `MockClient` is a `Proxy`-backed recording mock; address its recorded calls and stage return values through the exported `MOCK` symbol (`mock.bluetooth[MOCK]` exposes a `MockController`).
-- **`MockTransport`** - integration-level transport double. Return it from `EspHomeClientOptions.transportFactory` (a factory yielding a fresh transport per connect, e.g. `transportFactory: () => transport`) to exercise the real client's handshake / decoder / dispatcher pipelines against a scripted byte sequence rather than a device. Script that sequence with the exported `push*` fixture-injection helpers.
+- **`MockTransport`** - integration-level transport double. Return it from `EspHomeClientOptions.transportFactory` (a factory yielding a fresh transport per connect, e.g. `transportFactory: () => transport`) to exercise the real client's handshake / decoder / dispatcher pipelines against a scripted byte sequence rather than a device. Script that sequence with the exported `push*` fixture-injection helpers, starting with `pushHandshake`, which queues a whole plaintext connect before the client is awaited.
 - **Factory helpers** - `mockEntity`, `mockEntityDiscovery`, `mockStateMessage`, `mockDeviceInfo`, `mockHealth`, `mockNoiseHandshakeExchange`.
 
 ## Schema extensions

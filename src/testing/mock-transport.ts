@@ -15,25 +15,36 @@
  * Typical usage:
  *
  * ```ts
+ * import { MockTransport, mockEntityDiscovery, pushHandshake } from "esphome-client/testing";
+ * import { entityId, openEspHomeClient } from "esphome-client";
+ * import assert from "node:assert/strict";
+ *
  * const transport = new MockTransport();
  *
- * await using client = await openEspHomeClient({ host: "test.local", transportFactory: (): MockTransport => transport });
+ * pushHandshake(transport, { entities: mockEntityDiscovery({ switch: ["front_door"] }) });
  *
- * transport.pushInbound(MessageType.HELLO_RESPONSE, helloResponseBytes);
- * // ...
+ * using client = await openEspHomeClient({ host: "test.local", psk: null, transportFactory: (): MockTransport => transport });
+ *
+ * assert.ok(client.hasEntity(entityId("switch", "front_door")));
  * ```
  *
  * @module testing/mock-transport
  */
 import type { BluetoothScannerMode, BluetoothScannerState, SerialProxyRequestType, SerialProxyStatus } from "../api-constants.ts";
 import type { InboundMessage, NoiseCipherPair, TransportLike } from "../transport.ts";
+import type { Nullable, ServiceEntity } from "../types.ts";
 import { encodePackedSint32, encodeProtoFields, encodeVarint, encodeVarintBigInt } from "../protocol/codec.ts";
+import type { BaseEntity } from "../schemas/index.ts";
 import { Buffer } from "node:buffer";
+import type { DeviceInfo } from "../esphome-client.ts";
+import { ENTITY_SCHEMAS } from "../schemas/index.ts";
 import { MessageType } from "../protocol/message-types.ts";
-import type { Nullable } from "../types.ts";
 import type { ProtoField } from "../protocol/codec.ts";
+import type { SerialProxyInfo } from "../serial-proxy.ts";
+import type { SubDevice } from "../sub-device.ts";
 import { WireType } from "../protocol/wire-types.ts";
 import { ZWaveProxyRequestType } from "../api-constants.ts";
+import { mockDeviceInfo } from "./factories.ts";
 
 /**
  * Phase tag used for assertions in tests.
@@ -566,6 +577,251 @@ function encodeKeyFixed32(key: number): Buffer {
 }
 
 /**
+ * The members of a {@link DeviceInfo} record that each fill one scalar field of a `DeviceInfoResponse`.
+ */
+type DeviceInfoScalarMember = Exclude<keyof DeviceInfo, "serialProxies">;
+
+/**
+ * The `DeviceInfoResponse` field number of each scalar member of a {@link DeviceInfo} record, per `api.proto` and as the client's decoder reads them. The record type
+ * covers every scalar member, so a member added to {@link DeviceInfo} fails to compile here until it has a field number and the encoder cannot fall behind the record.
+ */
+const DEVICE_INFO_FIELD_NUMBERS: Readonly<Record<DeviceInfoScalarMember, number>> = {
+
+  apiEncryptionSupported: 19,
+  bluetoothMacAddress: 18,
+  bluetoothProxyFeatureFlags: 15,
+  compilationTime: 5,
+  esphomeVersion: 4,
+  friendlyName: 13,
+  hasDeepSleep: 7,
+  legacyBluetoothProxyVersion: 11,
+  legacyVoiceAssistantVersion: 14,
+  macAddress: 3,
+  manufacturer: 12,
+  model: 6,
+  name: 2,
+  projectName: 8,
+  projectVersion: 9,
+  suggestedArea: 16,
+  usesPassword: 1,
+  voiceAssistantFeatureFlags: 17,
+  webserverPort: 10,
+  zwaveHomeId: 24,
+  zwaveProxyFeatureFlags: 23
+};
+
+/**
+ * Encode one scalar member of a device-information record at its field number. The member's type selects the wire encoding: every numeric member is a `uint32` varint,
+ * every string member is length-delimited UTF-8, and every boolean member is a varint `1` or `0`, which the client reads back as `true` only for `1`.
+ *
+ * @param fieldNumber - The member's `DeviceInfoResponse` field number.
+ * @param value - The member's value.
+ * @returns The encoded field.
+ */
+function encodeDeviceInfoField(fieldNumber: number, value: boolean | number | string): ProtoField {
+
+  switch(typeof value) {
+
+    case "boolean": {
+
+      return { fieldNumber, value: value ? 1 : 0, wireType: WireType.VARINT };
+    }
+
+    case "number": {
+
+      return { fieldNumber, value, wireType: WireType.VARINT };
+    }
+
+    default: {
+
+      return { fieldNumber, value: Buffer.from(value, "utf8"), wireType: WireType.LENGTH_DELIMITED };
+    }
+  }
+}
+
+/**
+ * Encode a sub-device as the nested `DeviceInfo` message a `DeviceInfoResponse` repeats at field 20: the device id (1), then the name (2) and the area id (3), each
+ * emitted only when defined.
+ *
+ * @param subDevice - The sub-device to encode.
+ * @returns The encoded nested-message bytes.
+ */
+function encodeSubDevice(subDevice: SubDevice): Buffer {
+
+  const fields: ProtoField[] = [{ fieldNumber: 1, value: subDevice.id, wireType: WireType.VARINT }];
+
+  if(subDevice.name !== undefined) {
+
+    fields.push({ fieldNumber: 2, value: Buffer.from(subDevice.name, "utf8"), wireType: WireType.LENGTH_DELIMITED });
+  }
+
+  if(subDevice.areaId !== undefined) {
+
+    fields.push({ fieldNumber: 3, value: subDevice.areaId, wireType: WireType.VARINT });
+  }
+
+  return encodeProtoFields(fields);
+}
+
+/**
+ * Encode a serial-proxy port as the nested `SerialProxyInfo` message a `DeviceInfoResponse` repeats at field 25: the name (1) and the port type (2). The repeated
+ * entries keep their order, which is the instance number every serial-proxy wire message uses.
+ *
+ * @param serialProxy - The serial-proxy port to encode.
+ * @returns The encoded nested-message bytes.
+ */
+function encodeSerialProxy(serialProxy: SerialProxyInfo): Buffer {
+
+  return encodeProtoFields([
+
+    { fieldNumber: 1, value: Buffer.from(serialProxy.name, "utf8"), wireType: WireType.LENGTH_DELIMITED },
+    { fieldNumber: 2, value: serialProxy.portType, wireType: WireType.VARINT }
+  ]);
+}
+
+/**
+ * Options consumed by {@link pushDeviceInfo}. Mirrors the wire fields of `DeviceInfoResponse` (`api.proto` §id 10), with the sub-devices the response carries beside the
+ * record they extend.
+ */
+export interface PushDeviceInfoOptions {
+
+  /**
+   * The device information to encode. Each defined member is emitted at its `api.proto` field number, booleans as `1` or `0` and each serial proxy as a nested
+   * `SerialProxyInfo` message in instance order, so the client's `deviceInfo()` reads back this record. Defaults to {@link mockDeviceInfo}'s record. A value replaces
+   * the default whole rather than merging onto it, so pass `mockDeviceInfo({ ... })` to change one field of the default.
+   */
+  deviceInfo?: DeviceInfo;
+
+  /**
+   * The sub-devices to encode, each a nested field 20 entry carrying its id, its name when defined, and its area id when defined, so the client's `subDevices()` reads
+   * back this list. Defaults to none.
+   */
+  subDevices?: readonly SubDevice[];
+}
+
+/**
+ * Push a synthesized `DEVICE_INFO_RESPONSE` frame onto the mock transport. Tests use this for a handshake they script frame by frame and for a device-information
+ * refresh during the run phase; {@link pushHandshake} queues a whole connect, its device information included, in one call.
+ *
+ * @param transport - The mock transport to push onto.
+ * @param options - The device information and sub-devices to encode. See {@link PushDeviceInfoOptions}.
+ */
+export function pushDeviceInfo(transport: MockTransport, options: PushDeviceInfoOptions = {}): void {
+
+  const deviceInfo = options.deviceInfo ?? mockDeviceInfo();
+  const fields: ProtoField[] = [];
+
+  for(const member of Object.keys(DEVICE_INFO_FIELD_NUMBERS) as DeviceInfoScalarMember[]) {
+
+    const value = deviceInfo[member];
+
+    if(value !== undefined) {
+
+      fields.push(encodeDeviceInfoField(DEVICE_INFO_FIELD_NUMBERS[member], value));
+    }
+  }
+
+  for(const subDevice of options.subDevices ?? []) {
+
+    fields.push({ fieldNumber: 20, value: encodeSubDevice(subDevice), wireType: WireType.LENGTH_DELIMITED });
+  }
+
+  for(const serialProxy of deviceInfo.serialProxies ?? []) {
+
+    fields.push({ fieldNumber: 25, value: encodeSerialProxy(serialProxy), wireType: WireType.LENGTH_DELIMITED });
+  }
+
+  transport.pushInbound(MessageType.DEVICE_INFO_RESPONSE, encodeProtoFields(fields));
+}
+
+/**
+ * Options consumed by {@link pushHandshake}.
+ */
+export interface PushHandshakeOptions extends PushDeviceInfoOptions {
+
+  /**
+   * Called with the transport after the entity and service frames are queued and before the end of discovery, so a family injector whose list frame carries more than
+   * identity fields, such as {@link pushInfraredListEntity} or {@link pushRadioFrequencyListEntity}, lands inside discovery. Defaults to none.
+   */
+  discovery?: (transport: MockTransport) => void;
+
+  /**
+   * The entities to discover, one list-entities frame each under the message type of the entity type's schema, carrying the object id, the key as fixed32, and the
+   * name at the schema's field numbers, then the device id when defined. The records {@link mockEntityDiscovery} builds assign to it. Defaults to none.
+   */
+  entities?: readonly Pick<BaseEntity, "deviceId" | "key" | "name" | "objectId" | "type">[];
+
+  /**
+   * The user-defined services to discover, one `LIST_ENTITIES_SERVICES_RESPONSE` each carrying the name at field 1 and the key as fixed32 at field 2. Defaults to none.
+   */
+  services?: readonly Pick<ServiceEntity, "key" | "name">[];
+}
+
+/**
+ * Push a synthesized plaintext connect onto the mock transport. The frames are queued in connect order: a `HELLO_RESPONSE`, the `DEVICE_INFO_RESPONSE` that
+ * {@link pushDeviceInfo} builds from the options, one list-entities frame per entity, one `LIST_ENTITIES_SERVICES_RESPONSE` per service, whatever the `discovery`
+ * callback pushes, and the empty `LIST_ENTITIES_DONE_RESPONSE` that ends discovery.
+ *
+ * The call is synchronous and belongs before the client is awaited: the transport holds every frame until the client reads it, so the whole exchange is queued
+ * before `openEspHomeClient` or `connect` starts. The hello announces a protocol version that meets the floor at which the client skips the legacy CONNECT exchange,
+ * so no connect response is needed. The mock cannot run a Noise handshake, so open the client without an encryption key. A frame a test queues after this call but
+ * before the client is open reaches the client as run-phase traffic at the hand-off from setup, ahead of any listener attached once the client is open, so a frame
+ * meant for a listener is queued after the client is open.
+ *
+ * Usage:
+ *
+ * {@includeCode ../examples/showcase.ts#mock-transport-pattern}
+ *
+ * @param transport - The mock transport to push onto.
+ * @param options - The device information, entities, services, and extra discovery frames to queue. See {@link PushHandshakeOptions}.
+ */
+export function pushHandshake(transport: MockTransport, options: PushHandshakeOptions = {}): void {
+
+  // The hello carries the API major and minor versions, the server info, and the device name. The announced version meets the floor of the modern handshake, so the
+  // device information follows the hello directly with no CONNECT exchange between them.
+  transport.pushInbound(MessageType.HELLO_RESPONSE, encodeProtoFields([
+
+    { fieldNumber: 1, value: 1, wireType: WireType.VARINT },
+    { fieldNumber: 2, value: 12, wireType: WireType.VARINT },
+    { fieldNumber: 3, value: Buffer.from("test-server", "utf8"), wireType: WireType.LENGTH_DELIMITED },
+    { fieldNumber: 4, value: Buffer.from("test-device", "utf8"), wireType: WireType.LENGTH_DELIMITED }
+  ]));
+
+  pushDeviceInfo(transport, options);
+
+  for(const entity of options.entities ?? []) {
+
+    const listEntities = ENTITY_SCHEMAS[entity.type].listEntities;
+    const fields: ProtoField[] = [
+
+      { fieldNumber: listEntities.objectIdFieldNumber, value: Buffer.from(entity.objectId, "utf8"), wireType: WireType.LENGTH_DELIMITED },
+      { fieldNumber: listEntities.keyFieldNumber, value: encodeKeyFixed32(entity.key), wireType: WireType.FIXED32 },
+      { fieldNumber: listEntities.nameFieldNumber, value: Buffer.from(entity.name, "utf8"), wireType: WireType.LENGTH_DELIMITED }
+    ];
+
+    if(entity.deviceId !== undefined) {
+
+      fields.push({ fieldNumber: listEntities.deviceIdFieldNumber, value: entity.deviceId, wireType: WireType.VARINT });
+    }
+
+    transport.pushInbound(listEntities.messageType, encodeProtoFields(fields));
+  }
+
+  for(const service of options.services ?? []) {
+
+    transport.pushInbound(MessageType.LIST_ENTITIES_SERVICES_RESPONSE, encodeProtoFields([
+
+      { fieldNumber: 1, value: Buffer.from(service.name, "utf8"), wireType: WireType.LENGTH_DELIMITED },
+      { fieldNumber: 2, value: encodeKeyFixed32(service.key), wireType: WireType.FIXED32 }
+    ]));
+  }
+
+  options.discovery?.(transport);
+
+  transport.pushInbound(MessageType.LIST_ENTITIES_DONE_RESPONSE, Buffer.alloc(0));
+}
+
+/**
  * Options consumed by {@link pushInfraredListEntity}. Mirrors the wire fields of `ListEntitiesInfraredResponse` (`api.proto` §id 135). The required `key`, `objectId`,
  * and `name` are stamped into every push; optional fields are emitted only when defined.
  */
@@ -583,7 +839,8 @@ export interface PushInfraredListEntityOptions {
 
 /**
  * Push a synthesized `LIST_ENTITIES_INFRARED_RESPONSE` frame onto the mock transport. Tests use this during discovery to seed an infrared entity into the host's
- * registry; the produced bytes match the field layout the schema's listEntities slot declares.
+ * registry, calling it from the `discovery` option of {@link pushHandshake} to queue the frame inside a handshake; the produced bytes match the field layout the
+ * schema's listEntities slot declares.
  *
  * @param transport - The mock transport to push onto.
  * @param options - Per-entity fields. See {@link PushInfraredListEntityOptions}.
@@ -644,7 +901,8 @@ export interface PushRadioFrequencyListEntityOptions {
 
 /**
  * Push a synthesized `LIST_ENTITIES_RADIO_FREQUENCY_RESPONSE` frame onto the mock transport. Tests use this during discovery to seed a radio-frequency entity into the
- * host's registry; the produced bytes match the field layout the schema's listEntities slot declares.
+ * host's registry, calling it from the `discovery` option of {@link pushHandshake} to queue the frame inside a handshake; the produced bytes match the field layout
+ * the schema's listEntities slot declares.
  *
  * @param transport - The mock transport to push onto.
  * @param options - Per-entity fields. See {@link PushRadioFrequencyListEntityOptions}.

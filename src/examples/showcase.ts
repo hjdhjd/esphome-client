@@ -28,6 +28,7 @@ import type { ClientEventsMap, DeviceInfo, EspHomeClientOptions, ExecuteServiceA
 import type { Entity, ExtraSchemaSet, TelemetryEvent } from "../schemas/index.ts";
 import { EspHomeClient, openEspHomeClient } from "../esphome-client.ts";
 import type { EspHomeLogging, Nullable, PskResolver } from "../types.ts";
+import { MockTransport, pushHandshake } from "../testing/mock-transport.ts";
 import { aliasOf, extending } from "../schemas/index.ts";
 import { createESPHomeHandshake, createHandshake } from "../crypto-noise.ts";
 import { entityId, isEntityId, parseEntityId } from "../entity-id.ts";
@@ -35,7 +36,6 @@ import { mockDeviceInfo, mockEntityDiscovery, mockHealth, mockStateMessage } fro
 import { Buffer } from "node:buffer";
 import type { EntityId } from "../entity-id.ts";
 import { MockClient } from "../testing/mock-client.ts";
-import { MockTransport } from "../testing/mock-transport.ts";
 import type { ReadableStream } from "node:stream/web";
 import { WireType } from "../protocol/index.ts";
 import { connectionUptimeMs } from "../health.ts";
@@ -1661,8 +1661,10 @@ export function mockClientPatternExample(): void {
 
   mock.populateEntities(mockEntityDiscovery({ light: ["kitchen_lamp"], switch: ["front_door"] }));
   mock.setDeviceInfo(mockDeviceInfo({ esphomeVersion: "2026.5.0", name: "test-device" }));
-  mock.setHealth(mockHealth({ state: "connected" }));
   mock.setConnected(true);
+
+  // The connect installs a connected health record of its own, so a seeded record follows it.
+  mock.setHealth(mockHealth({ state: "connected" }));
 
   // Drive a state event into the bus; consumer-code subscriptions react as if a real device sent it.
   mock.emitState(mockStateMessage(entityId("light", "kitchen_lamp"), { brightness: 0.5, state: true }));
@@ -1685,16 +1687,21 @@ export function mockClientPatternExample(): void {
 // #region mock-transport-pattern
 export async function mockTransportPatternExample(): Promise<void> {
 
-  // Real tests stage the byte sequence the transport plays back during the handshake, synthesizing the hello / connect / discovery exchange with the helper
-  // exports from `esphome-client/testing`.
+  // The transport holds every frame queued on it until the client reads it, so the whole plaintext connect - the hello, the device information, and a discovery of the
+  // entities the scenario needs - is queued before the client opens. The mock never answers the graceful disconnect, so the client is disposed synchronously on scope
+  // exit rather than waiting out that exchange's timeout.
   const transport = new MockTransport();
 
-  await using client = await openEspHomeClient({
+  pushHandshake(transport, { entities: mockEntityDiscovery({ light: ["kitchen_lamp"], switch: ["front_door"] }) });
+
+  using client = await openEspHomeClient({
 
     host: "test.local",
     psk: null,
     transportFactory: (): MockTransport => transport
   });
+
+  log.info("The client connected over the mock transport and discovered its entities.", client.getEntitiesWithIds().length);
 }
 // #endregion mock-transport-pattern
 

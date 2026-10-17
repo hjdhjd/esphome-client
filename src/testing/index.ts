@@ -35,12 +35,13 @@ export {
   pushBluetoothDeviceClearCacheResponse, pushBluetoothDeviceConnectionResponse, pushBluetoothDevicePairingResponse, pushBluetoothDeviceUnpairingResponse,
   pushBluetoothGattErrorResponse, pushBluetoothGattGetServicesDoneResponse, pushBluetoothGattGetServicesResponse, pushBluetoothGattNotifyData,
   pushBluetoothGattNotifyResponse, pushBluetoothGattReadResponse, pushBluetoothGattWriteResponse, pushBluetoothScannerState, pushBluetoothSetConnectionParamsResponse,
-  pushInfraredListEntity, pushInfraredRFReceiveEvent, pushRadioFrequencyListEntity, pushSerialData, pushSerialFlushResult, pushSerialModemPinsResponse, pushZWaveFrame,
-  pushZWaveHomeIdChange
+  pushDeviceInfo, pushHandshake, pushInfraredListEntity, pushInfraredRFReceiveEvent, pushRadioFrequencyListEntity, pushSerialData, pushSerialFlushResult,
+  pushSerialModemPinsResponse, pushZWaveFrame, pushZWaveHomeIdChange
 } from "./mock-transport.ts";
 export type {
   CapturedFrame, PushBluetoothAdvertisement, PushBluetoothGattCharacteristic, PushBluetoothGattDescriptor, PushBluetoothGattService, PushBluetoothScannerStateOptions,
-  PushInfraredListEntityOptions, PushInfraredRFReceiveEventOptions, PushRadioFrequencyListEntityOptions, PushSerialFlushResultOptions
+  PushDeviceInfoOptions, PushHandshakeOptions, PushInfraredListEntityOptions, PushInfraredRFReceiveEventOptions, PushRadioFrequencyListEntityOptions,
+  PushSerialFlushResultOptions
 } from "./mock-transport.ts";
 // The recording-mock factory's MOCK symbol and MockController surface are part of the public test API - consumer code that captures recorded calls via
 // `mock.bluetooth[MOCK].calls` needs both to be importable from `esphome-client/testing`. The factory function itself is internal infrastructure (MockClient uses it

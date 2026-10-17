@@ -2,11 +2,58 @@
  *
  * mock-transport.test.ts: Helper-coverage-parity tests for the MockTransport test helper.
  */
-import { MockTransport, MockTransportPhase, mockNoiseHandshakeExchange } from "./mock-transport.ts";
+import type { Entity, InfraredEntity } from "../schemas/index.ts";
+import { EspHomeClient, openEspHomeClient } from "../esphome-client.ts";
+import { InfraredCapabilityFlags, SerialProxyPortType } from "../api-constants.ts";
+import { MockTransport, MockTransportPhase, mockNoiseHandshakeExchange, pushDeviceInfo, pushHandshake, pushInfraredListEntity } from "./mock-transport.ts";
 import { describe, test } from "node:test";
+import { mockDeviceInfo, mockEntityDiscovery } from "./factories.ts";
 import { Buffer } from "node:buffer";
+import type { DeviceInfo } from "../esphome-client.ts";
+import { ENTITY_SCHEMAS } from "../schemas/index.ts";
+import type { EspHomeLogging } from "../types.ts";
+import type { InboundMessage } from "../transport.ts";
+import { MessageType } from "../protocol/message-types.ts";
+import type { SubDevice } from "../sub-device.ts";
 import assert from "node:assert/strict";
+import { decodeProtobuf } from "../protocol/codec.ts";
+import { entityId } from "../entity-id.ts";
 import { setImmediate as settle } from "node:timers/promises";
+
+// The decode bound for reading a queued frame's payload back field by field.
+const DECODE_OPTIONS = { maxFieldsPerMessage: 64 };
+
+// Drain every frame queued on a transport. Disposing the transport first ends its inbound stream after the last queued frame, so the drain returns exactly what was
+// queued by the time of the call and never parks awaiting another frame.
+async function drainQueued(transport: MockTransport): Promise<InboundMessage[]> {
+
+  const frames: InboundMessage[] = [];
+
+  transport[Symbol.dispose]();
+
+  for await (const frame of transport) {
+
+    frames.push(frame);
+  }
+
+  return frames;
+}
+
+// A client logger that discards every level. A row that reads the client's warnings overrides the warn level with its own capture.
+function quietLogger(): EspHomeLogging {
+
+  return { debug: (): void => undefined, error: (): void => undefined, info: (): void => undefined, warn: (): void => undefined };
+}
+
+// Open a real client over a transport the row has already primed. The client has no encryption key because the mock cannot run a Noise handshake, and it neither
+// retries nor reconnects, so a connect that cannot finish fails the row within the short timeout rather than hanging it.
+async function openPrimedClient(transport: MockTransport, logger: EspHomeLogging = quietLogger()): Promise<EspHomeClient> {
+
+  return openEspHomeClient({
+
+    connectTimeoutMs: 500, host: "test.local", logger, maxConstructionRetries: 0, reconnect: false, transportFactory: (): MockTransport => transport
+  });
+}
 
 describe("MockTransport phase transitions", () => {
 
@@ -404,5 +451,209 @@ describe("MockTransportPhase const-object", () => {
   test("the three values are pairwise distinct", () => {
 
     assert.equal(new Set(Object.values(MockTransportPhase)).size, 3);
+  });
+});
+
+describe("pushHandshake", () => {
+
+  test("queues the hello, the device information, the entities, the services, the discovery frames, and the end of discovery, in order, before it returns", async () => {
+
+    const transport = new MockTransport();
+
+    pushHandshake(transport, {
+
+      discovery: (target): void => { target.pushInbound(MessageType.PING_REQUEST, Buffer.alloc(0)); },
+      entities: [{ key: 1, name: "Kitchen Lamp", objectId: "kitchen_lamp", type: "light" }],
+      services: [{ key: 2, name: "reboot" }]
+    });
+
+    assert.deepEqual((await drainQueued(transport)).map((frame): number => frame.type), [ MessageType.HELLO_RESPONSE, MessageType.DEVICE_INFO_RESPONSE,
+      ENTITY_SCHEMAS.light.listEntities.messageType, MessageType.LIST_ENTITIES_SERVICES_RESPONSE, MessageType.PING_REQUEST, MessageType.LIST_ENTITIES_DONE_RESPONSE ]);
+  });
+
+  test("queues a protocol 1.12 hello and list frames carrying the schema's identity fields", async () => {
+
+    const transport = new MockTransport();
+    const listEntities = ENTITY_SCHEMAS.switch.listEntities;
+    const key = Buffer.alloc(4);
+
+    key.writeUInt32LE(0xCAFE0001, 0);
+
+    pushHandshake(transport, { entities: [{ key: 0xCAFE0001, name: "Front Door", objectId: "front_door", type: "switch" }] });
+
+    const [ hello, , entity ] = await drainQueued(transport);
+
+    assert.deepEqual(decodeProtobuf(hello?.payload ?? Buffer.alloc(0), DECODE_OPTIONS),
+      { 1: [1], 2: [12], 3: [Buffer.from("test-server", "utf8")], 4: [Buffer.from("test-device", "utf8")] }, "the hello must announce protocol 1.12");
+    assert.equal(entity?.type, listEntities.messageType, "the entity frame must carry the schema's list-entities message type");
+    assert.deepEqual(decodeProtobuf(entity?.payload ?? Buffer.alloc(0), DECODE_OPTIONS), {
+
+      [listEntities.keyFieldNumber]: [key],
+      [listEntities.nameFieldNumber]: [Buffer.from("Front Door", "utf8")],
+      [listEntities.objectIdFieldNumber]: [Buffer.from("front_door", "utf8")]
+    }, "the entity frame must carry the object id, the key, and the name at the schema's field numbers");
+  });
+
+  test("primes a transport so a client opened without an encryption key connects and sends no CONNECT_REQUEST", async () => {
+
+    const transport = new MockTransport();
+
+    pushHandshake(transport);
+
+    using client = await openPrimedClient(transport);
+
+    assert.equal(client.health().state, "connected");
+    assert.equal(transport.outboundFrames.some((frame): boolean => frame.type === MessageType.CONNECT_REQUEST), false,
+      "the hello's protocol version must let the client skip the legacy CONNECT exchange");
+  });
+
+  test("connects with mockDeviceInfo()'s record when the options give no device information", async () => {
+
+    const transport = new MockTransport();
+
+    pushHandshake(transport);
+
+    using client = await openPrimedClient(transport);
+
+    assert.deepEqual(client.deviceInfo(), mockDeviceInfo());
+  });
+
+  test("round-trips a device information record defining every member, and sub-devices with and without names and area ids", async () => {
+
+    const transport = new MockTransport();
+
+    // The record type requires every member, so a member added to DeviceInfo fails to compile here until the round trip covers it.
+    const deviceInfo: Required<DeviceInfo> = {
+
+      apiEncryptionSupported: true,
+      bluetoothMacAddress: "11:22:33:44:55:66",
+      bluetoothProxyFeatureFlags: 0x3F,
+      compilationTime: "2026-10-03 12:00:00",
+      esphomeVersion: "2026.10.0",
+      friendlyName: "Garage Controller",
+      hasDeepSleep: true,
+      legacyBluetoothProxyVersion: 5,
+      legacyVoiceAssistantVersion: 2,
+      macAddress: "AA:BB:CC:00:11:22",
+      manufacturer: "Espressif",
+      model: "esp32-c6",
+      name: "garage-controller",
+      projectName: "acme.garage",
+      projectVersion: "1.2.3",
+      serialProxies: [ { name: "uart_0", portType: SerialProxyPortType.TTL }, { name: "rs485_bus", portType: SerialProxyPortType.RS485 } ],
+      suggestedArea: "Garage",
+      usesPassword: true,
+      voiceAssistantFeatureFlags: 5,
+      webserverPort: 80,
+      zwaveHomeId: 0xDEADBEEF,
+      zwaveProxyFeatureFlags: 1
+    };
+    const subDevices: SubDevice[] = [ { areaId: 7, id: 1, name: "Left Door" }, { id: 2, name: "Right Door" }, { areaId: 9, id: 3 }, { id: 4 } ];
+
+    pushHandshake(transport, { deviceInfo, subDevices });
+
+    using client = await openPrimedClient(transport);
+
+    assert.deepEqual(client.deviceInfo(), deviceInfo);
+    assert.deepEqual(client.subDevices(), subDevices);
+  });
+
+  test("discovers entities across types with their identity fields and device id, and services with their names and keys", async () => {
+
+    const transport = new MockTransport();
+
+    // The sensor belongs to a sub-device, so its list frame carries a device id the others omit.
+    const entities = mockEntityDiscovery({ light: ["kitchen_lamp"], sensor: ["outdoor_temperature"], switch: ["front_door"] })
+      .map((entity): Entity => (entity.type === "sensor") ? { ...entity, deviceId: 2 } : entity);
+    const services = [ { key: 0xCAFE0001, name: "reboot" }, { key: 0xCAFE0002, name: "identify" } ];
+    const identity = ({ deviceId, key, name, objectId, type }: Entity): Record<string, unknown> => ({ deviceId, key, name, objectId, type });
+
+    pushHandshake(transport, { entities, services });
+
+    using client = await openPrimedClient(transport);
+
+    assert.deepEqual(client.getEntitiesWithIds().map(identity), entities.map(identity));
+    assert.deepEqual(client.services.list().map(({ key, name }) => ({ key, name })), services);
+  });
+
+  test("connects with every entity of a discovery far past the setup buffer's per-type mark, in order, and logs no warning", async () => {
+
+    const transport = new MockTransport();
+    const warnings: unknown[][] = [];
+
+    // The discovery holds far more entities of one type than the receiver's per-type setup-buffer mark, and every frame is queued before the client reads any, so the
+    // whole list waits in that buffer at once.
+    const entities = mockEntityDiscovery({ switch: Array.from({ length: 40 }, (_, index): string => "switch_" + String(index)) });
+
+    pushHandshake(transport, { entities });
+
+    using client = await openPrimedClient(transport, { ...quietLogger(), warn: (...parameters: unknown[]): void => { warnings.push(parameters); } });
+
+    assert.deepEqual(client.getEntitiesWithIds().map((entity): string => entity.id), entities.map((entity): string => entityId(entity.type, entity.objectId)),
+      "every entity must be registered, in the order the discovery listed it");
+    assert.deepEqual(warnings, [], "a discovery past the per-type mark must not trip the setup buffer's drop warning");
+  });
+
+  test("lands a discovery callback's infrared list frame inside discovery, its capabilities included", async () => {
+
+    const transport = new MockTransport();
+    const capabilities = InfraredCapabilityFlags.TRANSMITTER | InfraredCapabilityFlags.RECEIVER;
+
+    using client = new EspHomeClient({ host: "test.local", logger: quietLogger(), reconnect: false, transportFactory: (): MockTransport => transport });
+
+    // The row reads the entity list the connect announces rather than the registry. A list frame queued after the end of discovery still reaches the registry through
+    // the client's run-phase late-discovery path, but only a frame inside discovery belongs to the list the connect announces.
+    const announced = client.once("entities", { signal: AbortSignal.timeout(500) });
+
+    pushHandshake(transport, {
+
+      discovery: (target): void => { pushInfraredListEntity(target, { capabilities, key: 0x1234, name: "IR Blaster", objectId: "ir_blaster" }); }
+    });
+
+    await client.connect({ signal: AbortSignal.timeout(500) });
+
+    assert.equal((await announced).find((entity): entity is InfraredEntity => entity.type === "infrared")?.capabilities, capabilities,
+      "the connect's entity list must carry the infrared entity with its capabilities");
+  });
+});
+
+describe("pushDeviceInfo", () => {
+
+  test("queues exactly one DEVICE_INFO_RESPONSE frame before it returns", async () => {
+
+    const transport = new MockTransport();
+
+    pushDeviceInfo(transport);
+
+    assert.deepEqual((await drainQueued(transport)).map((frame): number => frame.type), [MessageType.DEVICE_INFO_RESPONSE]);
+  });
+
+  test("queues the payload pushHandshake queues for the same device information and sub-devices", async () => {
+
+    const options = { deviceInfo: mockDeviceInfo({ friendlyName: "Porch Controller" }), subDevices: [ { areaId: 4, id: 1, name: "Porch Light" }, { id: 2 } ] };
+    const handshake = new MockTransport();
+    const alone = new MockTransport();
+
+    pushHandshake(handshake, options);
+    pushDeviceInfo(alone, options);
+
+    const [aloneFrame] = await drainQueued(alone);
+
+    assert.notEqual(aloneFrame, undefined);
+    assert.deepEqual((await drainQueued(handshake)).find((frame): boolean => frame.type === MessageType.DEVICE_INFO_RESPONSE)?.payload, aloneFrame?.payload);
+  });
+
+  test("refreshes a connected client's device information as a run-phase frame", async () => {
+
+    const transport = new MockTransport();
+
+    pushHandshake(transport);
+
+    using client = await openPrimedClient(transport);
+
+    pushDeviceInfo(transport, { deviceInfo: mockDeviceInfo({ friendlyName: "Renamed Controller" }) });
+    await transport.whenIdle();
+
+    assert.equal(client.deviceInfo()?.friendlyName, "Renamed Controller");
   });
 });
