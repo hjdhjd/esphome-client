@@ -391,6 +391,63 @@ describe("MessageReceiver.startDrain", () => {
     assert.deepEqual(causes, [], "the refused hand-off must install no terminal callback");
   });
 
+  // Each row below stores a device's refusal as the row above does, lets a second failure land before the hand-off, and asserts that a later waitFor and the
+  // hand-off report the refusal itself, the first failure the receiver was handed. A terminal failure is followed by a wait on setImmediate rather than on
+  // whenIdle, because whenIdle resolves at once on a terminated transport, before the receiver has stored what the transport ended with, and a row that read the
+  // store then would pass whichever failure the receiver kept.
+  const storeRefusal = async (): Promise<{ receiver: MessageReceiver; refusal: Error; transport: MockTransport }> => {
+
+    const transport = new MockTransport();
+    const receiver = new MessageReceiver(transport);
+    const refusal = new Error("The device asked to disconnect during setup.");
+
+    receiver.onInterleave(MessageType.DISCONNECT_REQUEST, () => { throw refusal; });
+
+    transport.pushInbound(MessageType.DISCONNECT_REQUEST, Buffer.alloc(0));
+    await transport.whenIdle();
+
+    return { receiver, refusal, transport };
+  };
+
+  const assertRefusalKept = async (receiver: MessageReceiver, refusal: Error): Promise<void> => {
+
+    await assert.rejects(receiver.waitFor([42]), (err: unknown): boolean => err === refusal, "a later waitFor must reject with the refusal, not the later failure");
+    assert.throws(() => receiver.startDrain({}, () => { /* the hand-off throws before installing this */ }), (err: unknown): boolean => err === refusal,
+      "the hand-off must throw the refusal, not the later failure");
+  };
+
+  test("a clean end of the transport's stream after a refusal during setup leaves the refusal as what a later waitFor and the hand-off report", async () => {
+
+    const { receiver, refusal, transport } = await storeRefusal();
+
+    transport[Symbol.dispose]();
+    await new Promise((resolve) => setImmediate(resolve));
+
+    await assertRefusalKept(receiver, refusal);
+  });
+
+  test("a transport fault after a refusal during setup leaves the refusal as what a later waitFor and the hand-off report", async () => {
+
+    const { receiver, refusal, transport } = await storeRefusal();
+
+    transport.fail(new ConnectionClosedByPeerError("Synthetic peer death after the refusal.", "PEER_CLOSED"));
+    await new Promise((resolve) => setImmediate(resolve));
+
+    await assertRefusalKept(receiver, refusal);
+  });
+
+  test("a second interleave throw after a refusal during setup leaves the refusal as what a later waitFor and the hand-off report", async () => {
+
+    const { receiver, refusal, transport } = await storeRefusal();
+
+    receiver.onInterleave(7, () => { throw new Error("A second interleave handler refused the connection."); });
+
+    transport.pushInbound(7, Buffer.alloc(0));
+    await transport.whenIdle();
+
+    await assertRefusalKept(receiver, refusal);
+  });
+
   test("startDrain throws the stored transport fault from before the hand-off", async () => {
 
     const transport = new MockTransport();

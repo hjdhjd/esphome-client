@@ -1196,7 +1196,9 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
    * @returns A promise that resolves when the connection is established and ready. It rejects with the platform `TimeoutError` when the connect or handshake
    *   timeout elapses, with the signal's reason when `options.signal` aborts, with the {@link ConnectionLostError} of a {@link EspHomeClient.disconnect} or
    *   {@link EspHomeClient.disconnectAsync} that cuts it short or of a teardown during the hand-off to the run phase, and with a typed {@link EspHomeError} subclass
-   *   for every other failure. A timeout names no step; the step a connect failed in is logged at debug level and carried on the legacy `disconnect` event.
+   *   for every other failure. A timeout or a cancellation names no step. Any other failure outside the typed hierarchy rejects with the `CONNECT_FAILED` wrap,
+   *   whose message names the step the connect failed in; the debug line and the legacy `disconnect` event carry that wrap for every failure outside the hierarchy,
+   *   a timeout or a cancellation among them. A typed failure passes through as it is, and no surface names its step.
    */
   public async connect(options?: { signal?: AbortSignal }): Promise<void> {
 
@@ -1245,7 +1247,8 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
    * @param options - The attempt's inputs.
    * @param options.signal - The attempt's signal: the caller's signal composed with the manual connect's controller, or the reconnect loop's signal.
    * @param options.unwrapSignalReasons - Whether a rejection that is the reason of one of the attempt's own signals reaches the caller as it is. The public
-   *   {@link connect} sets it; the reconnect loop's attempt, whose rejection no consumer awaits, receives the `CONNECT_FAILED` wrap that names the failed step.
+   *   {@link connect} sets it; the reconnect loop's attempt, whose rejection no consumer awaits, receives a typed failure as it is and the `CONNECT_FAILED` wrap
+   *   that names the failed step for a failure outside the typed hierarchy, a signal's own reason included.
    */
   private async connectInternal(options: { signal: AbortSignal; unwrapSignalReasons?: boolean }): Promise<void> {
 

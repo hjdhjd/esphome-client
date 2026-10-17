@@ -156,6 +156,8 @@ export class MessageReceiver implements AsyncDisposable {
   /**
    * Fatal setup or transport failure: a transport fault, the clean end of the transport's stream, or the error an interleave handler threw. Surfaced into every awaiter
    * on settle, thrown by a later `waitFor` that finds no buffered match, and thrown by {@link startDrain}, so no failure stored during setup is lost at the hand-off.
+   * The field keeps the first failure it is handed, so a device's refusal during setup, not a close or fault that follows it, is what a later wait and the hand-off
+   * report.
    */
   private pumpError: Nullable<Error> = null;
 
@@ -295,7 +297,7 @@ export class MessageReceiver implements AsyncDisposable {
    * surfaces as a fault. The transport's iterator ends cleanly only when the transport is disposed, which the host does after disposing this receiver, so that path is
    * suppressed. Without this escalation a passive transport death would leave the host falsely `CONNECTED` with no liveness detector when `keepAlive` is disabled; the
    * host wires it to its disconnect path so a peer death drives teardown and auto-reconnect.
-   * @throws The failure the receiver stored during setup and no setup wait read, as it is, before anything is installed: the transport's fault, a
+   * @throws The failure the receiver stored during setup, as it is, before anything is installed: the transport's fault, a
    * {@link ConnectionClosedByPeerError} (`TRANSPORT_CLOSED`) for a clean end of the transport's stream, or the error an interleave handler threw.
    */
   public startDrain(handlers: MessageHandlers, onTerminal: (cause: Error) => void): void {
@@ -416,11 +418,11 @@ export class MessageReceiver implements AsyncDisposable {
         this.dispatch(message);
       }
 
-      // The iterator ends cleanly only when the transport is disposed; a peer FIN or RST is a fault that throws into the catch below. We store the clean end as
-      // `pumpError`, as a fault is stored, so a later setup-phase `waitFor` rejects at once rather than parking until its signal fires on a stream that has ended, and
-      // the drain hand-off fails rather than starting a run phase with no frames. `failPending` settles any setup-phase awaiter so it does not hang forever;
-      // `settleTerminal` escalates the run-phase terminal completion unless the host initiated the dispose.
-      this.pumpError = new ConnectionClosedByPeerError("Transport iterator ended.", "TRANSPORT_CLOSED");
+      // The iterator ends cleanly only when the transport is disposed; a peer FIN or RST is a fault that throws into the catch below. Unless an earlier failure is
+      // stored, we store the clean end as `pumpError`, as a fault is stored, so a later setup-phase `waitFor` rejects at once rather than parking until its signal fires
+      // on a stream that has ended, and the drain hand-off fails rather than starting a run phase with no frames. `failPending` settles any setup-phase awaiter so it
+      // does not hang forever; `settleTerminal` escalates the run-phase terminal completion unless the host initiated the dispose.
+      this.pumpError ??= new ConnectionClosedByPeerError("Transport iterator ended.", "TRANSPORT_CLOSED");
       this.failPending(this.pumpError);
       this.settleTerminal(this.pumpError);
 
@@ -429,7 +431,7 @@ export class MessageReceiver implements AsyncDisposable {
       // A fault during the run phase (peer RST or FIN, mid-session decrypt failure, oversized frame) throws out of the `for await`. We keep `pumpError` (read by a late
       // setup-phase `waitFor` and by the drain hand-off) and `failPending` (settles setup-phase awaiters) for the setup-phase contract, then escalate the terminal
       // completion to the host.
-      this.pumpError = err instanceof Error ? err : new Error(String(err), { cause: err });
+      this.pumpError ??= err instanceof Error ? err : new Error(String(err), { cause: err });
       this.failPending(this.pumpError);
       this.settleTerminal(this.pumpError);
     }
@@ -480,7 +482,7 @@ export class MessageReceiver implements AsyncDisposable {
       } catch(err) {
 
         // A throw from an interleave handler is fatal - it usually means the handler decided the connection cannot proceed (e.g., DISCONNECT_REQUEST mid-handshake).
-        this.pumpError = err instanceof Error ? err : new Error(String(err), { cause: err });
+        this.pumpError ??= err instanceof Error ? err : new Error(String(err), { cause: err });
         this.failPending(this.pumpError);
       }
 
