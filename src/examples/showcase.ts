@@ -269,8 +269,9 @@ export async function lifecycleAndHealthExample(client: EspHomeClient): Promise<
 
 /**
  * Two health-observation rails: a callback registered via {@link EspHomeClient.onHealthChange} and an async-iterable stream from
- * {@link EspHomeClient.healthStream}. Both fire on every state transition (connected -> stalled -> reconnecting -> disconnected). The synchronous {@link
- * EspHomeClient.health} read returns the live record at any point; uptime is derived from `connectedAtMs` via {@link connectionUptimeMs} rather than stored.
+ * {@link EspHomeClient.healthStream}. Both fire on every state transition, which a stall runs in the order connected, stalled, disconnected, reconnecting, then
+ * connected again once the reconnect succeeds. The synchronous {@link EspHomeClient.health} read returns the live record at any point; uptime is derived from
+ * `connectedAtMs` via {@link connectionUptimeMs} rather than stored.
  */
 // #region health-stream
 export async function healthStreamExample(client: EspHomeClient): Promise<void> {

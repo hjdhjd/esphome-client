@@ -185,7 +185,7 @@ On by default with `PermanentError`-filtered retry, exponential backoff (500ms i
 
 ### Heartbeat
 
-A lazy keep-alive guards against a silently dead socket, on by default. After `intervalMs` of inbound silence (default 30s) the client sends a `PING_REQUEST`; if no inbound activity follows within `stallTimeoutMs` (default 60s) the connection is declared stalled - a `HeartbeatStalledError` surfaces, the transport is torn down, and auto-reconnect takes over when enabled. Ping round-trip time and the running stall count surface on the health record as `lastPingRttMs` and `consecutiveStalls`. Pass `keepAlive: false` to disable, or `keepAlive: { intervalMs, stallTimeoutMs }` to tune the thresholds.
+A lazy keep-alive guards against a silently dead socket, on by default. After `intervalMs` of inbound silence (default 30s) the client sends a `PING_REQUEST`. The stall is measured from the last inbound activity and checked on a tick of half `intervalMs`, at least one second, so it fires between `stallTimeoutMs` (default 60s) and `stallTimeoutMs` plus one tick of silence: the connection is declared stalled, a `HeartbeatStalledError` surfaces, the transport is torn down, and auto-reconnect takes over when enabled. Ping round-trip time and the running stall count surface on the health record as `lastPingRttMs` and `consecutiveStalls`. Pass `keepAlive: false` to disable, or `keepAlive: { intervalMs, stallTimeoutMs }` to tune the thresholds.
 
 ### Latest-state cache
 

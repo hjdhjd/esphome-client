@@ -543,7 +543,7 @@ export interface EspHomeClientOptions<Extras extends ExtraSchemaSet = {}> {
  * Backoff configuration for the {@link openEspHomeClient} factory's bounded construction-retry loop.
  *
  * @remarks Construction retry is separate from runtime auto-reconnect by design: construction retry is bounded (default 3 retries after the initial attempt) so
- * misconfigurations surface quickly; runtime reconnect is unbounded so transient drops recover invisibly once the consumer has a working client.
+ * misconfigurations surface quickly; runtime reconnect is unbounded so a transient drop is retried until the device returns once the consumer has a working client.
  */
 export interface ConstructionRetryConfig {
 
