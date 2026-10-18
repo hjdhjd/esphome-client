@@ -17,7 +17,8 @@ function withReconnect(
 Run a body callback once per successful connect. The helper subscribes to [WithReconnectClient.lifecycle](../interfaces/WithReconnectClient.md#lifecycle), fires the body on the first observed `connect`
 event (or immediately if the client is already connected when the helper starts), and re-fires on every subsequent `connect` after a `disconnect`. When the
 connection drops, the teardown rejects the body's awaiting calls (a command wait, a snapshot, a sub-API request) with [ConnectionLostError](../classes/ConnectionLostError.md) first, and the
-body's signal then aborts on the matching `disconnect`, which ends the body's stream iterators. A body tells a disconnect apart from another failure by
+body's signal then aborts on the matching `disconnect`, which ends the body's stream iterators. The `lost` and `recovered` verdicts describe an outage whose
+`disconnect` already ended the body's session, so they start or end no per-session work. A body tells a disconnect apart from another failure by
 `instanceof ConnectionLostError`, or by its signal's `aborted` flag after awaiting, never by comparing the rejection with its signal's reason, which those calls do
 not carry.
 

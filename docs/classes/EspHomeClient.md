@@ -34,7 +34,8 @@ Two construction paths:
 connection mid-noise or returns a plaintext frame), `ConnectRequest`/`ConnectResponse`, `DeviceInfoRequest`, `ListEntitiesRequest`, `SubscribeStatesRequest`. Failures
 surface as typed errors from [EspHomeError](EspHomeError.md) subclasses. Auto-reconnect is on by default with `PermanentError`-filtered retry; pass `reconnect: false` to opt out.
 Lazy heartbeat (30s idle / 60s stall) is on by default; pass `keepAlive: false` to opt out. Live state is observable via [EspHomeClient.health](#health),
-[EspHomeClient.onHealthChange](#onhealthchange), [EspHomeClient.healthStream](#healthstream), and the typed [EspHomeClient.lifecycle](#lifecycle) stream.
+[EspHomeClient.onHealthChange](#onhealthchange), [EspHomeClient.healthStream](#healthstream), and the typed [EspHomeClient.lifecycle](#lifecycle) stream, whose kinds are `connect`,
+`disconnect`, `lost`, and `recovered`, each raised as [LifecycleEvent](../type-aliases/LifecycleEvent.md) states.
 
 ## Entity model
 
@@ -1285,7 +1286,19 @@ export async function lifecycleAndHealthExample(client: EspHomeClient): Promise<
 
         case "disconnect":
 
-          log.warn("The client lost its connection to the device.", event.cause);
+          log.debug("The session with the device ended.", event.cause);
+
+          break;
+
+        case "lost":
+
+          log.warn("The device is unreachable.", event.cause);
+
+          break;
+
+        case "recovered":
+
+          log.info("The device is reachable again.");
 
           break;
       }
@@ -1403,8 +1416,9 @@ export function latestStateLookupExample(client: EspHomeClient, lightId: EntityI
 lifecycle(options?): AsyncIterable<LifecycleEvent>;
 ```
 
-Async-iterable view of connect/disconnect transitions. Each event is the typed [LifecycleEvent](../type-aliases/LifecycleEvent.md) discriminated union; consumers gate on
-`event.kind === "connect" | "disconnect"` and pattern-match the disconnect cause against the typed error hierarchy.
+Async-iterable view of the lifecycle stream. Each event is the typed [LifecycleEvent](../type-aliases/LifecycleEvent.md) discriminated union, whose doc states when each kind is raised;
+consumers narrow on `event.kind`, one of `connect`, `disconnect`, `lost`, and `recovered`, and pattern-match a disconnect or lost cause against the typed error
+hierarchy.
 
 Usage:
 
@@ -1428,7 +1442,19 @@ export async function lifecycleAndHealthExample(client: EspHomeClient): Promise<
 
         case "disconnect":
 
-          log.warn("The client lost its connection to the device.", event.cause);
+          log.debug("The session with the device ended.", event.cause);
+
+          break;
+
+        case "lost":
+
+          log.warn("The device is unreachable.", event.cause);
+
+          break;
+
+        case "recovered":
+
+          log.info("The device is reachable again.");
 
           break;
       }

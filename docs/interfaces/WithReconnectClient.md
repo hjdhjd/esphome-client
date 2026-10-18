@@ -6,7 +6,7 @@
 
 # Interface: WithReconnectClient
 
-Narrow interface [withReconnect](../functions/withReconnect.md) drives. The host implements both `lifecycle()` (typed-iterable view of every connect/disconnect transition) and `health()` (the
+Narrow interface [withReconnect](../functions/withReconnect.md) drives. The host implements both `lifecycle()` (typed-iterable view of every lifecycle event) and `health()` (the
 live snapshot - the helper reads it once at start to know whether a connect has already happened, in which case the body runs immediately rather than waiting for
 the next connect transition).
 
