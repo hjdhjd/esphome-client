@@ -2981,6 +2981,44 @@ describe("EspHomeClient run-phase terminal-completion hook", () => {
     client.disconnect();
   });
 
+  test("a run-phase fault outside the typed family reaches the lifecycle disconnect as a CONNECTION_DROPPED ConnectionError carrying the original", async () => {
+
+    const firstTransport = new MockTransport();
+    const transportQueue = [firstTransport];
+    const attempts: number[] = [];
+
+    // The long backoff parks the loop after it announces its first attempt, so the row reads the scheduling without a second transport answering.
+    const client = new EspHomeClient({ host: "test.local", logger: quietLogger(),
+      reconnect: { initialDelayMs: 10000, jitter: 0, onAttempt: (attempt): void => { attempts.push(attempt); } },
+      transportFactory: (): MockTransport => transportQueue.shift() ?? new MockTransport() });
+
+    try {
+
+      await driveConnect(firstTransport, client, { signal: AbortSignal.timeout(2000) });
+
+      const lifecycleEvents: { cause?: EspHomeError; kind: string }[] = [];
+
+      client.on("lifecycle", (e): void => { lifecycleEvents.push(e); });
+
+      // A plain Error stands for a raw socket fault the transport surfaces outside the typed hierarchy, which the receiver hands to the terminal hook as it is.
+      const socketFault = new Error("Synthetic raw socket fault.");
+
+      firstTransport.fail(socketFault);
+      await delay(5);
+
+      const disconnectEvent = lifecycleEvents.find((e) => e.kind === "disconnect");
+
+      assert.ok(disconnectEvent?.cause instanceof ConnectionError, "the lifecycle disconnect must carry a typed ConnectionError");
+      assert.equal(disconnectEvent.cause.code, "CONNECTION_DROPPED", "the wrap must carry the dropped-connection code");
+      assert.equal(disconnectEvent.cause.cause, socketFault, "the wrap must carry the original fault as its cause");
+      assert.deepEqual(attempts, [1], "the default reconnect decision must still schedule the first attempt");
+
+    } finally {
+
+      client.disconnect();
+    }
+  });
+
   test("a passive run-phase transport death schedules an auto-reconnect under the default config", async () => {
 
     const firstTransport = new MockTransport();

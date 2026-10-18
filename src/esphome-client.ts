@@ -1807,9 +1807,10 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
     if(live) {
 
       // Narrow the disconnect cause to the typed hierarchy once and thread the same value to both the disconnect surface and the reconnect supervisor: the typed cause is
-      // what consumers pattern-match on, and what the shouldRetry predicate filters permanent errors by. A non-EspHomeError cause is dropped to undefined here so neither
-      // consumer sees an off-hierarchy error.
-      const espCause = (options.cause instanceof EspHomeError) ? options.cause : undefined;
+      // what consumers pattern-match on, and what the shouldRetry predicate filters permanent errors by. A cause outside the hierarchy is wrapped as a dropped
+      // connection carrying the original, the rule a failed attempt and a failed connect apply with their own codes, so no consumer sees an off-hierarchy error.
+      const espCause = (options.cause === undefined) ? undefined : (options.cause instanceof EspHomeError) ? options.cause :
+        new ConnectionError("Connection dropped.", "CONNECTION_DROPPED", { cause: options.cause });
 
       this.emitDisconnected(options.reason, espCause);
 
