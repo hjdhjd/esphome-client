@@ -651,7 +651,8 @@ interface AttachedSession {
  * connection mid-noise or returns a plaintext frame), `ConnectRequest`/`ConnectResponse`, `DeviceInfoRequest`, `ListEntitiesRequest`, `SubscribeStatesRequest`. Failures
  * surface as typed errors from {@link EspHomeError} subclasses. Auto-reconnect is on by default with `PermanentError`-filtered retry; pass `reconnect: false` to opt out.
  * Lazy heartbeat (30s idle / 60s stall) is on by default; pass `keepAlive: false` to opt out. Live state is observable via {@link EspHomeClient.health},
- * {@link EspHomeClient.onHealthChange}, {@link EspHomeClient.healthStream}, and the typed {@link EspHomeClient.lifecycle} stream.
+ * {@link EspHomeClient.onHealthChange}, {@link EspHomeClient.healthStream}, and the typed {@link EspHomeClient.lifecycle} stream, whose kinds are `connect`,
+ * `disconnect`, `lost`, and `recovered`, each raised as {@link LifecycleEvent} states.
  *
  * ## Entity model
  *
@@ -820,11 +821,16 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
   // Resolved auto-reconnect config. `null` when reconnect is disabled (`reconnect: false`).
   private readonly reconnectConfig: Nullable<ResolvedReconnectConfig>;
 
-  // The active reconnect attempt's abort controller and counter. Reset to a fresh controller after each successful connect.
+  // The reconnect loop's abort controller and attempt counter. The controller is built at each loop start and cleared when the loop succeeds, gives up, or is
+  // cancelled, and the counter resets on each successful connect.
   private reconnectController: Nullable<AbortController> = null;
   private reconnectAttempts = 0;
   private reconnectInProgress = false;
   private explicitlyClosed = false;
+
+  // The reachability latch: set when the first attempt of an outage fails to re-establish a session and cleared only when one is re-established, so it stands
+  // through a give-up and an explicit close. {@link declareLost} is its one setter and the connect success block its one clearer.
+  private lostDeclared = false;
 
   // The in-flight reconnect supervisor loop's promise, tracked so a manual `connect()` can cancel the loop AND await its current attempt fully settling before taking
   // over the connection state - guaranteeing the loop and a superseding manual connect never mutate `session`/registries/health concurrently. `null` when no loop runs.
@@ -1484,6 +1490,14 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
       this.publishHealthRecord(this.healthRecord);
       this.emit("lifecycle", { encrypted: context.transport.isEncrypted, kind: "connect" });
 
+      // A session re-established while a lost verdict stands is the recovery, announced after the connect so a consumer's per-session work on connect runs before
+      // its availability flips, and only while this session is still attached: a connect listener that tore it down leaves the latch for the next session.
+      if(this.lostDeclared && (this.session === session)) {
+
+        this.lostDeclared = false;
+        this.emit("lifecycle", { kind: "recovered" });
+      }
+
     } catch(err) {
 
       // Whether another path detached this attempt's session, read before this catch's own teardown detaches it. That path's teardown already announced the end.
@@ -1534,6 +1548,13 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
       // leaves RECONNECTING to the loop, which retries or gives up itself, and a failure from the disconnected state keeps the legacy string-payload `disconnect`
       // carrying the human-readable reason.
       if((this.reconnectLoopPromise === null) && (this.healthRecord.state !== HealthState.DISCONNECTED)) {
+
+        // A manual connect that fails while it holds the loop's reconnecting record is that outage's failed attempt, and no loop follows it, so the verdict is
+        // declared here or never. An attempt the consumer's close or signal cut short failed no probe, as the loop's abort check reads before its own declaration.
+        if(!cancelled && (this.healthRecord.state === HealthState.RECONNECTING)) {
+
+          this.declareLost(wrapped);
+        }
 
         this.emitDisconnected(wrapped.message, wrapped);
       } else {
@@ -1722,7 +1743,7 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
 
     // This is the single reset of the consecutive-stall count, and it applies in any state because a stalled record never sees inbound traffic: the stall handler
     // tears the session down in the same synchronous call that marks it stalled, disposing the receiver that dispatches here. The count therefore carries into the
-    // reconnected session and returns to 0 on that session's first inbound message...the recovery signal, so it is broadcast.
+    // reconnected session and returns to 0 on that session's first inbound message...the stall count's recovery signal, so it is broadcast.
     if(this.healthRecord.consecutiveStalls !== 0) {
 
       this.publishHealthRecord({ ...this.healthRecord, consecutiveStalls: 0, lastInboundActivityAt: lastActivityAt });
@@ -1990,6 +2011,24 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
   }
 
   /**
+   * Declare the outage lost, once. The first attempt of an outage that fails to re-establish a session is the failed probe the reachability verdict waits for, so
+   * this runs from the reconnect loop's catch and from a manual connect that fails while it holds the loop's reconnecting record. The latch clears only when a
+   * session is re-established, so a give-up and an explicit close leave it standing and a repeat call announces nothing.
+   *
+   * @param cause - The failed attempt's typed error, carried on the `lost` event.
+   */
+  private declareLost(cause: EspHomeError): void {
+
+    if(this.lostDeclared) {
+
+      return;
+    }
+
+    this.lostDeclared = true;
+    this.emit("lifecycle", { cause, kind: "lost" });
+  }
+
+  /**
    * Evaluate the consumer-supplied retry predicate defensively. A predicate that throws is treated as "do not retry" (the conservative, fail-closed reading: a broken
    * predicate is not a license to retry forever, and an unguarded throw would escape across the library's internal async boundaries - the reconnect loop or the receiver
    * pump that drives disconnectInternal - as an unhandled rejection). Both consult sites (the scheduling decision and the loop) route through this single defensive call
@@ -2056,8 +2095,9 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
   }
 
   /**
-   * Drive the reconnect loop until success, retry budget exhausted, or signal abort. Each iteration applies the configured backoff with jitter and calls `connect()`;
-   * success transitions health to `connected` and stops the loop, failure re-enters the loop after another backoff.
+   * Drive the reconnect loop until success, retry budget exhausted, or signal abort. Each iteration applies the configured backoff with jitter and calls
+   * {@link connectInternal}: a success, whose connect success block transitions health to `connected` and announces the session and any recovery verdict, stops the
+   * loop, and a failure declares the outage lost when it is the outage's first and re-enters the loop after another backoff.
    */
   private async runReconnectLoop(signal: AbortSignal): Promise<void> {
 
@@ -2100,7 +2140,8 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
         // eslint-disable-next-line no-await-in-loop -- Connect attempt is sequenced after the backoff; parallelizing would defeat the purpose of the loop.
         await this.connectInternal({ signal });
 
-        // Success path. The connect() flow itself stamped health/lifecycle; we just clear the loop state.
+        // Success path. The connectInternal success block stamped health, announced the session, and raised the recovery verdict when one was due; we just clear
+        // the loop state.
         this.reconnectInProgress = false;
         this.reconnectController = null;
         this.reconnectLoopPromise = null;
@@ -2120,6 +2161,9 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
           { cause: err });
 
         lastCause = espError;
+
+        // This attempt is the outage's failed probe when none has failed before it; the helper raises one lost per outage.
+        this.declareLost(espError);
 
         // Evaluate the consumer-supplied retry predicate defensively via the shared safeShouldRetry helper. The call is the only remaining throw site inside the catch
         // and there is no `finally`, so a predicate that throws would otherwise escape the loop entirely - skipping the loop-end cleanup, leaving `reconnectInProgress`
@@ -3300,8 +3344,9 @@ export class EspHomeClient<Extras extends ExtraSchemaSet = {}> {
   }
 
   /**
-   * Async-iterable view of connect/disconnect transitions. Each event is the typed {@link LifecycleEvent} discriminated union; consumers gate on
-   * `event.kind === "connect" | "disconnect"` and pattern-match the disconnect cause against the typed error hierarchy.
+   * Async-iterable view of the lifecycle stream. Each event is the typed {@link LifecycleEvent} discriminated union, whose doc states when each kind is raised;
+   * consumers narrow on `event.kind`, one of `connect`, `disconnect`, `lost`, and `recovered`, and pattern-match a disconnect or lost cause against the typed error
+   * hierarchy.
    *
    * Usage:
    *

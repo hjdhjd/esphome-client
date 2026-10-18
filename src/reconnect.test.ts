@@ -308,6 +308,38 @@ describe("withReconnect", () => {
     assert.equal(abortFired, true, "the body's signal must abort on disconnect");
   });
 
+  test("ignores the lost and recovered verdicts: a running body keeps a live signal and runs once", async () => {
+
+    const fake = makeFakeClient();
+    const signals: AbortSignal[] = [];
+
+    const helperPromise = withReconnect(fake, async (_, signal) => {
+
+      signals.push(signal);
+
+      // Hold open until aborted, so the body is still running when each verdict arrives.
+      await new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve()));
+    });
+
+    fake.push({ encrypted: false, kind: "connect" });
+    await new Promise((resolve) => setImmediate(resolve));
+
+    fake.push({ kind: "recovered" });
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.equal(signals.length, 1, "the body must run once for the connect and not again for the recovered verdict");
+    assert.equal(signals[0]?.aborted, false, "the recovered verdict must leave the running body's signal live");
+
+    fake.push({ cause: new ConnectionError("Synthetic failed reconnect attempt.", "PEER_CLOSED"), kind: "lost" });
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.equal(signals.length, 1, "the lost verdict must start no body");
+    assert.equal(signals[0]?.aborted, false, "the lost verdict must abort nothing");
+
+    fake.end();
+    await helperPromise;
+  });
+
   // The client's lifecycle view is a real EventBus stream, the one the host hands out, so the outer signal ends it the way it ends a consumer's stream.
   test("rejects with the outer signal's reason when that signal aborts", async () => {
 

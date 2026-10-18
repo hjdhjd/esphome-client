@@ -41,9 +41,29 @@ describe("LifecycleEvent discriminated union", () => {
     }
   });
 
+  test("lost variant carries a required cause typed as EspHomeError", () => {
+
+    const cause = new ConnectionError("Synthetic failed reconnect attempt.", "PEER_CLOSED");
+    const event: LifecycleEvent = { cause, kind: "lost" };
+
+    if(event.kind === "lost") {
+
+      assert.equal(event.cause, cause);
+      assert.equal(event.cause.code, "PEER_CLOSED");
+    }
+  });
+
+  test("recovered variant carries its kind and nothing else", () => {
+
+    const event: LifecycleEvent = { kind: "recovered" };
+
+    assert.deepEqual(Object.keys(event), ["kind"]);
+  });
+
   test("kind narrows correctly in switch", () => {
 
-    const events: readonly LifecycleEvent[] = [ { encrypted: false, kind: "connect" }, { kind: "disconnect" } ];
+    const events: readonly LifecycleEvent[] = [ { encrypted: false, kind: "connect" }, { kind: "disconnect" },
+      { cause: new ConnectionError("Synthetic failed reconnect attempt.", "PEER_CLOSED"), kind: "lost" }, { kind: "recovered" } ];
     const summary: string[] = [];
 
     for(const e of events) {
@@ -61,9 +81,21 @@ describe("LifecycleEvent discriminated union", () => {
           summary.push("d");
 
           break;
+
+        case "lost":
+
+          summary.push("l:" + String(e.cause.code));
+
+          break;
+
+        case "recovered":
+
+          summary.push("r");
+
+          break;
       }
     }
 
-    assert.deepEqual(summary, [ "c:false", "d" ]);
+    assert.deepEqual(summary, [ "c:false", "d", "l:PEER_CLOSED", "r" ]);
   });
 });

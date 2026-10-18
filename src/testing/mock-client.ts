@@ -31,6 +31,7 @@ import type { ConnectionScope } from "../connection-scope.ts";
 import { ENTITY_SCHEMAS } from "../schemas/entity-schemas.ts";
 import type { EncodeResult } from "../command-pipeline.ts";
 import type { EntityId } from "../entity-id.ts";
+import type { EspHomeError } from "../errors.ts";
 import { HomeAssistantApi } from "../home-assistant.ts";
 import type { LifecycleEvent } from "../lifecycle.ts";
 import type { LogLevel } from "../api-constants.ts";
@@ -133,6 +134,10 @@ export class MockClient {
   // The mock's connection scope, which exists exactly while the mock is connected, as the real client's scope exists exactly while a transport is attached. Its abort
   // at teardown ends every pending command wait with one connection-lost error.
   private connection: Nullable<AbortController> = null;
+
+  // The reachability latch, mirroring the real client's: {@link setLost} sets it on a disconnected mock and the next connect whose connection is still the mock's
+  // after its own announcements clears it as it announces `recovered`, so it stands through a teardown.
+  private lostDeclared = false;
 
   /**
    * Constructs a fresh MockClient with an empty registry, no recorded commands, and a disconnected state. Tests typically call {@link populateEntities} and
@@ -359,12 +364,14 @@ export class MockClient {
   /**
    * Set the connected flag. A transition to connected goes through the real client's connect: the mock installs a connected health record built from the current
    * one, with the encryption flag {@link setEncrypted} set, and then announces `connect`, that record on `healthChange`, and `lifecycle`, in the real client's order,
-   * so a listener of each reads the connected record from {@link health}. The record replaces whatever record the mock held, a seeded one included, so a test seeds a
-   * health record after connecting. A transition to disconnected is the device dropping the session, and it goes through the same teardown as {@link disconnect}: the
-   * session's device info, capabilities, encryption flag, and sub-devices return to their disconnected values, and the mock announces the end with the disconnected
-   * health record on `healthChange`, a `lifecycle` event of kind `disconnect`, and then `disconnect` carrying `reason`, in the real client's order. The entity
-   * registry, the command log, and the sub-API call logs survive a dropped session, as the real client keeps its registry across one. Setting the state the mock
-   * already holds does nothing.
+   * so a listener of each reads the connected record from {@link health}. When a lost verdict {@link setLost} declared stands, the connect then announces a
+   * `lifecycle` event of kind `recovered` and clears the verdict, as the real client announces its recovery after the connect, and only while the connection this
+   * call opened is still the mock's, so a listener that disconnects the mock during those announcements leaves it standing. The record replaces whatever record the
+   * mock held, a seeded one included, so a test seeds a health record after connecting. A transition to disconnected is the device dropping the session, and it goes
+   * through the same teardown as {@link disconnect}: the session's device info, capabilities, encryption flag, and sub-devices return to their disconnected values,
+   * and the mock announces the end with the disconnected health record on `healthChange`, a `lifecycle` event of kind `disconnect`, and then `disconnect` carrying
+   * `reason`, in the real client's order. The entity registry, the command log, and the sub-API call logs survive a dropped session, as the real client keeps its
+   * registry across one. Setting the state the mock already holds does nothing.
    *
    * @param connected - The connection state to move to.
    * @param reason - The reason the `disconnect` event carries on a transition to disconnected.
@@ -384,17 +391,47 @@ export class MockClient {
       // the flag of the session they announce, so a `connect` listener that disconnects the mock does not change what the later announcements report.
       const encrypted = this.encrypted;
       const now = Date.now();
+      const connection = new AbortController();
 
-      this.connection = new AbortController();
+      this.connection = connection;
       this.setHealthRecord(connectedHealth(this.healthRecord, { connectedAtMs: now, encrypted, lastInboundActivityAt: now }));
       this.bus.emit("connect", encrypted);
       this.bus.emit("healthChange", this.healthRecord);
       this.bus.emit("lifecycle", { encrypted, kind: "connect" });
 
+      // A connect while a lost verdict stands is the recovery, announced after the connect in the real client's order, and the only place the verdict clears. Like the
+      // real client's attached-session check, it is announced only while the scope this connect created is still the mock's: a listener of the announcements above
+      // that disconnected the mock leaves the verdict for the next connect.
+      if(this.lostDeclared && (this.connection === connection)) {
+
+        this.lostDeclared = false;
+        this.bus.emit("lifecycle", { kind: "recovered" });
+      }
+
       return;
     }
 
     this.disconnectInternal(reason);
+  }
+
+  /**
+   * Declare the outage lost, mirroring the real client's reachability verdict. On a disconnected mock that holds no verdict yet, the mock announces a `lifecycle`
+   * event of kind `lost` carrying `cause` and holds the verdict until the next {@link setConnected} with `true` whose connection is still the mock's after its
+   * `lifecycle` connect, which announces `recovered` then; a connected mock or one already lost announces nothing, as the real client raises one `lost` per
+   * outage. The verdict stands through {@link disconnect}, as the real client's stands through an explicit close. The verb is not held to the real client's
+   * condition that the session it follows was reported live, as {@link setHealth} is not held to the real client's transitions.
+   *
+   * @param cause - The typed error the `lost` event carries, standing for the failed attempt's error on the real client.
+   */
+  public setLost(cause: EspHomeError): void {
+
+    if(this.isConnected || this.lostDeclared) {
+
+      return;
+    }
+
+    this.lostDeclared = true;
+    this.bus.emit("lifecycle", { cause, kind: "lost" });
   }
 
   /**
@@ -862,6 +899,7 @@ export class MockClient {
   /**
    * The teardown behind {@link disconnect} and {@link setConnected}, mirroring the real client's disconnect path. The session's facts reset on every call, as the real
    * client's teardown does, and the end is announced only when the mock was connected, so a repeat call announces nothing and leaves the health record as it stands.
+   * A lost verdict {@link setLost} declared stands through the teardown, as the real client's stands through an explicit close.
    *
    * @param reason - The reason the `disconnect` event carries, or `undefined` for a teardown with no reason.
    */

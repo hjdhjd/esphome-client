@@ -173,13 +173,13 @@ Disposal flows through `Symbol.dispose` (sync, immediate teardown) and `Symbol.a
 - `client.health()` returns a synchronous `ConnectionHealth` snapshot - a discriminated union over `state` whose common fields are `encrypted`, `consecutiveStalls`, `lastInboundActivityAt`, and optional `lastPingRttMs`; the live (`connected` / `stalled`) variant additionally carries `connectedAtMs`. Narrow with the `isConnectionLive(health)` type guard and derive uptime with `connectionUptimeMs(health)`. Disconnect reasons live on `lifecycle()`, not on the health record.
 - `client.onHealthChange(callback)` returns a `Disposable` callback over health transitions.
 - `client.healthStream({ signal })` returns an `AsyncIterable` over health transitions.
-- `client.lifecycle({ signal })` emits `LifecycleEvent`s tagged by `event.kind` (`connect`, carrying `encrypted`; `disconnect`, carrying an optional typed `cause`) - the canonical observation path for disconnect reasons. Reconnect activity surfaces through the `ReconnectConfig.onAttempt` callback and the health stream; the separate `noiseKeySet` boolean event reports a noise-key rotation.
+- `client.lifecycle({ signal })` emits `LifecycleEvent`s tagged by `event.kind` (`connect`, carrying `encrypted`; `disconnect`, carrying an optional typed `cause`; `lost`, raised once per outage when the first attempt to re-establish a session after a fault fails and carrying that attempt's typed `cause`; `recovered`, raised after the `connect` of a session re-established while `lost` stands) - the canonical observation path for disconnect reasons and reachability. Reconnect activity surfaces through the `ReconnectConfig.onAttempt` callback and the health stream; the separate `noiseKeySet` boolean event reports a noise-key rotation.
 
 The legacy `disconnect: string | undefined` event remains on the bus for backwards compatibility; the structured path is `client.lifecycle()`.
 
 ### Auto-reconnect
 
-On by default with `PermanentError`-filtered retry, exponential backoff (500ms initial, 2x, 30s cap, 20% jitter, unlimited attempts), and consumer subscriptions that survive each cycle. Pass `reconnect: false` to disable.
+On by default with `PermanentError`-filtered retry, exponential backoff (500ms initial, 2x, 30s cap, 20% jitter, unlimited attempts), and consumer subscriptions that survive each cycle. Pass `reconnect: false` to disable. The lifecycle `lost` and `recovered` verdicts mark an outage that survived the first attempt to re-establish a session, `lost` when that attempt fails and `recovered` once a session is re-established.
 
 `withReconnect(client, body, options)` re-runs a body callback once per successful connect with a disconnect-aware `AbortSignal` - the canonical "do this work for each connection" supervisor pattern.
 

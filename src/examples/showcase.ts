@@ -223,7 +223,8 @@ export async function reconnectWithPermanentErrorExample(): Promise<void> {
 // #endregion reconnect-with-permanent-error
 
 /**
- * Observe connect / disconnect transitions via the typed lifecycle stream and read the live `ConnectionHealth` snapshot from `client.health()`.
+ * Observe the session boundary (`connect`, `disconnect`) and the reachability verdict (`lost`, `recovered`) on the typed lifecycle stream and read the live
+ * `ConnectionHealth` snapshot from `client.health()`.
  */
 // #region lifecycle-and-health
 export async function lifecycleAndHealthExample(client: EspHomeClient): Promise<void> {
@@ -245,7 +246,19 @@ export async function lifecycleAndHealthExample(client: EspHomeClient): Promise<
 
         case "disconnect":
 
-          log.warn("The client lost its connection to the device.", event.cause);
+          log.debug("The session with the device ended.", event.cause);
+
+          break;
+
+        case "lost":
+
+          log.warn("The device is unreachable.", event.cause);
+
+          break;
+
+        case "recovered":
+
+          log.info("The device is reachable again.");
 
           break;
       }

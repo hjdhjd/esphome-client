@@ -619,6 +619,108 @@ describe("MockClient.setConnected encryption on its announcements", () => {
   });
 });
 
+describe("MockClient.setLost reachability verdict", () => {
+
+  test("setLost on a disconnected mock emits lost with its cause, and the next connect announces connect, healthChange, lifecycle connect, then recovered", () => {
+
+    const client = new MockClient();
+    const cause = new ConnectionError("Synthetic failed reconnect attempt.", "PEER_CLOSED");
+    const causes: unknown[] = [];
+    const events: string[] = [];
+
+    using _connect = client.on("connect", () => { events.push("connect"); });
+    using _health = client.onHealthChange((health) => { events.push("healthChange:" + health.state); });
+    using _lifecycle = client.on("lifecycle", (event) => {
+
+      events.push("lifecycle:" + event.kind);
+
+      if(event.kind === "lost") {
+
+        causes.push(event.cause);
+      }
+    });
+
+    client.setLost(cause);
+
+    assert.deepEqual(events, ["lifecycle:lost"], "a disconnected mock must announce the lost verdict at once");
+    assert.equal(causes.length, 1);
+    assert.equal(causes[0], cause, "the lost event must carry the cause setLost was handed");
+
+    client.setConnected(true);
+
+    assert.deepEqual(events, [ "lifecycle:lost", "connect", "healthChange:connected", "lifecycle:connect", "lifecycle:recovered" ],
+      "the connect must announce recovered after its lifecycle connect, in the real client's order");
+  });
+
+  test("setLost on a connected mock or on a mock already lost emits nothing", () => {
+
+    const client = new MockClient();
+    const cause = new ConnectionError("Synthetic failed reconnect attempt.", "PEER_CLOSED");
+    const kinds: string[] = [];
+
+    using _lifecycle = client.on("lifecycle", (event) => { kinds.push(event.kind); });
+
+    client.setConnected(true);
+    client.setLost(cause);
+    client.setConnected(false);
+    client.setConnected(true);
+
+    assert.deepEqual(kinds, [ "connect", "disconnect", "connect" ], "a connected mock must neither announce nor hold a lost verdict");
+
+    client.setConnected(false);
+    client.setLost(cause);
+    client.setLost(cause);
+
+    assert.deepEqual(kinds.slice(4), ["lost"], "a mock already lost must announce nothing more");
+
+    client.setConnected(true);
+
+    assert.deepEqual(kinds.slice(5), [ "connect", "recovered" ], "the one verdict must end in one recovery");
+  });
+
+  test("disconnect() after setLost leaves the verdict standing, so a later connect announces recovered", () => {
+
+    const client = new MockClient();
+    const kinds: string[] = [];
+
+    using _lifecycle = client.on("lifecycle", (event) => { kinds.push(event.kind); });
+
+    client.setLost(new ConnectionError("Synthetic failed reconnect attempt.", "PEER_CLOSED"));
+    client.disconnect();
+    client.setConnected(true);
+
+    assert.deepEqual(kinds, [ "lost", "connect", "recovered" ]);
+  });
+
+  test("a lifecycle connect listener that disconnects the mock suppresses recovered, and the next connect announces it", () => {
+
+    const client = new MockClient();
+    const kinds: string[] = [];
+    const seen = { tornDown: false };
+
+    using _lifecycle = client.on("lifecycle", (event) => { kinds.push(event.kind); });
+
+    // The listener tears the recovering connection down from its lifecycle connect, once, before the connect reaches the recovery, as the real client's row does.
+    using _teardown = client.on("lifecycle", (event) => {
+
+      if((event.kind === "connect") && !seen.tornDown) {
+
+        seen.tornDown = true;
+        client.disconnect();
+      }
+    });
+
+    client.setLost(new ConnectionError("Synthetic failed reconnect attempt.", "PEER_CLOSED"));
+    client.setConnected(true);
+
+    assert.deepEqual(kinds, [ "lost", "connect", "disconnect" ], "a connection a connect listener tore down must announce no recovered");
+
+    client.setConnected(true);
+
+    assert.deepEqual(kinds.slice(3), [ "connect", "recovered" ], "the verdict must stand for the next connect");
+  });
+});
+
 describe("MockClient.setEncrypted / isEncrypted", () => {
 
   test("isEncrypted reflects setEncrypted", () => {

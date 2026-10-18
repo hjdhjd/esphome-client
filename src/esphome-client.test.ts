@@ -6218,8 +6218,10 @@ describe("EspHomeClient reconnect loop end-to-end", () => {
     await driveConnect(firstTransport, client, { signal: AbortSignal.timeout(2000) });
 
     const lifecycleDisconnects: { cause?: EspHomeError; kind: string }[] = [];
+    const events: string[] = [];
 
     client.on("lifecycle", (e): void => { if(e.kind === "disconnect") { lifecycleDisconnects.push(e); } });
+    client.on("lifecycle", (event): void => { events.push("lifecycle:" + event.kind); });
 
     // A transient run-phase death schedules a reconnect; the supervisor parks in its 80 ms backoff sleep. This emits the run-phase typed disconnect (cause = peer death).
     const runPhaseCause = new ConnectionClosedByPeerError("Synthetic transient run-phase peer death.", "PEER_CLOSED");
@@ -6244,6 +6246,7 @@ describe("EspHomeClient reconnect loop end-to-end", () => {
     assert.equal(runPhaseDisconnect.cause, runPhaseCause, "the first typed disconnect must be the run-phase one, carrying the peer-death cause");
     assert.ok(releaseDisconnect, "the explicit close must release the reconnecting state through a typed disconnect");
     assert.equal(releaseDisconnect.cause, undefined, "the release carries no cause because no attempt failed, so it cannot be a give-up");
+    assert.ok(!events.includes("lifecycle:lost"), "a close during the loop's first backoff, before any attempt has failed, raises no lost verdict");
     assert.equal(client.health().state, "disconnected", "the release must leave health disconnected rather than reconnecting");
     assert.equal(vended.length, 1, "the consumer abort during backoff must prevent any reconnect attempt from vending a second transport");
 
@@ -6262,6 +6265,10 @@ describe("EspHomeClient reconnect loop end-to-end", () => {
         reconnect: { initialDelayMs: 80, jitter: 0, maxAttempts: 5 }, transportFactory: (): MockTransport => transportQueue.shift() ?? new MockTransport() });
 
       await driveConnect(firstTransport, client, { signal: AbortSignal.timeout(2000) });
+
+      const events: string[] = [];
+
+      client.on("lifecycle", (event): void => { events.push("lifecycle:" + event.kind); });
 
       firstTransport.fail(new ConnectionClosedByPeerError("Synthetic transient run-phase peer death.", "PEER_CLOSED"));
       await delay(15);
@@ -6282,6 +6289,7 @@ describe("EspHomeClient reconnect loop end-to-end", () => {
 
       assert.deepEqual(healthStates, ["disconnected"], "the close must produce exactly one healthChange, to disconnected");
       assert.equal(client.health().state, "disconnected", "health must end disconnected rather than frozen at reconnecting");
+      assert.ok(!events.includes("lifecycle:lost"), "a close during the loop's first backoff, before any attempt has failed, raises no lost verdict");
     });
   }
 
@@ -6513,6 +6521,7 @@ describe("EspHomeClient reconnect loop end-to-end", () => {
       }), (err: unknown): boolean => err === seen.scope?.reason);
       assert.deepEqual(events, [ "healthChange:disconnected", "lifecycle:disconnect", "disconnect:undefined" ],
         "the stray response's teardown announces the end once, and no reconnecting record follows a session never reported live");
+      assert.ok(!events.includes("lifecycle:lost"), "a teardown in the hand-off of a superseding connect raises no lost verdict");
       assert.equal(counts.onAttempt, 1, "no second loop may be scheduled");
       assert.equal(counts.reconnectAttempts, 1, "no second loop may count an attempt");
       assert.equal(client.health().state, "disconnected");
@@ -6540,7 +6549,7 @@ describe("EspHomeClient reconnect loop end-to-end", () => {
 
     client.on("healthChange", (health): void => { healthStates.push(health.state); });
 
-    // The lifecycle connect is the connect path's last statement, so a stray response handled from its listener lands after the session was reported live and while
+    // The lifecycle connect follows the connected record's install, so a stray response handled from its listener lands after the session was reported live and while
     // the connect controller is still set.
     client.on("lifecycle", (event): void => {
 
@@ -6585,6 +6594,497 @@ describe("EspHomeClient reconnect loop end-to-end", () => {
     assert.ok(after > before, "voiceAssistant.subscribe should issue SUBSCRIBE_VOICE_ASSISTANT_REQUEST");
     client.disconnect();
   });
+});
+
+// 21b. The lifecycle reachability verdict. Each row drives an outage through the reconnect loop or a manual connect with a transport-queue factory, pre-failing
+// an attempt's transport so its first send rejects with the row's typed error, and reads the announcements in the order the client makes them.
+
+interface VerdictRecord {
+
+  disconnectCauses: (EspHomeError | undefined)[];
+  events: string[];
+  lostCauses: EspHomeError[];
+}
+
+// Record every connect, healthChange, and lifecycle announcement in order, with the cause each lifecycle disconnect and lost carries.
+function recordVerdicts(client: EspHomeClient): VerdictRecord {
+
+  const record: VerdictRecord = { disconnectCauses: [], events: [], lostCauses: [] };
+
+  client.on("connect", (): void => { record.events.push("connect"); });
+  client.on("healthChange", (health): void => { record.events.push("healthChange:" + health.state); });
+  client.on("lifecycle", (event): void => {
+
+    record.events.push("lifecycle:" + event.kind);
+
+    if(event.kind === "lost") {
+
+      record.lostCauses.push(event.cause);
+    } else if(event.kind === "disconnect") {
+
+      record.disconnectCauses.push(event.cause);
+    }
+  });
+
+  return record;
+}
+
+// The lifecycle kinds a record holds, in order.
+function lifecycleKinds(record: VerdictRecord): string[] {
+
+  return record.events.filter((entry) => entry.startsWith("lifecycle:")).map((entry) => entry.slice("lifecycle:".length));
+}
+
+// Wait until the record holds the given number of lifecycle events, failing the row when they have not all arrived before the wait's timeout signal fires.
+async function untilLifecycleCount(client: EspHomeClient, record: VerdictRecord, count: number): Promise<void> {
+
+  const signal = AbortSignal.timeout(2000);
+
+  while(lifecycleKinds(record).length < count) {
+
+    await client.once("lifecycle", { signal });
+  }
+}
+
+describe("EspHomeClient lifecycle reachability verdict", () => {
+
+  test("a death whose first attempt fails and second succeeds announces disconnect, lost with the first attempt's error, the connect, then recovered", async () => {
+
+    const firstTransport = new MockTransport();
+    const failedTransport = new MockTransport();
+    const recoveredTransport = new MockTransport();
+    const attemptError = new ConnectionClosedByPeerError("Synthetic failure of the first reconnect attempt.", "PEER_CLOSED");
+
+    // The first attempt's transport is pre-failed, so its first send rejects with the typed error, and the second attempt's transport carries a whole handshake.
+    failedTransport.fail(attemptError);
+    pushHandshake(recoveredTransport);
+
+    const transportQueue = [ firstTransport, failedTransport, recoveredTransport ];
+    const client = new EspHomeClient({ host: "test.local", logger: quietLogger(), reconnect: { initialDelayMs: 10, jitter: 0, maxDelayMs: 20 },
+      transportFactory: (): MockTransport => transportQueue.shift() ?? new MockTransport() });
+
+    try {
+
+      await driveConnect(firstTransport, client, { signal: AbortSignal.timeout(2000) });
+
+      const record = recordVerdicts(client);
+
+      firstTransport.fail(new ConnectionClosedByPeerError("Synthetic transient run-phase peer death.", "PEER_CLOSED"));
+      await untilLifecycleCount(client, record, 4);
+
+      // The lost follows the first attempt's failure, between the reconnecting record that attempt published and the one the second attempt publishes, and the
+      // recovered follows the whole connect triple.
+      assert.deepEqual(record.events, [ "healthChange:disconnected", "lifecycle:disconnect", "healthChange:reconnecting", "lifecycle:lost",
+        "healthChange:reconnecting", "connect", "healthChange:connected", "lifecycle:connect", "lifecycle:recovered" ]);
+      assert.equal(record.lostCauses.length, 1, "the outage must raise exactly one lost");
+      assert.equal(record.lostCauses[0], attemptError, "the lost must carry the first attempt's typed error");
+
+    } finally {
+
+      client.disconnect();
+    }
+  });
+
+  test("an outage whose first and second attempts fail raises exactly one lost, carrying the first attempt's error and not the second's", async () => {
+
+    const firstTransport = new MockTransport();
+    const firstFailed = new MockTransport();
+    const secondFailed = new MockTransport();
+    const recoveredTransport = new MockTransport();
+    const firstError = new ConnectionClosedByPeerError("Synthetic failure of the first reconnect attempt.", "PEER_CLOSED");
+    const secondError = new ConnectionClosedByPeerError("Synthetic failure of the second reconnect attempt.", "PEER_CLOSED");
+
+    firstFailed.fail(firstError);
+    secondFailed.fail(secondError);
+    pushHandshake(recoveredTransport);
+
+    const transportQueue = [ firstTransport, firstFailed, secondFailed, recoveredTransport ];
+    const client = new EspHomeClient({ host: "test.local", logger: quietLogger(), reconnect: { initialDelayMs: 10, jitter: 0, maxDelayMs: 20 },
+      transportFactory: (): MockTransport => transportQueue.shift() ?? new MockTransport() });
+
+    try {
+
+      await driveConnect(firstTransport, client, { signal: AbortSignal.timeout(2000) });
+
+      const record = recordVerdicts(client);
+
+      firstTransport.fail(new ConnectionClosedByPeerError("Synthetic transient run-phase peer death.", "PEER_CLOSED"));
+      await untilLifecycleCount(client, record, 4);
+
+      assert.deepEqual(lifecycleKinds(record), [ "disconnect", "lost", "connect", "recovered" ], "a second failed attempt must raise no second lost");
+      assert.equal(record.lostCauses.length, 1);
+      assert.equal(record.lostCauses[0], firstError, "the lost must carry the first attempt's typed error");
+      assert.notEqual(record.lostCauses[0], secondError, "the lost must not carry the second attempt's error");
+
+    } finally {
+
+      client.disconnect();
+    }
+  });
+
+  test("a fault healed on the first attempt raises neither lost nor recovered", async () => {
+
+    const firstTransport = new MockTransport();
+    const reconnectTransport = new MockTransport();
+
+    pushHandshake(reconnectTransport);
+
+    const transportQueue = [ firstTransport, reconnectTransport ];
+    const client = new EspHomeClient({ host: "test.local", logger: quietLogger(), reconnect: { initialDelayMs: 10, jitter: 0, maxDelayMs: 20 },
+      transportFactory: (): MockTransport => transportQueue.shift() ?? new MockTransport() });
+
+    try {
+
+      await driveConnect(firstTransport, client, { signal: AbortSignal.timeout(2000) });
+
+      const record = recordVerdicts(client);
+
+      firstTransport.fail(new ConnectionClosedByPeerError("Synthetic transient run-phase peer death.", "PEER_CLOSED"));
+      await untilLifecycleCount(client, record, 2);
+
+      assert.deepEqual(record.events, [ "healthChange:disconnected", "lifecycle:disconnect", "healthChange:reconnecting", "connect", "healthChange:connected",
+        "lifecycle:connect" ], "a blip the first attempt heals must announce no verdict");
+
+    } finally {
+
+      client.disconnect();
+    }
+  });
+
+  test("a PermanentError on the first attempt announces lost with that cause before the terminal disconnect, and a later connect announces recovered", async () => {
+
+    const firstTransport = new MockTransport();
+    const failedTransport = new MockTransport();
+    const manualTransport = new MockTransport();
+    const giveUpCause = new EncryptionKeyInvalidError("Synthetic permanent encryption failure on the reconnect attempt.", "NOISE_HANDSHAKE_FAILED");
+
+    failedTransport.fail(giveUpCause);
+
+    const transportQueue = [ firstTransport, failedTransport, manualTransport ];
+    const client = new EspHomeClient({ host: "test.local", logger: quietLogger(), reconnect: { initialDelayMs: 10, jitter: 0, maxAttempts: 5, maxDelayMs: 10 },
+      transportFactory: (): MockTransport => transportQueue.shift() ?? new MockTransport() });
+
+    try {
+
+      await driveConnect(firstTransport, client, { signal: AbortSignal.timeout(2000) });
+
+      const record = recordVerdicts(client);
+
+      firstTransport.fail(new ConnectionClosedByPeerError("Synthetic transient run-phase peer death.", "PEER_CLOSED"));
+      await untilLifecycleCount(client, record, 3);
+
+      assert.deepEqual(lifecycleKinds(record), [ "disconnect", "lost", "disconnect" ], "the lost must come before the terminal disconnect");
+      assert.equal(record.lostCauses[0], giveUpCause, "the lost must carry the PermanentError the attempt failed with");
+      assert.equal(record.disconnectCauses[1], giveUpCause, "the terminal disconnect must carry the same PermanentError");
+      assert.equal(client.health().state, "disconnected");
+
+      await driveConnect(manualTransport, client, { signal: AbortSignal.timeout(2000) });
+
+      assert.deepEqual(lifecycleKinds(record).slice(3), [ "connect", "recovered" ], "a manual connect after the give-up must announce recovered after its connect");
+
+    } finally {
+
+      client.disconnect();
+    }
+  });
+
+  test("a maxAttempts give-up whose every attempt fails announces one lost with the first attempt's error, then the terminal disconnect", async () => {
+
+    const firstTransport = new MockTransport();
+    const firstFailed = new MockTransport();
+    const secondFailed = new MockTransport();
+    const firstError = new ConnectionClosedByPeerError("Synthetic failure of the first reconnect attempt.", "PEER_CLOSED");
+    const secondError = new ConnectionClosedByPeerError("Synthetic failure of the final reconnect attempt.", "PEER_CLOSED");
+
+    firstFailed.fail(firstError);
+    secondFailed.fail(secondError);
+
+    const transportQueue = [ firstTransport, firstFailed, secondFailed ];
+    const client = new EspHomeClient({ host: "test.local", logger: quietLogger(), reconnect: { initialDelayMs: 10, jitter: 0, maxAttempts: 2, maxDelayMs: 10 },
+      transportFactory: (): MockTransport => transportQueue.shift() ?? new MockTransport() });
+
+    try {
+
+      await driveConnect(firstTransport, client, { signal: AbortSignal.timeout(2000) });
+
+      const record = recordVerdicts(client);
+
+      firstTransport.fail(new ConnectionClosedByPeerError("Synthetic transient run-phase peer death.", "PEER_CLOSED"));
+      await untilLifecycleCount(client, record, 3);
+
+      assert.deepEqual(lifecycleKinds(record), [ "disconnect", "lost", "disconnect" ]);
+      assert.equal(record.lostCauses.length, 1, "the exhausted budget must raise exactly one lost");
+      assert.equal(record.lostCauses[0], firstError, "the lost must carry the first attempt's typed error");
+      assert.equal(record.disconnectCauses[1], secondError, "the terminal disconnect must carry the last attempt's typed error");
+
+    } finally {
+
+      client.disconnect();
+    }
+  });
+
+  // Each close form cancels the loop parked in its second attempt's backoff after the lost, and the loop then releases the reconnecting state it entered. The latch
+  // stands through the close, so the next session re-established announces the recovery.
+  for(const close of [ "disconnect", "disconnectAsync" ] as const) {
+
+    test(close + "() during the backoff after lost releases with a disconnect and no recovered, and a later connect announces recovered", async () => {
+
+      const firstTransport = new MockTransport();
+      const failedTransport = new MockTransport();
+      const laterTransport = new MockTransport();
+      const attemptError = new ConnectionClosedByPeerError("Synthetic failure of the first reconnect attempt.", "PEER_CLOSED");
+
+      failedTransport.fail(attemptError);
+
+      // The multiplier stretches the second attempt's backoff so the close lands inside it.
+      const transportQueue = [ firstTransport, failedTransport, laterTransport ];
+      const client = new EspHomeClient({ host: "test.local", logger: quietLogger(),
+        reconnect: { backoffMultiplier: 50, initialDelayMs: 10, jitter: 0, maxDelayMs: 5000 },
+        transportFactory: (): MockTransport => transportQueue.shift() ?? new MockTransport() });
+
+      try {
+
+        await driveConnect(firstTransport, client, { signal: AbortSignal.timeout(2000) });
+
+        const record = recordVerdicts(client);
+
+        firstTransport.fail(new ConnectionClosedByPeerError("Synthetic transient run-phase peer death.", "PEER_CLOSED"));
+        await untilLifecycleCount(client, record, 2);
+
+        assert.deepEqual(lifecycleKinds(record), [ "disconnect", "lost" ]);
+        assert.equal(client.health().state, "reconnecting", "the loop must be parked in its second attempt's backoff before the close");
+
+        const loop = (client as unknown as { reconnectLoopPromise: Nullable<Promise<void>> }).reconnectLoopPromise;
+
+        await client[close]();
+        await loop;
+
+        assert.deepEqual(lifecycleKinds(record), [ "disconnect", "lost", "disconnect" ], "the close must release with a disconnect and announce no recovered");
+        assert.equal(record.disconnectCauses[1], attemptError, "the release must carry the failed attempt's typed error");
+
+        await driveConnect(laterTransport, client, { signal: AbortSignal.timeout(2000) });
+
+        assert.deepEqual(lifecycleKinds(record).slice(3), [ "connect", "recovered" ], "the lost must stand through the close until a session is re-established");
+
+      } finally {
+
+        client.disconnect();
+      }
+    });
+  }
+
+  test("with reconnect disabled, a transport death announces its disconnect and no lost", async () => {
+
+    const transport = new MockTransport();
+    const client = new EspHomeClient({ host: "test.local", logger: quietLogger(), reconnect: false, transportFactory: (): MockTransport => transport });
+
+    try {
+
+      await driveConnect(transport, client, { signal: AbortSignal.timeout(2000) });
+
+      const record = recordVerdicts(client);
+
+      transport.fail(new ConnectionClosedByPeerError("Synthetic run-phase peer death.", "PEER_CLOSED"));
+      await untilLifecycleCount(client, record, 1);
+
+      // Wait a little longer as well, so a verdict announced late would be recorded too.
+      await delay(20);
+
+      assert.deepEqual(lifecycleKinds(record), ["disconnect"], "no attempt runs, so no verdict may follow the fault");
+
+    } finally {
+
+      client.disconnect();
+    }
+  });
+
+  test("a manual connect that supersedes the loop in its first backoff and fails announces lost with its own error before its release, and a later connect " +
+    "announces recovered", async () => {
+
+    const firstTransport = new MockTransport();
+    const manualTransport = new MockTransport();
+    const laterTransport = new MockTransport();
+    const transportQueue = [ firstTransport, manualTransport, laterTransport ];
+    const client = new EspHomeClient({ host: "test.local", logger: quietLogger(),
+      reconnect: { initialDelayMs: 80, jitter: 0, maxAttempts: 5 }, transportFactory: (): MockTransport => transportQueue.shift() ?? new MockTransport() });
+
+    try {
+
+      await driveConnect(firstTransport, client, { signal: AbortSignal.timeout(2000) });
+
+      firstTransport.fail(new ConnectionClosedByPeerError("Synthetic transient run-phase peer death.", "PEER_CLOSED"));
+      await delay(15);
+
+      const record = recordVerdicts(client);
+
+      // The superseding connect is the outage's first attempt, and it fails inside its handshake: the device announces an API major the client does not support.
+      const pending = client.connect({ signal: AbortSignal.timeout(2000) });
+
+      await delay(10);
+      manualTransport.pushInbound(MessageType.HELLO_RESPONSE, HELLO_RESPONSE_PROTOCOL_2_0);
+
+      let rejection: unknown;
+
+      await assert.rejects(pending, (err: unknown): boolean => {
+
+        rejection = err;
+        assert.ok(err instanceof NegotiationFailedError, "the superseding connect must reject with NegotiationFailedError");
+
+        return true;
+      });
+
+      assert.deepEqual(lifecycleKinds(record), [ "lost", "disconnect" ], "the failed supersede must announce its lost before its release");
+      assert.equal(record.lostCauses[0], rejection, "the lost must carry the typed error the manual connect rejected with");
+      assert.equal(record.disconnectCauses[0], rejection, "the release must carry the same typed error");
+
+      await driveConnect(laterTransport, client, { signal: AbortSignal.timeout(2000) });
+
+      assert.deepEqual(lifecycleKinds(record).slice(2), [ "connect", "recovered" ], "a later connect must announce recovered after its connect");
+
+    } finally {
+
+      client.disconnect();
+    }
+  });
+
+  test("a manual connect that supersedes the loop after lost and succeeds announces recovered after its connect", async () => {
+
+    const firstTransport = new MockTransport();
+    const failedTransport = new MockTransport();
+    const manualTransport = new MockTransport();
+    const attemptError = new ConnectionClosedByPeerError("Synthetic failure of the first reconnect attempt.", "PEER_CLOSED");
+
+    failedTransport.fail(attemptError);
+
+    // The multiplier stretches the second attempt's backoff so the manual connect supersedes the loop inside it.
+    const transportQueue = [ firstTransport, failedTransport, manualTransport ];
+    const client = new EspHomeClient({ host: "test.local", logger: quietLogger(),
+      reconnect: { backoffMultiplier: 50, initialDelayMs: 10, jitter: 0, maxDelayMs: 5000 },
+      transportFactory: (): MockTransport => transportQueue.shift() ?? new MockTransport() });
+
+    try {
+
+      await driveConnect(firstTransport, client, { signal: AbortSignal.timeout(2000) });
+
+      const record = recordVerdicts(client);
+
+      firstTransport.fail(new ConnectionClosedByPeerError("Synthetic transient run-phase peer death.", "PEER_CLOSED"));
+      await untilLifecycleCount(client, record, 2);
+
+      assert.deepEqual(lifecycleKinds(record), [ "disconnect", "lost" ]);
+      assert.equal(record.lostCauses[0], attemptError);
+
+      await driveConnect(manualTransport, client, { signal: AbortSignal.timeout(2000) });
+
+      assert.deepEqual(lifecycleKinds(record), [ "disconnect", "lost", "connect", "recovered" ],
+        "the superseding connect re-establishes the session, so it must announce recovered after its connect");
+
+    } finally {
+
+      client.disconnect();
+    }
+  });
+
+  test("a lifecycle connect listener that disconnects the recovering session suppresses recovered, and a later connect announces it", async () => {
+
+    const firstTransport = new MockTransport();
+    const failedTransport = new MockTransport();
+    const recoveringTransport = new MockTransport();
+    const laterTransport = new MockTransport();
+
+    failedTransport.fail(new ConnectionClosedByPeerError("Synthetic failure of the first reconnect attempt.", "PEER_CLOSED"));
+    pushHandshake(recoveringTransport);
+
+    const transportQueue = [ firstTransport, failedTransport, recoveringTransport, laterTransport ];
+    const client = new EspHomeClient({ host: "test.local", logger: quietLogger(), reconnect: { initialDelayMs: 10, jitter: 0, maxDelayMs: 20 },
+      transportFactory: (): MockTransport => transportQueue.shift() ?? new MockTransport() });
+
+    try {
+
+      await driveConnect(firstTransport, client, { signal: AbortSignal.timeout(2000) });
+
+      const record = recordVerdicts(client);
+      const seen = { tornDown: false };
+
+      // The listener tears the recovering session down from its lifecycle connect, once, before the connect success block reaches the recovery.
+      client.on("lifecycle", (event): void => {
+
+        if((event.kind === "connect") && !seen.tornDown) {
+
+          seen.tornDown = true;
+          client.disconnect();
+        }
+      });
+
+      firstTransport.fail(new ConnectionClosedByPeerError("Synthetic transient run-phase peer death.", "PEER_CLOSED"));
+      await untilLifecycleCount(client, record, 4);
+
+      assert.deepEqual(lifecycleKinds(record), [ "disconnect", "lost", "connect", "disconnect" ],
+        "a session a connect listener tore down must announce no recovered");
+
+      await driveConnect(laterTransport, client, { signal: AbortSignal.timeout(2000) });
+
+      assert.deepEqual(lifecycleKinds(record).slice(4), [ "connect", "recovered" ], "the lost must stand for the next session re-established");
+
+    } finally {
+
+      client.disconnect();
+    }
+  });
+
+  // A close or the consumer's own signal that cuts a superseding manual connect short ends an attempt that failed no probe, so its release announces no lost. Each cut
+  // lands while the connect waits in its hello exchange, holding the reconnecting record of the loop it superseded.
+  for(const cut of [ "disconnect", "signal" ] as const) {
+
+    test("a manual connect that supersedes the loop in its first backoff, cut short by " + ((cut === "disconnect") ? "disconnect()" : "its own signal") +
+      " during its handshake, releases with a disconnect and no lost", async () => {
+
+      const firstTransport = new MockTransport();
+      const manualTransport = new MockTransport();
+      const transportQueue = [ firstTransport, manualTransport ];
+      const client = new EspHomeClient({ host: "test.local", logger: quietLogger(),
+        reconnect: { initialDelayMs: 80, jitter: 0, maxAttempts: 5 }, transportFactory: (): MockTransport => transportQueue.shift() ?? new MockTransport() });
+
+      try {
+
+        await driveConnect(firstTransport, client, { signal: AbortSignal.timeout(2000) });
+
+        const record = recordVerdicts(client);
+
+        firstTransport.fail(new ConnectionClosedByPeerError("Synthetic transient run-phase peer death.", "PEER_CLOSED"));
+        await delay(15);
+
+        assert.equal(client.health().state, "reconnecting", "the loop must be parked in its first backoff before the manual connect");
+
+        // The manual transport answers nothing, so the superseding connect waits in its hello exchange until the cut lands.
+        const controller = new AbortController();
+        const reason = new Error("Synthetic consumer cancellation of the superseding connect.");
+        const pending = client.connect({ signal: AbortSignal.any([ controller.signal, AbortSignal.timeout(2000) ]) });
+
+        await delay(10);
+
+        // The connect rejects with the cut's own reason, so the attempt ended by its own cancellation rather than by a failure of the device's.
+        if(cut === "disconnect") {
+
+          client.disconnect();
+          await assert.rejects(pending, ConnectionLostError);
+        } else {
+
+          controller.abort(reason);
+          await assert.rejects(pending, (err: unknown): boolean => err === reason);
+        }
+
+        assert.deepEqual(lifecycleKinds(record), [ "disconnect", "disconnect" ],
+          "after the fault's own disconnect, the cut-short connect must announce its release alone");
+        assert.equal(record.lostCauses.length, 0, "an attempt cut short by its own cancellation failed no probe, so no lost may follow it");
+        assert.equal(client.health().state, "disconnected");
+
+      } finally {
+
+        client.disconnect();
+      }
+    });
+  }
 });
 
 describe("EspHomeClient telemetry decode edge cases", () => {
@@ -6838,6 +7338,58 @@ describe("EspHomeClient clock option - live heartbeat stall / RTT / timeout inte
       assert.ok(disconnectReasons.includes("heartbeat stalled"), "the legacy disconnect event must carry the 'heartbeat stalled' reason");
       assert.ok(attemptDelays.length > 0, "the stall teardown must schedule an auto-reconnect attempt");
       assert.ok(recordedMetrics.some((m) => m.name === "heartbeat.stalled"), "the stall must emit the heartbeat.stalled counter metric");
+
+    } finally {
+
+      client.disconnect();
+      mock.timers.reset();
+    }
+  });
+
+  // The stall fixture with a transport queue whose second transport is pre-failed: the stall is a fault like any other, so its tick announces the disconnect alone,
+  // and the verdict waits for the loop's first attempt to fail.
+  test("a stall tick announces its disconnect alone, and the lost that follows carries the failed attempt's error, not the HeartbeatStalledError", async () => {
+
+    const clock = buildClock(Date.now());
+    const firstTransport = new MockTransport();
+    const failedTransport = new MockTransport();
+    const attemptError = new ConnectionClosedByPeerError("Synthetic failure of the reconnect attempt after a stall.", "PEER_CLOSED");
+
+    failedTransport.fail(attemptError);
+
+    const transportQueue = [ firstTransport, failedTransport ];
+    const client = new EspHomeClient({
+
+      clock: clock.clock,
+      host: "test.local",
+      keepAlive: { intervalMs: 30000, stallTimeoutMs: 60000 },
+      logger: quietLogger(),
+      reconnect: { initialDelayMs: 10, jitter: 0, maxDelayMs: 10 },
+      transportFactory: (): MockTransport => transportQueue.shift() ?? new MockTransport()
+    });
+
+    // Enable the setInterval mock BEFORE connect so the scheduler's `start()` setInterval is captured.
+    mock.timers.enable({ apis: ["setInterval"] });
+
+    try {
+
+      await driveConnect(firstTransport, client, { signal: AbortSignal.timeout(2000) });
+
+      const record = recordVerdicts(client);
+
+      // The budget-crossing tick runs the stall teardown and schedules the loop synchronously, so what the tick announced is read straight after it.
+      clock.advance(60000);
+      mock.timers.tick(15000);
+
+      assert.deepEqual(lifecycleKinds(record), ["disconnect"], "the stall tick must announce its disconnect alone, with no verdict at the fault");
+      assert.ok(record.disconnectCauses[0] instanceof HeartbeatStalledError, "the stall's disconnect must carry the HeartbeatStalledError");
+
+      // The loop's first attempt runs on real timers after its backoff and fails on the pre-failed transport.
+      await untilLifecycleCount(client, record, 2);
+
+      assert.deepEqual(lifecycleKinds(record), [ "disconnect", "lost" ]);
+      assert.equal(record.lostCauses[0], attemptError, "the lost must carry the failed attempt's typed error");
+      assert.ok(!(record.lostCauses[0] instanceof HeartbeatStalledError), "the lost must not carry the stall's cause");
 
     } finally {
 

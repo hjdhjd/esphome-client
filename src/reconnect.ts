@@ -179,7 +179,7 @@ export async function backoffDelay(ms: number, signal?: AbortSignal): Promise<vo
 }
 
 /**
- * Narrow interface {@link withReconnect} drives. The host implements both `lifecycle()` (typed-iterable view of every connect/disconnect transition) and `health()` (the
+ * Narrow interface {@link withReconnect} drives. The host implements both `lifecycle()` (typed-iterable view of every lifecycle event) and `health()` (the
  * live snapshot - the helper reads it once at start to know whether a connect has already happened, in which case the body runs immediately rather than waiting for
  * the next connect transition).
  */
@@ -205,7 +205,8 @@ export interface WithReconnectOptions {
  * Run a body callback once per successful connect. The helper subscribes to {@link WithReconnectClient.lifecycle}, fires the body on the first observed `connect`
  * event (or immediately if the client is already connected when the helper starts), and re-fires on every subsequent `connect` after a `disconnect`. When the
  * connection drops, the teardown rejects the body's awaiting calls (a command wait, a snapshot, a sub-API request) with {@link ConnectionLostError} first, and the
- * body's signal then aborts on the matching `disconnect`, which ends the body's stream iterators. A body tells a disconnect apart from another failure by
+ * body's signal then aborts on the matching `disconnect`, which ends the body's stream iterators. The `lost` and `recovered` verdicts describe an outage whose
+ * `disconnect` already ended the body's session, so they start or end no per-session work. A body tells a disconnect apart from another failure by
  * `instanceof ConnectionLostError`, or by its signal's `aborted` flag after awaiting, never by comparing the rejection with its signal's reason, which those calls do
  * not carry.
  *
@@ -257,6 +258,12 @@ export async function withReconnect(client: WithReconnectClient, body: (client: 
       if(event.kind === "connect") {
 
         runBody();
+
+        continue;
+      }
+
+      // The reachability verdicts describe an outage whose disconnect already ended the body's session, so they start or end no per-session work.
+      if((event.kind === "lost") || (event.kind === "recovered")) {
 
         continue;
       }
