@@ -15,17 +15,17 @@ type EntityId<T> = string & {
 Branded entity-id type. The phantom type parameter `T` carries the entity type at the type level only - no runtime cost. `EntityId<"light">` and `EntityId<"switch">`
 are distinct types that the type checker refuses to assign across, eliminating "passed wrong id to wrong API" bugs at compile time.
 
+## Type Parameters
+
+| Type Parameter | Default type |
+| ------ | ------ |
+| <a id="type-parameter-t"></a> `T` *extends* `string` | [`EntityType`](EntityType.md) |
+
 ## Type Declaration
 
 | Name | Type |
 | ------ | ------ |
 | `__entityType` | `T` |
-
-## Type Parameters
-
-| Type Parameter | Default type |
-| ------ | ------ |
-| `T` *extends* `string` | [`EntityType`](EntityType.md) |
 
 ## Remarks
 

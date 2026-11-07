@@ -18,5 +18,5 @@ Drives the type-level threading on the public surface: `latest<T>()`, `command<T
 
 | Type Parameter | Description |
 | ------ | ------ |
-| `T` *extends* `string` | The entity-type string. Must be a member of [ExtendedEntityType](ExtendedEntityType.md)<`Extras`>. |
-| `Extras` *extends* [`ExtraSchemaSet`](ExtraSchemaSet.md) | The [ExtraSchemaSet](ExtraSchemaSet.md) threaded through the client instance. |
+| <a id="type-parameter-t"></a> `T` *extends* `string` | The entity-type string. Must be a member of [ExtendedEntityType](ExtendedEntityType.md)<`Extras`>. |
+| <a id="type-parameter-extras"></a> `Extras` *extends* [`ExtraSchemaSet`](ExtraSchemaSet.md) | The [ExtraSchemaSet](ExtraSchemaSet.md) threaded through the client instance. |

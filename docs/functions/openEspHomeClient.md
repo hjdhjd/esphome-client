@@ -38,7 +38,7 @@ export async function openAndDisposeExample(): Promise<void> {
 
 | Type Parameter | Default type |
 | ------ | ------ |
-| `Extras` *extends* `Readonly`\<`Record`\<`string`, [`EntitySchema`](../interfaces/EntitySchema.md)\>\> | \{ \} |
+| <a id="type-parameter-extras"></a> `Extras` *extends* `Readonly`\<`Record`\<`string`, [`EntitySchema`](../interfaces/EntitySchema.md)\>\> | \{ \} |
 
 ## Parameters
 

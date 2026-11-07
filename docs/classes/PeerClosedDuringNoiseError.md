@@ -47,4 +47,4 @@ Creates a new NoiseHandshakeError.
 
 | Property | Modifier | Type | Description | Inherited from |
 | ------ | ------ | ------ | ------ | ------ |
-| <a id="code"></a> `code` | `readonly` | [`NoiseHandshakeErrorCode`](../type-aliases/NoiseHandshakeErrorCode.md) | Narrowed handshake error code. Overrides the base class's optional `code` to make it required and narrowed. | [`NoiseHandshakeError`](NoiseHandshakeError.md).[`code`](NoiseHandshakeError.md#code) |
+| <a id="code"></a> `code` | `public readonly` | [`NoiseHandshakeErrorCode`](../type-aliases/NoiseHandshakeErrorCode.md) | Narrowed handshake error code. Overrides the base class's optional `code` to make it required and narrowed. | [`NoiseHandshakeError`](NoiseHandshakeError.md).[`code`](NoiseHandshakeError.md#code) |

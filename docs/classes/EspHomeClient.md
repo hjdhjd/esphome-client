@@ -121,7 +121,7 @@ export async function connectThenConstructExample(
 
 | Type Parameter | Default type |
 | ------ | ------ |
-| `Extras` *extends* [`ExtraSchemaSet`](../type-aliases/ExtraSchemaSet.md) | \{ \} |
+| <a id="type-parameter-extras"></a> `Extras` *extends* [`ExtraSchemaSet`](../type-aliases/ExtraSchemaSet.md) | \{ \} |
 
 ## Constructors
 
@@ -513,7 +513,7 @@ The Z-Wave-proxy sub-API instance.
 ### \[asyncDispose\]()
 
 ```ts
-asyncDispose: Promise<void>;
+[asyncDispose](): Promise<void>;
 ```
 
 Symbol.asyncDispose hook for `await using` scopes. Performs the graceful disconnect handshake - sends DISCONNECT_REQUEST and awaits the matching response up to
@@ -545,7 +545,7 @@ export async function disconnectAndCleanupExample(client: EspHomeClient): Promis
 ### \[dispose\]()
 
 ```ts
-dispose: void;
+[dispose](): void;
 ```
 
 `Symbol.dispose` hook for `using` scopes. Aliased to [EspHomeClient.disconnect](#disconnect) - tears down synchronously, the device sees a TCP close, no
@@ -691,7 +691,7 @@ Generic, type-safe command entry point. The single canonical way to issue any en
 
 | Type Parameter |
 | ------ |
-| `T` *extends* `string` |
+| <a id="type-parameter-t"></a> `T` *extends* `string` |
 
 #### Parameters
 
@@ -748,7 +748,7 @@ wants the post-command state in one await rather than wiring up a separate subsc
 
 | Type Parameter | Description |
 | ------ | ------ |
-| `T` *extends* `string` | Entity type tag carried by the branded id. |
+| <a id="type-parameter-t-1"></a> `T` *extends* `string` | Entity type tag carried by the branded id. |
 
 #### Parameters
 
@@ -756,7 +756,7 @@ wants the post-command state in one await rather than wiring up a separate subsc
 | ------ | ------ | ------ |
 | `id` | [`EntityId`](../type-aliases/EntityId.md)\<`T`\> | Branded entity id. |
 | `options` | [`CommandFor`](../type-aliases/CommandFor.md)\<[`SchemaForExtended`](../type-aliases/SchemaForExtended.md)\<`T`, `Extras`\>\> | Type-narrowed command options for the entity type. |
-| `awaitOptions?` | [`CommandAndAwaitOptions`](../interfaces/CommandAndAwaitOptions.md)\<`T` & \| `"number"` \| `"select"` \| `"alarm_control_panel"` \| `"climate"` \| `"cover"` \| `"date"` \| `"datetime"` \| `"event"` \| `"fan"` \| `"light"` \| `"lock"` \| `"media_player"` \| `"siren"` \| `"switch"` \| `"text"` \| `"time"` \| `"update"` \| `"valve"` \| `"water_heater"`\> | Optional cancellation signal, custom timeout, and predicate that further narrows the matching state event. |
+| `awaitOptions?` | [`CommandAndAwaitOptions`](../interfaces/CommandAndAwaitOptions.md)\<`T` & ( \| `"number"` \| `"select"` \| `"alarm_control_panel"` \| `"climate"` \| `"cover"` \| `"date"` \| `"datetime"` \| `"event"` \| `"fan"` \| `"light"` \| `"lock"` \| `"media_player"` \| `"siren"` \| `"switch"` \| `"text"` \| `"time"` \| `"update"` \| `"valve"` \| `"water_heater"`)\> | Optional cancellation signal, custom timeout, and predicate that further narrows the matching state event. |
 
 #### Returns
 
@@ -1064,9 +1064,9 @@ A plain record keyed by entity type, each value an array of branded id strings i
 ### getEntitiesWithIds()
 
 ```ts
-getEntitiesWithIds(): Entity & {
+getEntitiesWithIds(): (Entity & {
   id: string;
-}[];
+})[];
 ```
 
 Snapshot every discovered entity record with its branded id stamped in as the `id` field. Useful when a consumer needs both the typed metadata and the routable
@@ -1100,9 +1100,9 @@ export async function discoveryWalkthroughExample(client: EspHomeClient): Promis
 
 #### Returns
 
-[`Entity`](../type-aliases/Entity.md) & \{
+([`Entity`](../type-aliases/Entity.md) & \{
   `id`: `string`;
-\}[]
+\})[]
 
 A new array of entity records with `id` derived from the registry's reverse index. Mutating the array does not affect the registry.
 
@@ -1374,7 +1374,7 @@ Read the most recent state event for an entity, narrowed to the entity's type.
 
 | Type Parameter | Description |
 | ------ | ------ |
-| `T` *extends* `string` | Entity type tag carried by the branded id. |
+| <a id="type-parameter-t-2"></a> `T` *extends* `string` | Entity type tag carried by the branded id. |
 
 #### Parameters
 
@@ -1655,7 +1655,7 @@ export async function typedEventBusExample(client: EspHomeClient): Promise<void>
 
 | Type Parameter |
 | ------ |
-| `K` *extends* keyof [`ClientEventsMap`](../interfaces/ClientEventsMap.md) |
+| <a id="type-parameter-k"></a> `K` *extends* keyof [`ClientEventsMap`](../interfaces/ClientEventsMap.md) |
 
 #### Parameters
 
@@ -1706,7 +1706,7 @@ export async function typedEventBusExample(client: EspHomeClient): Promise<void>
 
 | Type Parameter |
 | ------ |
-| `K` *extends* keyof [`ClientEventsMap`](../interfaces/ClientEventsMap.md) |
+| <a id="type-parameter-k-1"></a> `K` *extends* keyof [`ClientEventsMap`](../interfaces/ClientEventsMap.md) |
 
 #### Parameters
 
@@ -1910,7 +1910,7 @@ Read-only snapshot of the latest-state cache, narrowed to one entity type.
 
 | Type Parameter | Description |
 | ------ | ------ |
-| `T` *extends* `string` | Entity type tag. |
+| <a id="type-parameter-t-3"></a> `T` *extends* `string` | Entity type tag. |
 
 #### Parameters
 
@@ -1982,7 +1982,7 @@ export async function typedEventBusExample(client: EspHomeClient): Promise<void>
 
 | Type Parameter |
 | ------ |
-| `K` *extends* keyof [`ClientEventsMap`](../interfaces/ClientEventsMap.md) |
+| <a id="type-parameter-k-2"></a> `K` *extends* keyof [`ClientEventsMap`](../interfaces/ClientEventsMap.md) |
 
 #### Parameters
 
@@ -2051,8 +2051,8 @@ refcounted level upgrades, use [EspHomeClient.logs](#logs) instead.
 
 | Parameter | Type | Default value | Description |
 | ------ | ------ | ------ | ------ |
-| `level` | [`LogLevel`](../type-aliases/LogLevel.md) | `LogLevel.INFO` | The minimum log level to subscribe to. Defaults to `LogLevel.INFO`. |
-| `dumpConfig` | `boolean` | `false` | When `true`, the device prepends a one-shot dump of its configuration to the log stream. Defaults to `false`. |
+| `level?` | [`LogLevel`](../type-aliases/LogLevel.md) | `LogLevel.INFO` | The minimum log level to subscribe to. Defaults to `LogLevel.INFO`. |
+| `dumpConfig?` | `boolean` | `false` | When `true`, the device prepends a one-shot dump of its configuration to the log stream. Defaults to `false`. |
 
 #### Returns
 
@@ -2141,7 +2141,7 @@ export async function telemetryStreamPerTypeExample(client: EspHomeClient): Prom
 
 | Type Parameter | Description |
 | ------ | ------ |
-| `T` *extends* `string` | Entity type tag. |
+| <a id="type-parameter-t-4"></a> `T` *extends* `string` | Entity type tag. |
 
 #### Parameters
 
@@ -2185,7 +2185,7 @@ export async function telemetryStreamPerIdExample(client: EspHomeClient): Promis
 
 | Type Parameter | Description |
 | ------ | ------ |
-| `T` *extends* `string` | Entity type tag carried by the branded id. |
+| <a id="type-parameter-t-5"></a> `T` *extends* `string` | Entity type tag carried by the branded id. |
 
 #### Parameters
 
@@ -2261,7 +2261,7 @@ field layout are shared across both physical layers.
 
 | Type Parameter | Description |
 | ------ | ------ |
-| `T` *extends* [`TransmitEntityType`](../type-aliases/TransmitEntityType.md) | The branded entity-type tag; must resolve to `"infrared"` or `"radio_frequency"`. |
+| <a id="type-parameter-t-6"></a> `T` *extends* [`TransmitEntityType`](../type-aliases/TransmitEntityType.md) | The branded entity-type tag; must resolve to `"infrared"` or `"radio_frequency"`. |
 
 #### Parameters
 

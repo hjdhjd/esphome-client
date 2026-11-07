@@ -19,7 +19,7 @@ Derive live connection uptime in milliseconds from a [ConnectionHealth](../type-
 | Parameter | Type | Description |
 | ------ | ------ | ------ |
 | `health` | [`ConnectionHealth`](../type-aliases/ConnectionHealth.md) | The health record to derive uptime from. |
-| `now` | `number` | The reference "now" in epoch milliseconds; defaults to `Date.now()`. |
+| `now?` | `number` | The reference "now" in epoch milliseconds; defaults to `Date.now()`. |
 
 ## Returns
 

@@ -17,4 +17,4 @@ keys, so an `EspHomeClient<{ door_cover: ... }>` accepts `"door_cover"` everywhe
 
 | Type Parameter | Description |
 | ------ | ------ |
-| `Extras` *extends* [`ExtraSchemaSet`](ExtraSchemaSet.md) | The [ExtraSchemaSet](ExtraSchemaSet.md) threaded through the client instance. |
+| <a id="type-parameter-extras"></a> `Extras` *extends* [`ExtraSchemaSet`](ExtraSchemaSet.md) | The [ExtraSchemaSet](ExtraSchemaSet.md) threaded through the client instance. |

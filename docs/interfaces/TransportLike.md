@@ -12,7 +12,9 @@ tests can ignore this interface; only the host class and the test infrastructure
 
 ## Extends
 
-- `AsyncDisposable`.`Disposable`.`AsyncIterable`\<[`InboundMessage`](InboundMessage.md)\>
+- `AsyncDisposable`
+- `Disposable`
+- `AsyncIterable`\<[`InboundMessage`](InboundMessage.md)\>
 
 ## Properties
 

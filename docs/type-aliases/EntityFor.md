@@ -17,4 +17,4 @@ exhaustive list of intentional wire-vs-API divergences.
 
 | Type Parameter |
 | ------ |
-| `S` *extends* [`EntitySchema`](../interfaces/EntitySchema.md) |
+| <a id="type-parameter-s"></a> `S` *extends* [`EntitySchema`](../interfaces/EntitySchema.md) |

@@ -35,7 +35,7 @@ export function entityIdConstructionExample(client: EspHomeClient): void {
 
 | Type Parameter |
 | ------ |
-| `T` *extends* `string` |
+| <a id="type-parameter-t"></a> `T` *extends* `string` |
 
 ## Parameters
 

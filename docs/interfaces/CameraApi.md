@@ -30,9 +30,7 @@ PRESERVED, so the host's [reissueOnReconnect](#reissueonreconnect) call after th
 
 #### Implementation of
 
-```ts
-SubscriptionLifecycle.clearConnectionState
-```
+`SubscriptionLifecycle.clearConnectionState`
 
 ***
 
@@ -96,9 +94,7 @@ when none is.
 
 #### Implementation of
 
-```ts
-SubscriptionLifecycle.reissueOnReconnect
-```
+`SubscriptionLifecycle.reissueOnReconnect`
 
 ***
 

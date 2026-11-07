@@ -190,9 +190,7 @@ Notes for callers:
 
 #### Implementation of
 
-```ts
-SubscriptionLifecycle.clearConnectionState
-```
+`SubscriptionLifecycle.clearConnectionState`
 
 ***
 
@@ -984,9 +982,7 @@ subscription re-issues. Mirrors `LogSubscriptionManager.reissueOnReconnect`.
 
 #### Implementation of
 
-```ts
-SubscriptionLifecycle.reissueOnReconnect
-```
+`SubscriptionLifecycle.reissueOnReconnect`
 
 ***
 

@@ -13,7 +13,7 @@ signal, predicate accepts any state event for the entity.
 
 | Type Parameter | Description |
 | ------ | ------ |
-| `T` *extends* [`CommandAndAwaitable`](../type-aliases/CommandAndAwaitable.md) | Entity type tag carried by the branded id. |
+| <a id="type-parameter-t"></a> `T` *extends* [`CommandAndAwaitable`](../type-aliases/CommandAndAwaitable.md) | Entity type tag carried by the branded id. |
 
 ## Properties
 

@@ -50,4 +50,4 @@ Creates a new NoiseHandshakeError.
 
 | Property | Modifier | Type | Description | Overrides |
 | ------ | ------ | ------ | ------ | ------ |
-| <a id="code"></a> `code` | `readonly` | [`NoiseHandshakeErrorCode`](../type-aliases/NoiseHandshakeErrorCode.md) | Narrowed handshake error code. Overrides the base class's optional `code` to make it required and narrowed. | [`HandshakeError`](HandshakeError.md).[`code`](HandshakeError.md#code) |
+| <a id="code"></a> `code` | `public readonly` | [`NoiseHandshakeErrorCode`](../type-aliases/NoiseHandshakeErrorCode.md) | Narrowed handshake error code. Overrides the base class's optional `code` to make it required and narrowed. | [`HandshakeError`](HandshakeError.md).[`code`](HandshakeError.md#code) |

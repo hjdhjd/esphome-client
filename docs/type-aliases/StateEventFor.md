@@ -16,4 +16,4 @@ Public state-event shape for a schema. Combines the wire shape with any override
 
 | Type Parameter |
 | ------ |
-| `S` *extends* [`EntitySchema`](../interfaces/EntitySchema.md) |
+| <a id="type-parameter-s"></a> `S` *extends* [`EntitySchema`](../interfaces/EntitySchema.md) |

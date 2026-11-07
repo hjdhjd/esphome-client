@@ -189,9 +189,7 @@ bug this split exists to prevent.
 
 #### Implementation of
 
-```ts
-SubscriptionLifecycle.clearConnectionState
-```
+`SubscriptionLifecycle.clearConnectionState`
 
 ***
 
@@ -307,9 +305,7 @@ the other sub-APIs' reissue path; a pure no-op when no subscription is desired (
 
 #### Implementation of
 
-```ts
-SubscriptionLifecycle.reissueOnReconnect
-```
+`SubscriptionLifecycle.reissueOnReconnect`
 
 ***
 
@@ -489,7 +485,7 @@ export async function voiceAssistantStreamingExample(client: EspHomeClient, gene
 | Parameter | Type | Default value | Description |
 | ------ | ------ | ------ | ------ |
 | `audioData` | `Buffer` | `undefined` | The audio bytes to send. |
-| `end` | `boolean` | `false` | Whether this is the last chunk in the stream. |
+| `end?` | `boolean` | `false` | Whether this is the last chunk in the stream. |
 
 #### Returns
 
@@ -539,7 +535,7 @@ export async function voiceAssistantStreamingExample(client: EspHomeClient, gene
 | Parameter | Type | Default value | Description |
 | ------ | ------ | ------ | ------ |
 | `eventType` | [`VoiceAssistantEvent`](../type-aliases/VoiceAssistantEvent.md) | `undefined` | The pipeline event kind. |
-| `data` | [`VoiceAssistantEventData`](VoiceAssistantEventData.md)[] | `[]` | Optional event data payload. |
+| `data?` | [`VoiceAssistantEventData`](VoiceAssistantEventData.md)[] | `[]` | Optional event data payload. |
 
 #### Returns
 
@@ -634,7 +630,7 @@ Subscribe to voice-assistant requests at the device. Sends `SUBSCRIBE_VOICE_ASSI
 
 | Parameter | Type | Default value | Description |
 | ------ | ------ | ------ | ------ |
-| `flags` | [`VoiceAssistantSubscribeFlag`](../type-aliases/VoiceAssistantSubscribeFlag.md) | `0` | Subscription flags. Defaults to 0 (no audio routing). |
+| `flags?` | [`VoiceAssistantSubscribeFlag`](../type-aliases/VoiceAssistantSubscribeFlag.md) | `0` | Subscription flags. Defaults to 0 (no audio routing). |
 
 #### Returns
 

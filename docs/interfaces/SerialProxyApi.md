@@ -32,9 +32,7 @@ subscribers.
 
 #### Implementation of
 
-```ts
-SubscriptionLifecycle.clearConnectionState
-```
+`SubscriptionLifecycle.clearConnectionState`
 
 ***
 
@@ -367,9 +365,7 @@ subscribers so the new device starts streaming `SerialProxyDataReceived` again, 
 
 #### Implementation of
 
-```ts
-SubscriptionLifecycle.reissueOnReconnect
-```
+`SubscriptionLifecycle.reissueOnReconnect`
 
 ***
 
@@ -403,7 +399,7 @@ export async function serialModemPinsExample(client: EspHomeClient): Promise<voi
 | Parameter | Type | Description |
 | ------ | ------ | ------ |
 | `instance` | `number` | Zero-based instance index. |
-| `lineStates` | `number` | Bitmask of [SerialProxyLineStateFlags](../type-aliases/SerialProxyLineStateFlags.md). Compose flags via bitwise OR (e.g., `RTS | DTR`). |
+| `lineStates` | `number` | Bitmask of [SerialProxyLineStateFlags](../type-aliases/SerialProxyLineStateFlags.md). Compose flags via bitwise OR (e.g., `RTS \| DTR`). |
 
 #### Returns
 

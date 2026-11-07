@@ -42,9 +42,7 @@ contract prevents); [reissueOnReconnect](#reissueonreconnect) replays them. This
 
 #### Implementation of
 
-```ts
-SubscriptionLifecycle.clearConnectionState
-```
+`SubscriptionLifecycle.clearConnectionState`
 
 ***
 
@@ -64,9 +62,7 @@ neither is desired. This is what keeps a HA-bridge consumer receiving `homeassis
 
 #### Implementation of
 
-```ts
-SubscriptionLifecycle.reissueOnReconnect
-```
+`SubscriptionLifecycle.reissueOnReconnect`
 
 ***
 
@@ -132,7 +128,7 @@ export function homeAssistantStateBridgeExample(client: EspHomeClient, lookup: (
 | ------ | ------ | ------ | ------ |
 | `entityId` | `string` | `undefined` | The Home Assistant entity ID. |
 | `state` | `string` | `undefined` | The current state value as a string. |
-| `attribute` | `string` | `""` | The specific attribute (default empty string for the main state). |
+| `attribute?` | `string` | `""` | The specific attribute (default empty string for the main state). |
 
 #### Returns
 

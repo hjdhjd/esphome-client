@@ -16,7 +16,7 @@ Configuration options for creating an ESPHome client instance. These options con
 
 | Type Parameter | Default type | Description |
 | ------ | ------ | ------ |
-| `Extras` *extends* [`ExtraSchemaSet`](../type-aliases/ExtraSchemaSet.md) | \{ \} | Optional [ExtraSchemaSet](../type-aliases/ExtraSchemaSet.md) threaded through the client's type-system surface. Defaults to `{}` (no extras) so existing call sites continue to type-check unchanged. When supplied, the public surface (`command`, `commandAndAwait`, `latest`, `snapshotFor`, `telemetryFor`, `telemetryForId`) widens to accept the extras-keyed entity types alongside the built-in [EntityType](../type-aliases/EntityType.md) union. |
+| <a id="type-parameter-extras"></a> `Extras` *extends* [`ExtraSchemaSet`](../type-aliases/ExtraSchemaSet.md) | \{ \} | Optional [ExtraSchemaSet](../type-aliases/ExtraSchemaSet.md) threaded through the client's type-system surface. Defaults to `{}` (no extras) so existing call sites continue to type-check unchanged. When supplied, the public surface (`command`, `commandAndAwait`, `latest`, `snapshotFor`, `telemetryFor`, `telemetryForId`) widens to accept the extras-keyed entity types alongside the built-in [EntityType](../type-aliases/EntityType.md) union. |
 
 ## Properties
 

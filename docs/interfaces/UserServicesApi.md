@@ -53,7 +53,7 @@ export function serviceExecutionExample(client: EspHomeClient): void {
 | Parameter | Type | Default value | Description |
 | ------ | ------ | ------ | ------ |
 | `key` | `number` | `undefined` | The service key (numeric identifier). |
-| `args` | [`ExecuteServiceArgumentValue`](ExecuteServiceArgumentValue.md)[] | `[]` | An array of argument values matching the service definition. |
+| `args?` | [`ExecuteServiceArgumentValue`](ExecuteServiceArgumentValue.md)[] | `[]` | An array of argument values matching the service definition. |
 
 #### Returns
 
@@ -99,7 +99,7 @@ export function serviceExecutionExample(client: EspHomeClient): void {
 | Parameter | Type | Default value | Description |
 | ------ | ------ | ------ | ------ |
 | `name` | `string` | `undefined` | The service name as declared in the device's YAML. |
-| `args` | [`ExecuteServiceArgumentValue`](ExecuteServiceArgumentValue.md)[] | `[]` | An array of argument values matching the service definition. |
+| `args?` | [`ExecuteServiceArgumentValue`](ExecuteServiceArgumentValue.md)[] | `[]` | An array of argument values matching the service definition. |
 
 #### Returns
 

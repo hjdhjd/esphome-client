@@ -123,4 +123,4 @@ Creates a new ConfigurationError.
 
 | Property | Modifier | Type | Description | Overrides |
 | ------ | ------ | ------ | ------ | ------ |
-| <a id="code"></a> `code` | `readonly` | [`ConfigurationErrorCode`](../type-aliases/ConfigurationErrorCode.md) | Narrowed configuration error code. Overrides the base class's optional `code` to make it required and narrowed. | [`EspHomeError`](EspHomeError.md).[`code`](EspHomeError.md#code) |
+| <a id="code"></a> `code` | `public readonly` | [`ConfigurationErrorCode`](../type-aliases/ConfigurationErrorCode.md) | Narrowed configuration error code. Overrides the base class's optional `code` to make it required and narrowed. | [`EspHomeError`](EspHomeError.md).[`code`](EspHomeError.md#code) |

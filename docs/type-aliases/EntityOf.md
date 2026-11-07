@@ -16,4 +16,4 @@ Convenience for narrowing an [Entity](Entity.md) to one entity type at the type 
 
 | Type Parameter |
 | ------ |
-| `T` *extends* keyof *typeof* [`ENTITY_SCHEMAS`](../variables/ENTITY_SCHEMAS.md) |
+| <a id="type-parameter-t"></a> `T` *extends* keyof *typeof* [`ENTITY_SCHEMAS`](../variables/ENTITY_SCHEMAS.md) |

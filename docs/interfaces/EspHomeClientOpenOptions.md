@@ -16,7 +16,7 @@ Options accepted by [openEspHomeClient](../functions/openEspHomeClient.md). Inhe
 
 | Type Parameter | Default type |
 | ------ | ------ |
-| `Extras` *extends* [`ExtraSchemaSet`](../type-aliases/ExtraSchemaSet.md) | \{ \} |
+| <a id="type-parameter-extras"></a> `Extras` *extends* [`ExtraSchemaSet`](../type-aliases/ExtraSchemaSet.md) | \{ \} |
 
 ## Properties
 

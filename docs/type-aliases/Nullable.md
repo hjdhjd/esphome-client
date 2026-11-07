@@ -18,7 +18,7 @@ This type is used to explicitly indicate that a variable, property, or return va
 
 | Type Parameter | Description |
 | ------ | ------ |
-| `T` | The type to make nullable. |
+| <a id="type-parameter-t"></a> `T` | The type to make nullable. |
 
 ## Example
 

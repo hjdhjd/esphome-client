@@ -78,7 +78,7 @@ If the PSK is not exactly 32 bytes.
 ### \[dispose\]()
 
 ```ts
-dispose: void;
+[dispose](): void;
 ```
 
 Symbol.dispose hook for the explicit-resource-management proposal. Lets consumers write `using handshake = createESPHomeHandshake({ ... });` and have key material
@@ -162,7 +162,7 @@ Writes a handshake message according to the next pattern in the sequence.
 
 | Parameter | Type | Default value | Description |
 | ------ | ------ | ------ | ------ |
-| `payload` | `Buffer` | `EMPTY_BUFFER` | Optional payload data to encrypt and include in the message. |
+| `payload?` | `Buffer` | `EMPTY_BUFFER` | Optional payload data to encrypt and include in the message. |
 
 #### Returns
 

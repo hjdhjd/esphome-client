@@ -16,4 +16,4 @@ Convenience for narrowing a [TelemetryEvent](TelemetryEvent.md) to one entity ty
 
 | Type Parameter |
 | ------ |
-| `T` *extends* keyof *typeof* [`ENTITY_SCHEMAS`](../variables/ENTITY_SCHEMAS.md) |
+| <a id="type-parameter-t"></a> `T` *extends* keyof *typeof* [`ENTITY_SCHEMAS`](../variables/ENTITY_SCHEMAS.md) |

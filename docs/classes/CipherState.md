@@ -64,7 +64,7 @@ new CipherState(log?): CipherState;
 ### \[dispose\]()
 
 ```ts
-dispose: void;
+[dispose](): void;
 ```
 
 Symbol.dispose hook so consumers can `using cipher = new CipherState(log);` and have key material zeroized deterministically when the binding leaves scope. Aliased

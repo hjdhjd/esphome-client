@@ -16,4 +16,4 @@ Public command-options shape for a schema. Wire shape minus omitted fields plus 
 
 | Type Parameter |
 | ------ |
-| `S` *extends* [`EntitySchema`](../interfaces/EntitySchema.md) |
+| <a id="type-parameter-s"></a> `S` *extends* [`EntitySchema`](../interfaces/EntitySchema.md) |

@@ -72,5 +72,5 @@ Creates a new BackpressureError.
 
 | Property | Modifier | Type | Description | Inherited from |
 | ------ | ------ | ------ | ------ | ------ |
-| <a id="code"></a> `code` | `readonly` | `string` \| `undefined` | Optional machine-readable error code. Subclasses narrow this to tagged string unions. | [`EspHomeError`](EspHomeError.md).[`code`](EspHomeError.md#code) |
-| <a id="dropped"></a> `dropped` | `readonly` | `number` | Number of items the stream dropped before the high-water-mark throw fired. | - |
+| <a id="code"></a> `code` | `public readonly` | `string` \| `undefined` | Optional machine-readable error code. Subclasses narrow this to tagged string unions. | [`EspHomeError`](EspHomeError.md).[`code`](EspHomeError.md#code) |
+| <a id="dropped"></a> `dropped` | `public readonly` | `number` | Number of items the stream dropped before the high-water-mark throw fired. | - |
